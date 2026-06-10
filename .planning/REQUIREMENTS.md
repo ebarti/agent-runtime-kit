@@ -1,4 +1,4 @@
-# Requirements: AgentSDK
+# Requirements: agent-runtime-kit
 
 **Defined:** 2026-06-10
 **Core Value:** Developers can run the same agentic task through Claude, Codex,

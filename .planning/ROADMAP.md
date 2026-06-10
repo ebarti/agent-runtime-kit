@@ -1,9 +1,9 @@
-# Roadmap: AgentSDK
+# Roadmap: agent-runtime-kit
 
 ## Overview
 
-The v1.0 milestone turns the empty `Agent-SDK` project into a publishable
-Python package named `agent-runtime-kit`. The build path starts with a small
+The v1.0 milestone turns the repository into a publishable Python package
+named `agent-runtime-kit`. The build path starts with a small
 installable core and public runtime contract, adds the fake-SDK harness needed
 to keep vendor drift under control, then delivers Claude/Codex adapters,
 Antigravity plus cross-runtime proof, and finally release-ready docs,

@@ -2,10 +2,9 @@
 
 ## Project
 
-**AgentSDK**
+**agent-runtime-kit**
 
-AgentSDK is a new Python package, planned for publication as
-`agent-runtime-kit`, that gives developers one clean API for running agentic
+`agent-runtime-kit` is a Python package that gives developers one clean API for running agentic
 coding tasks through Claude Agent SDK, OpenAI Codex SDK, and Google
 Antigravity SDK. It extracts the useful vendor-runtime ideas from Mestre while
 remaining independently useful to the community: install it, choose a runtime,
