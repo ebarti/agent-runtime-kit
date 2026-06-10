@@ -63,3 +63,8 @@ python_version = "3.10"
 packages = ["agent_runtime_kit"]
 strict = true
 warn_unused_configs = true
+
+[tool.pytest.ini_options]
+markers = [
+    "live: optional provider smoke tests that require explicit credentials and opt-in flags",
+]

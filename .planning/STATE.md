@@ -1,12 +1,12 @@
 ---
 gsd_state_version: '1.0'
-status: executing
+status: complete
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 15
-  completed_plans: 12
-  percent: 80
+  completed_plans: 15
+  percent: 100
 ---
 
 # Project State
@@ -18,21 +18,21 @@ See: .planning/PROJECT.md (updated 2026-06-10)
 **Core value:** Developers can run the same agentic task through Claude, Codex,
 or Antigravity using one small, typed Python API while preserving the
 vendor-specific capabilities needed for real work.
-**Current focus:** Phase 5: Public Release Readiness
+**Current focus:** Roadmap delivered as stacked PRs
 
 ## Current Position
 
 Phase: 5 of 5 (Public Release Readiness)
-Plan: 0 of 3 in current phase
-Status: Phase 4 complete; ready for Phase 5
-Last activity: 2026-06-10 - Phase 4 added Antigravity and cross-runtime proof.
+Plan: 3 of 3 in current phase
+Status: All phases complete; stacked PR publication pending
+Last activity: 2026-06-10 - Phase 5 completed release readiness and build verification.
 
-Progress: [########--] 80%
+Progress: [##########] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12
+- Total plans completed: 15
 - Average duration: n/a
 - Total execution time: 0.0 hours
 
@@ -44,9 +44,10 @@ Progress: [########--] 80%
 | 2. Events and Test Harness | 3 | 3 | n/a |
 | 3. Claude and Codex Runtimes | 3 | 3 | n/a |
 | 4. Antigravity and Cross-Runtime Proof | 3 | 3 | n/a |
+| 5. Public Release Readiness | 3 | 3 | n/a |
 
 **Recent Trend:**
-- Last 5 plans: 03-02, 03-03, 04-01, 04-02, 04-03
+- Last 5 plans: 04-02, 04-03, 05-01, 05-02, 05-03
 - Trend: n/a
 
 *Updated after each plan completion*
@@ -71,15 +72,18 @@ Recent decisions affecting current work:
   so default CI remains credential-free.
 - Phase 4: Antigravity MCP stdio server env values are rejected because the
   SDK config surface does not expose env.
+- Phase 5: Actual PyPI publication remains pending after review/merge; release
+  checklist includes a fresh name check.
 
 ### Pending Todos
 
-None yet.
+- Publish stacked PRs.
+- Recheck PyPI name immediately before actual publication.
 
 ### Blockers/Concerns
 
 - PyPI name availability for `agent-runtime-kit` must be rechecked immediately before publishing.
-- Vendor SDK surfaces are moving; adapter phases must verify installed package APIs before implementation.
+- Vendor SDK surfaces are moving; rerun live smoke tests before release if credentials are available.
 
 ## Deferred Items
 
