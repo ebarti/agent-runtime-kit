@@ -1,11 +1,13 @@
 """Vendor adapter modules."""
 
 from agent_runtime_kit._types import AgentRuntimeKind
+from agent_runtime_kit.adapters.antigravity import AntigravityAgentRuntime
 from agent_runtime_kit.adapters.claude import ClaudeAgentRuntime
 from agent_runtime_kit.adapters.codex import CodexAgentRuntime
 from agent_runtime_kit.registry import RuntimeRegistry
 
 __all__ = [
+    "AntigravityAgentRuntime",
     "ClaudeAgentRuntime",
     "CodexAgentRuntime",
     "register_adapters",
@@ -17,3 +19,8 @@ def register_adapters(registry: RuntimeRegistry, *, replace: bool = False) -> No
 
     registry.register(AgentRuntimeKind.CLAUDE_AGENT_SDK, ClaudeAgentRuntime, replace=replace)
     registry.register(AgentRuntimeKind.CODEX_AGENT_SDK, CodexAgentRuntime, replace=replace)
+    registry.register(
+        AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK,
+        AntigravityAgentRuntime,
+        replace=replace,
+    )

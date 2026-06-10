@@ -7,6 +7,7 @@ def test_collect_provider_diagnostics_shape() -> None:
     diagnostics = collect_provider_diagnostics()
 
     assert {item.kind.value for item in diagnostics} == {
+        "antigravity-agent-sdk",
         "claude-agent-sdk",
         "codex-agent-sdk",
     }
