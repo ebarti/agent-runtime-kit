@@ -30,6 +30,22 @@ available; any 200 response means it has been claimed.
 - `uv run python -m build`
 - Optional: provider-specific live smoke tests from `docs/live-smoke.md`
 
+## Trusted Publishing Setup
+
+Use PyPI Trusted Publishing rather than a long-lived API token.
+
+For a new package, create a pending publisher on PyPI with:
+
+- PyPI project name: `agent-runtime-kit`
+- Owner: `ebarti`
+- Repository name: `agent-runtime-kit`
+- Workflow name: `publish-pypi.yml`
+- Environment name: `pypi`
+
+The workflow is `.github/workflows/publish-pypi.yml`. It publishes when a
+GitHub release is published and also supports manual dispatch with a release
+tag such as `v0.1.0`.
+
 ## Metadata Gate
 
 - Confirm `pyproject.toml` package name is `agent-runtime-kit`.
@@ -41,8 +57,11 @@ available; any 200 response means it has been claimed.
 
 ## Publish
 
-```bash
-uv publish
+After configuring the pending publisher on PyPI, publish the existing first
+release by manually running the `Publish to PyPI` workflow with:
+
+```text
+tag = v0.1.0
 ```
 
 Do not publish until the release gate passes and the PyPI name check is fresh.
