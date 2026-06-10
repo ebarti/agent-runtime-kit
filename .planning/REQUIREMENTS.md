@@ -149,13 +149,48 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TBD | TBD | Pending |
+| PKG-01 | Phase 5 | Pending |
+| PKG-02 | Phase 2 | Pending |
+| PKG-03 | Phase 1 | Pending |
+| PKG-04 | Phase 1 | Pending |
+| PKG-05 | Phase 5 | Pending |
+| CORE-01 | Phase 1 | Pending |
+| CORE-02 | Phase 1 | Pending |
+| CORE-03 | Phase 1 | Pending |
+| CORE-04 | Phase 1 | Pending |
+| CORE-05 | Phase 1 | Pending |
+| CORE-06 | Phase 1 | Pending |
+| CORE-07 | Phase 1 | Pending |
+| EVNT-01 | Phase 2 | Pending |
+| EVNT-02 | Phase 2 | Pending |
+| EVNT-03 | Phase 2 | Pending |
+| EVNT-04 | Phase 2 | Pending |
+| EVNT-05 | Phase 2 | Pending |
+| ADPT-01 | Phase 3 | Pending |
+| ADPT-02 | Phase 3 | Pending |
+| ADPT-03 | Phase 3 | Pending |
+| ADPT-04 | Phase 3 | Pending |
+| ADPT-05 | Phase 4 | Pending |
+| ADPT-06 | Phase 4 | Pending |
+| ADPT-07 | Phase 4 | Pending |
+| TEST-01 | Phase 2 | Pending |
+| TEST-02 | Phase 2 | Pending |
+| TEST-03 | Phase 1 | Pending |
+| TEST-04 | Phase 1 | Pending |
+| TEST-05 | Phase 5 | Pending |
+| TEST-06 | Phase 4 | Pending |
+| DOCS-01 | Phase 5 | Pending |
+| DOCS-02 | Phase 3 | Pending |
+| DOCS-03 | Phase 4 | Pending |
+| DOCS-04 | Phase 5 | Pending |
+| DOCS-05 | Phase 5 | Pending |
+| DOCS-06 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 39 total
-- Mapped to phases: 0
-- Unmapped: 39
+- v1 requirements: 36 total
+- Mapped to phases: 36
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-06-10*
-*Last updated: 2026-06-10 after initial definition*
+*Last updated: 2026-06-10 after roadmap traceability mapping*
