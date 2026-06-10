@@ -3,10 +3,10 @@ gsd_state_version: '1.0'
 status: executing
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 15
-  completed_plans: 9
-  percent: 60
+  completed_plans: 12
+  percent: 80
 ---
 
 # Project State
@@ -18,21 +18,21 @@ See: .planning/PROJECT.md (updated 2026-06-10)
 **Core value:** Developers can run the same agentic task through Claude, Codex,
 or Antigravity using one small, typed Python API while preserving the
 vendor-specific capabilities needed for real work.
-**Current focus:** Phase 4: Antigravity and Cross-Runtime Proof
+**Current focus:** Phase 5: Public Release Readiness
 
 ## Current Position
 
-Phase: 4 of 5 (Antigravity and Cross-Runtime Proof)
+Phase: 5 of 5 (Public Release Readiness)
 Plan: 0 of 3 in current phase
-Status: Phase 3 complete; ready for Phase 4
-Last activity: 2026-06-10 - Phase 3 added Claude and Codex adapters.
+Status: Phase 4 complete; ready for Phase 5
+Last activity: 2026-06-10 - Phase 4 added Antigravity and cross-runtime proof.
 
-Progress: [######----] 60%
+Progress: [########--] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
+- Total plans completed: 12
 - Average duration: n/a
 - Total execution time: 0.0 hours
 
@@ -43,9 +43,10 @@ Progress: [######----] 60%
 | 1. Core Runtime Skeleton | 3 | 3 | n/a |
 | 2. Events and Test Harness | 3 | 3 | n/a |
 | 3. Claude and Codex Runtimes | 3 | 3 | n/a |
+| 4. Antigravity and Cross-Runtime Proof | 3 | 3 | n/a |
 
 **Recent Trend:**
-- Last 5 plans: 02-02, 02-03, 03-01, 03-02, 03-03
+- Last 5 plans: 03-02, 03-03, 04-01, 04-02, 04-03
 - Trend: n/a
 
 *Updated after each plan completion*
@@ -68,6 +69,8 @@ Recent decisions affecting current work:
   sensitive/high-volume attributes before emission.
 - Phase 3: Claude and Codex adapters use lazy imports and fake-injected tests
   so default CI remains credential-free.
+- Phase 4: Antigravity MCP stdio server env values are rejected because the
+  SDK config surface does not expose env.
 
 ### Pending Todos
 

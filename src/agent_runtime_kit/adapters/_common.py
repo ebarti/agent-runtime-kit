@@ -24,7 +24,11 @@ def package_availability(
 ) -> RuntimeAvailability:
     """Return import/package availability without importing the package."""
 
-    if util.find_spec(module_name) is None:
+    try:
+        module_spec = util.find_spec(module_name)
+    except ModuleNotFoundError:
+        module_spec = None
+    if module_spec is None:
         return RuntimeAvailability.unavailable(
             kind,
             reason=AvailabilityReason.MISSING_PACKAGE,
