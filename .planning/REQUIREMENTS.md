@@ -150,7 +150,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | PKG-01 | Phase 5 | Pending |
-| PKG-02 | Phase 2 | Pending |
+| PKG-02 | Phase 2 | Complete |
 | PKG-03 | Phase 1 | Complete |
 | PKG-04 | Phase 1 | Complete |
 | PKG-05 | Phase 5 | Pending |
@@ -161,11 +161,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CORE-05 | Phase 1 | Complete |
 | CORE-06 | Phase 1 | Complete |
 | CORE-07 | Phase 1 | Complete |
-| EVNT-01 | Phase 2 | Pending |
-| EVNT-02 | Phase 2 | Pending |
-| EVNT-03 | Phase 2 | Pending |
-| EVNT-04 | Phase 2 | Pending |
-| EVNT-05 | Phase 2 | Pending |
+| EVNT-01 | Phase 2 | Complete |
+| EVNT-02 | Phase 2 | Complete |
+| EVNT-03 | Phase 2 | Complete |
+| EVNT-04 | Phase 2 | Complete |
+| EVNT-05 | Phase 2 | Complete |
 | ADPT-01 | Phase 3 | Pending |
 | ADPT-02 | Phase 3 | Pending |
 | ADPT-03 | Phase 3 | Pending |
@@ -173,8 +173,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ADPT-05 | Phase 4 | Pending |
 | ADPT-06 | Phase 4 | Pending |
 | ADPT-07 | Phase 4 | Pending |
-| TEST-01 | Phase 2 | Pending |
-| TEST-02 | Phase 2 | Pending |
+| TEST-01 | Phase 2 | Complete |
+| TEST-02 | Phase 2 | Complete |
 | TEST-03 | Phase 1 | Complete |
 | TEST-04 | Phase 1 | Complete |
 | TEST-05 | Phase 5 | Pending |

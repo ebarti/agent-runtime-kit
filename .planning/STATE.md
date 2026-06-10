@@ -3,10 +3,10 @@ gsd_state_version: '1.0'
 status: executing
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 15
-  completed_plans: 3
-  percent: 20
+  completed_plans: 6
+  percent: 40
 ---
 
 # Project State
@@ -18,21 +18,21 @@ See: .planning/PROJECT.md (updated 2026-06-10)
 **Core value:** Developers can run the same agentic task through Claude, Codex,
 or Antigravity using one small, typed Python API while preserving the
 vendor-specific capabilities needed for real work.
-**Current focus:** Phase 2: Events and Test Harness
+**Current focus:** Phase 3: Claude and Codex Runtimes
 
 ## Current Position
 
-Phase: 2 of 5 (Events and Test Harness)
+Phase: 3 of 5 (Claude and Codex Runtimes)
 Plan: 0 of 3 in current phase
-Status: Phase 1 complete; ready for Phase 2
-Last activity: 2026-06-10 - Phase 1 implemented the dependency-free package core.
+Status: Phase 2 complete; ready for Phase 3
+Last activity: 2026-06-10 - Phase 2 added normalized events and fake SDK contract helpers.
 
-Progress: [##--------] 20%
+Progress: [####------] 40%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
+- Total plans completed: 6
 - Average duration: n/a
 - Total execution time: 0.0 hours
 
@@ -41,9 +41,10 @@ Progress: [##--------] 20%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1. Core Runtime Skeleton | 3 | 3 | n/a |
+| 2. Events and Test Harness | 3 | 3 | n/a |
 
 **Recent Trend:**
-- Last 5 plans: 01-01, 01-02, 01-03
+- Last 5 plans: 01-02, 01-03, 02-01, 02-02, 02-03
 - Trend: n/a
 
 *Updated after each plan completion*
@@ -62,6 +63,8 @@ Recent decisions affecting current work:
 - Initialization: Extract runtime/adapters, not Mestre's full orchestration stack.
 - Phase 1: Core package stays dependency-free; vendor SDK imports are deferred
   to optional adapter modules.
+- Phase 2: Event payloads use a normalized dictionary shape and sanitize
+  sensitive/high-volume attributes before emission.
 
 ### Pending Todos
 
