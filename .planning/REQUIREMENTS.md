@@ -149,11 +149,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PKG-01 | Phase 5 | Pending |
+| PKG-01 | Phase 5 | Ready (publish pending) |
 | PKG-02 | Phase 2 | Complete |
 | PKG-03 | Phase 1 | Complete |
 | PKG-04 | Phase 1 | Complete |
-| PKG-05 | Phase 5 | Pending |
+| PKG-05 | Phase 5 | Complete |
 | CORE-01 | Phase 1 | Complete |
 | CORE-02 | Phase 1 | Complete |
 | CORE-03 | Phase 1 | Complete |
@@ -177,14 +177,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-02 | Phase 2 | Complete |
 | TEST-03 | Phase 1 | Complete |
 | TEST-04 | Phase 1 | Complete |
-| TEST-05 | Phase 5 | Pending |
+| TEST-05 | Phase 5 | Complete |
 | TEST-06 | Phase 4 | Complete |
-| DOCS-01 | Phase 5 | Pending |
+| DOCS-01 | Phase 5 | Complete |
 | DOCS-02 | Phase 3 | Complete |
 | DOCS-03 | Phase 4 | Complete |
-| DOCS-04 | Phase 5 | Pending |
-| DOCS-05 | Phase 5 | Pending |
-| DOCS-06 | Phase 5 | Pending |
+| DOCS-04 | Phase 5 | Complete |
+| DOCS-05 | Phase 5 | Complete |
+| DOCS-06 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 36 total
