@@ -3,10 +3,10 @@ gsd_state_version: '1.0'
 status: executing
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 15
-  completed_plans: 6
-  percent: 40
+  completed_plans: 9
+  percent: 60
 ---
 
 # Project State
@@ -18,21 +18,21 @@ See: .planning/PROJECT.md (updated 2026-06-10)
 **Core value:** Developers can run the same agentic task through Claude, Codex,
 or Antigravity using one small, typed Python API while preserving the
 vendor-specific capabilities needed for real work.
-**Current focus:** Phase 3: Claude and Codex Runtimes
+**Current focus:** Phase 4: Antigravity and Cross-Runtime Proof
 
 ## Current Position
 
-Phase: 3 of 5 (Claude and Codex Runtimes)
+Phase: 4 of 5 (Antigravity and Cross-Runtime Proof)
 Plan: 0 of 3 in current phase
-Status: Phase 2 complete; ready for Phase 3
-Last activity: 2026-06-10 - Phase 2 added normalized events and fake SDK contract helpers.
+Status: Phase 3 complete; ready for Phase 4
+Last activity: 2026-06-10 - Phase 3 added Claude and Codex adapters.
 
-Progress: [####------] 40%
+Progress: [######----] 60%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
+- Total plans completed: 9
 - Average duration: n/a
 - Total execution time: 0.0 hours
 
@@ -42,9 +42,10 @@ Progress: [####------] 40%
 |-------|-------|-------|----------|
 | 1. Core Runtime Skeleton | 3 | 3 | n/a |
 | 2. Events and Test Harness | 3 | 3 | n/a |
+| 3. Claude and Codex Runtimes | 3 | 3 | n/a |
 
 **Recent Trend:**
-- Last 5 plans: 01-02, 01-03, 02-01, 02-02, 02-03
+- Last 5 plans: 02-02, 02-03, 03-01, 03-02, 03-03
 - Trend: n/a
 
 *Updated after each plan completion*
@@ -65,6 +66,8 @@ Recent decisions affecting current work:
   to optional adapter modules.
 - Phase 2: Event payloads use a normalized dictionary shape and sanitize
   sensitive/high-volume attributes before emission.
+- Phase 3: Claude and Codex adapters use lazy imports and fake-injected tests
+  so default CI remains credential-free.
 
 ### Pending Todos
 

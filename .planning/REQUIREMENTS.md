@@ -166,10 +166,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EVNT-03 | Phase 2 | Complete |
 | EVNT-04 | Phase 2 | Complete |
 | EVNT-05 | Phase 2 | Complete |
-| ADPT-01 | Phase 3 | Pending |
-| ADPT-02 | Phase 3 | Pending |
-| ADPT-03 | Phase 3 | Pending |
-| ADPT-04 | Phase 3 | Pending |
+| ADPT-01 | Phase 3 | Complete |
+| ADPT-02 | Phase 3 | Complete |
+| ADPT-03 | Phase 3 | Complete |
+| ADPT-04 | Phase 3 | Complete |
 | ADPT-05 | Phase 4 | Pending |
 | ADPT-06 | Phase 4 | Pending |
 | ADPT-07 | Phase 4 | Pending |
@@ -180,7 +180,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-05 | Phase 5 | Pending |
 | TEST-06 | Phase 4 | Pending |
 | DOCS-01 | Phase 5 | Pending |
-| DOCS-02 | Phase 3 | Pending |
+| DOCS-02 | Phase 3 | Complete |
 | DOCS-03 | Phase 4 | Pending |
 | DOCS-04 | Phase 5 | Pending |
 | DOCS-05 | Phase 5 | Pending |

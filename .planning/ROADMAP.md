@@ -19,7 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Core Runtime Skeleton** - Installable core package with public task/result/runtime contracts.
 - [x] **Phase 2: Events and Test Harness** - Optional extras skeleton, event system, and fake SDK contract tests.
-- [ ] **Phase 3: Claude and Codex Runtimes** - First two real vendor adapters through the shared API.
+- [x] **Phase 3: Claude and Codex Runtimes** - First two real vendor adapters through the shared API.
 - [ ] **Phase 4: Antigravity and Cross-Runtime Proof** - Third adapter plus same-task multi-runtime proof and Mestre compatibility checks.
 - [ ] **Phase 5: Public Release Readiness** - Documentation, capability matrix, live-smoke guidance, and PyPI publish checklist.
 
@@ -119,6 +119,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Core Runtime Skeleton | 3/3 | Complete | 2026-06-10 |
 | 2. Events and Test Harness | 3/3 | Complete | 2026-06-10 |
-| 3. Claude and Codex Runtimes | 0/3 | Not started | - |
+| 3. Claude and Codex Runtimes | 3/3 | Complete | 2026-06-10 |
 | 4. Antigravity and Cross-Runtime Proof | 0/3 | Not started | - |
 | 5. Public Release Readiness | 0/3 | Not started | - |
