@@ -24,6 +24,16 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+claude = ["claude-agent-sdk>=0.2.87"]
+codex = ["openai-codex>=0.1.0b2"]
+antigravity = ["google-antigravity>=0.1.2"]
+all = [
+    "claude-agent-sdk>=0.2.87",
+    "google-antigravity>=0.1.2",
+    "openai-codex>=0.1.0b2",
+]
+
 [project.urls]
 Homepage = "https://github.com/ebarti/agent-sdk"
 Repository = "https://github.com/ebarti/agent-sdk"

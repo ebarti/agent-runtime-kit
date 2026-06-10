@@ -25,6 +25,16 @@ from agent_runtime_kit._types import (
     ToolCallAudit,
     Usage,
 )
+from agent_runtime_kit.events import (
+    output_delta_event,
+    safe_emit,
+    task_completed_event,
+    task_failed_event,
+    task_started_event,
+    tool_completed_event,
+    tool_requested_event,
+    vendor_turn_event,
+)
 from agent_runtime_kit.registry import RuntimeRegistry, create_default_registry
 
 __all__ = [
@@ -51,4 +61,12 @@ __all__ = [
     "UnsupportedTaskInputError",
     "Usage",
     "create_default_registry",
+    "output_delta_event",
+    "safe_emit",
+    "task_completed_event",
+    "task_failed_event",
+    "task_started_event",
+    "tool_completed_event",
+    "tool_requested_event",
+    "vendor_turn_event",
 ]

@@ -14,6 +14,16 @@ from agent_runtime_kit._types import (
     RuntimeAvailability,
     ToolCallAudit,
 )
+from agent_runtime_kit.events import (
+    output_delta_event,
+    safe_emit,
+    task_completed_event,
+    task_failed_event,
+    task_started_event,
+    tool_completed_event,
+    tool_requested_event,
+    vendor_turn_event,
+)
 
 
 class FakeAgentRuntime:
@@ -49,20 +59,52 @@ class FakeAgentRuntime:
     async def run(self, task: AgentTask) -> AgentResult:
         """Return a deterministic result after validating capabilities."""
 
-        _ensure_supported(self.kind, self.capabilities, task)
-        output = self._output if self._output is not None else f"Fake result for: {task.goal}"
-        parsed = {"output": output} if task.output_schema is not None else None
-        tool_calls = (
-            ToolCallAudit(tool_name="fake", arguments={"goal": task.goal}, result_preview=output),
-        )
-        return AgentResult(
-            output=output,
-            parsed_output=parsed,
-            tool_calls=tool_calls,
-            session_id=task.session_id or task.task_id,
-            rounds=1,
-            metadata={"task_id": task.task_id, **self._metadata},
-        )
+        await safe_emit(task, task_started_event(task, self.kind))
+        try:
+            _ensure_supported(self.kind, self.capabilities, task)
+            output = self._output if self._output is not None else f"Fake result for: {task.goal}"
+            parsed = {"output": output} if task.output_schema is not None else None
+            tool_call = ToolCallAudit(
+                tool_name="fake",
+                arguments={"goal": task.goal},
+                result_preview=output,
+            )
+            await safe_emit(
+                task,
+                output_delta_event(task, self.kind, text=output),
+            )
+            await safe_emit(
+                task,
+                tool_requested_event(
+                    task,
+                    self.kind,
+                    tool_name="fake",
+                    arguments=tool_call.arguments,
+                ),
+            )
+            await safe_emit(task, tool_completed_event(task, self.kind, tool_call))
+            await safe_emit(
+                task,
+                vendor_turn_event(
+                    task,
+                    self.kind,
+                    payload={"runtime": "fake", "round": 1},
+                    summary="fake runtime completed one turn",
+                ),
+            )
+            result = AgentResult(
+                output=output,
+                parsed_output=parsed,
+                tool_calls=(tool_call,),
+                session_id=task.session_id or task.task_id,
+                rounds=1,
+                metadata={"task_id": task.task_id, **self._metadata},
+            )
+        except Exception as exc:
+            await safe_emit(task, task_failed_event(task, self.kind, error=str(exc)))
+            raise
+        await safe_emit(task, task_completed_event(task, self.kind, result))
+        return result
 
     async def cancel(self, task_id: str) -> None:
         """Record cancellation requests for assertions."""
