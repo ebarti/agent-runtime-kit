@@ -25,12 +25,14 @@ dependencies = []
 
 [project.optional-dependencies]
 claude = ["claude-agent-sdk>=0.2.87"]
-codex = ["openai-codex>=0.1.0b2"]
+# 0.1.0b3 floor: earlier betas pin a codex binary with no manylinux wheels,
+# making the extra uninstallable on glibc Linux.
+codex = ["openai-codex>=0.1.0b3"]
 antigravity = ["google-antigravity>=0.1.2"]
 all = [
     "claude-agent-sdk>=0.2.87",
     "google-antigravity>=0.1.2",
-    "openai-codex>=0.1.0b2",
+    "openai-codex>=0.1.0b3",
 ]
 
 [project.urls]
@@ -46,6 +48,17 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.8",
 ]
+
+[tool.uv]
+# openai-codex-cli-bin ships per-platform binary wheels; require the platforms we
+# develop and run CI on so resolution never locks a version missing one of them.
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+# openai-codex pins exact pre-release builds of its CLI binary; the pre-release
+# marker here opts that one package into pre-release resolution.
+constraint-dependencies = ["openai-codex-cli-bin>=0.134.0a1"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_runtime_kit"]
