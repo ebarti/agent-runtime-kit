@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import enum
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from tempfile import gettempdir
 from typing import Any
 
-from agent_runtime_kit._errors import UnsupportedTaskInputError
+from agent_runtime_kit._errors import AgentRuntimeUnavailableError, UnsupportedTaskInputError
 from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentResult,
@@ -27,6 +27,7 @@ from agent_runtime_kit.adapters._common import (
     output_schema_from,
     package_availability,
     parse_json_output,
+    reject_unsupported_inputs,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -60,6 +61,7 @@ class AntigravityAgentRuntime:
         default_model: str = "gemini-3.5-flash",
         supported_models: tuple[str, ...] | None = None,
         api_key: str | None = None,
+        data_dir: Path | None = None,
         agent_cls: Any | None = None,
         config_cls: Any | None = None,
         types_module: Any | None = None,
@@ -68,6 +70,7 @@ class AntigravityAgentRuntime:
         self._default_model = default_model
         self._supported_models = supported_models
         self._api_key = api_key
+        self._data_dir = data_dir
         self._agent_cls = agent_cls
         self._config_cls = config_cls
         self._types = types_module
@@ -100,6 +103,9 @@ class AntigravityAgentRuntime:
 
         await safe_emit(task, task_started_event(task, self.kind))
         try:
+            reject_unsupported_inputs(
+                self.kind, task, budget=True, network=True, tool_filters=False
+            )
             model = self._model(task)
             ensure_supported_model(
                 kind=self.kind,
@@ -109,7 +115,10 @@ class AntigravityAgentRuntime:
             sdk = self._load_sdk()
             api_key = self._api_key_value()
             if api_key is None:
-                raise RuntimeError("Antigravity requires GEMINI_API_KEY or GOOGLE_API_KEY")
+                raise AgentRuntimeUnavailableError(
+                    self.kind,
+                    "Antigravity requires GEMINI_API_KEY or GOOGLE_API_KEY",
+                )
             config = self._build_config(task, model=model, api_key=api_key, sdk=sdk)
             result = await self._invoke(task, config=config, sdk=sdk, model=model)
         except Exception as exc:
@@ -117,7 +126,12 @@ class AntigravityAgentRuntime:
             raise
 
         if result.error:
-            await safe_emit(task, task_failed_event(task, self.kind, error=result.error))
+            await safe_emit(
+                task,
+                task_failed_event(
+                    task, self.kind, error=result.error, finish_reason=result.finish_reason
+                ),
+            )
         else:
             await safe_emit(task, task_completed_event(task, self.kind, result))
         return result
@@ -136,15 +150,16 @@ class AntigravityAgentRuntime:
         ):
             return _AntigravitySDK(self._agent_cls, self._config_cls, self._types, self._policy)
         try:
-            from google.antigravity import types  # type: ignore[import-not-found]
-            from google.antigravity.agent import Agent  # type: ignore[import-not-found]
-            from google.antigravity.connections.local.local_connection_config import (  # type: ignore[import-not-found]
+            from google.antigravity import types
+            from google.antigravity.agent import Agent
+            from google.antigravity.connections.local.local_connection_config import (
                 LocalAgentConfig,
             )
-            from google.antigravity.hooks import policy  # type: ignore[import-not-found]
+            from google.antigravity.hooks import policy
         except ImportError as exc:
-            raise RuntimeError(
-                "google-antigravity is not installed. Install agent-runtime-kit[antigravity]."
+            raise AgentRuntimeUnavailableError(
+                self.kind,
+                "google-antigravity is not installed. Install agent-runtime-kit[antigravity].",
             ) from exc
         return _AntigravitySDK(Agent, LocalAgentConfig, types, policy)
 
@@ -163,7 +178,7 @@ class AntigravityAgentRuntime:
                     "mcp_servers.env",
                     "Antigravity MCP stdio server config does not support env",
                 )
-        capabilities, policies = _capability_policy(task, sdk)
+        capabilities, policies = _capability_policy(self.kind, task, sdk)
         schema = output_schema_from(task.output_schema, task.metadata)
         return sdk.config_cls(
             model=model,
@@ -173,11 +188,15 @@ class AntigravityAgentRuntime:
             policies=policies,
             workspaces=_workspaces(task),
             conversation_id=_conversation_id(task),
-            save_dir=str(_runtime_dir("antigravity-sessions")),
-            app_data_dir=str(_runtime_dir("antigravity-app-data")),
+            save_dir=str(self._runtime_dir("antigravity-sessions")),
+            app_data_dir=str(self._runtime_dir("antigravity-app-data")),
             response_schema=dict(schema) if schema is not None else None,
             mcp_servers=[
-                sdk.types.McpStdioServer(command=server.command, args=list(server.args))
+                sdk.types.McpStdioServer(
+                    name=server.name,
+                    command=server.command,
+                    args=list(server.args),
+                )
                 for server in task.mcp_servers
             ],
         )
@@ -273,7 +292,7 @@ class AntigravityAgentRuntime:
                 tool_name=_tool_name(getattr(chunk, "name", "tool")),
                 arguments=_tool_arguments(chunk),
                 result_preview=str(getattr(chunk, "result", ""))[:256],
-                status="ok",
+                status=_tool_result_status(chunk),
             )
             tool_calls.append(audit)
             await safe_emit(task, tool_completed_event(task, self.kind, audit))
@@ -289,6 +308,15 @@ class AntigravityAgentRuntime:
     def _model(self, task: AgentTask) -> str:
         return metadata_str(task.metadata, "model") or self._default_model
 
+    def _runtime_dir(self, name: str) -> Path:
+        base = self._data_dir or _default_data_dir()
+        path = base / name
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # mkdir does not chmod a pre-existing directory, so enforce the mode on the
+        # leaf so session transcripts are not left world-readable.
+        os.chmod(path, 0o700)
+        return path
+
 
 class _AntigravitySDK:
     def __init__(self, agent_cls: Any, config_cls: Any, types: Any, policy: Any) -> None:
@@ -298,27 +326,98 @@ class _AntigravitySDK:
         self.policy = policy
 
 
-def _capability_policy(task: AgentTask, sdk: _AntigravitySDK) -> tuple[Any, list[Any]]:
+def _capability_policy(
+    kind: AgentRuntimeKind, task: AgentTask, sdk: _AntigravitySDK
+) -> tuple[Any, list[Any]]:
     builtin = sdk.types.BuiltinTools
-    if task.permissions.allowed_tools == ():
-        if task.permissions.filesystem is FilesystemAccess.READ_ONLY:
-            tools = builtin.read_only()
-        elif task.permissions.mode is PermissionMode.CAUTIOUS:
-            tools = builtin.nondestructive()
-        else:
-            tools = builtin.all_tools()
+    subagent = getattr(builtin, "START_SUBAGENT", None)
+    is_permissive = task.permissions.mode is PermissionMode.PERMISSIVE
+    if task.permissions.disallowed_tools:
+        # The real CapabilitiesConfig requires enabled_tools and disabled_tools to be
+        # mutually exclusive, so a deny-list takes the disabled_tools route and lets
+        # the SDK enable everything else. Combining it with an explicit allow-list is
+        # unrepresentable, so reject that rather than silently drop one.
+        if task.permissions.allowed_tools:
+            raise UnsupportedTaskInputError(
+                kind,
+                "permissions.allowed_tools",
+                "Antigravity cannot combine an allow-list with a deny-list; "
+                "set only one of allowed_tools or disallowed_tools",
+            )
+        disabled = _validate_tools(
+            kind, "disallowed_tools", task.permissions.disallowed_tools, builtin
+        )
+        enable_subagents = is_permissive and not _contains_tool(disabled, subagent)
+        capabilities = sdk.types.CapabilitiesConfig(
+            disabled_tools=disabled,
+            enable_subagents=enable_subagents,
+        )
     else:
-        tools = list(task.permissions.allowed_tools)
-    enable_subagents = (
-        task.permissions.mode is PermissionMode.PERMISSIVE
-        and getattr(builtin, "START_SUBAGENT", None) in tools
-    )
-    capabilities = sdk.types.CapabilitiesConfig(
-        enabled_tools=tools,
-        enable_subagents=enable_subagents,
-    )
+        if task.permissions.allowed_tools == ():
+            tools = _default_tools(task, builtin)
+        else:
+            tools = _validate_tools(kind, "allowed_tools", task.permissions.allowed_tools, builtin)
+        enable_subagents = is_permissive and _contains_tool(tools, subagent)
+        capabilities = sdk.types.CapabilitiesConfig(
+            enabled_tools=tools,
+            enable_subagents=enable_subagents,
+        )
     policies = [] if task.permissions.mode is PermissionMode.STRICT else [sdk.policy.allow_all()]
     return capabilities, policies
+
+
+def _contains_tool(tools: list[Any], subagent: Any) -> bool:
+    if subagent is None:
+        return False
+    target = getattr(subagent, "value", subagent)
+    return any(getattr(tool, "value", tool) == target for tool in tools)
+
+
+def _default_tools(task: AgentTask, builtin: Any) -> list[Any]:
+    mode = task.permissions.mode
+    if task.permissions.filesystem is FilesystemAccess.READ_ONLY or mode is PermissionMode.STRICT:
+        return list(builtin.read_only())
+    if mode is PermissionMode.PERMISSIVE:
+        return list(builtin.all_tools())
+    # DEFAULT and CAUTIOUS get a non-destructive tool set (safety fix: DEFAULT no
+    # longer grants run_command + all_tools).
+    return list(builtin.nondestructive())
+
+
+def _validate_tools(
+    kind: AgentRuntimeKind, field: str, tools: tuple[str, ...], builtin: Any
+) -> list[Any]:
+    valid = _builtin_tool_values(builtin)
+    if valid is None:
+        # Injected fakes do not model an enum; pass values through untouched.
+        return list(tools)
+    resolved: list[Any] = []
+    for tool in tools:
+        value = getattr(tool, "value", tool)
+        if value not in valid:
+            ordered = ", ".join(sorted(valid))
+            raise UnsupportedTaskInputError(
+                kind,
+                f"permissions.{field}",
+                f"{value!r} is not an Antigravity built-in tool; valid values: {ordered}",
+            )
+        resolved.append(value)
+    return resolved
+
+
+def _builtin_tool_values(builtin: Any) -> set[str] | None:
+    if not isinstance(builtin, enum.EnumMeta):
+        return None
+    members: list[Any] = list(builtin)
+    return {str(getattr(member, "value", member)) for member in members}
+
+
+def _tool_result_status(chunk: Any) -> str:
+    if getattr(chunk, "error", None) is not None:
+        return "error"
+    if getattr(chunk, "exception", None) is not None:
+        return "error"
+    return "ok"
 
 
 def _workspaces(task: AgentTask) -> list[str]:
@@ -333,10 +432,10 @@ def _conversation_id(task: AgentTask) -> str | None:
     return task.session_id
 
 
-def _runtime_dir(name: str) -> Path:
-    path = Path(gettempdir()) / "agent-runtime-kit" / name
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    return path
+def _default_data_dir() -> Path:
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    return base / "agent-runtime-kit"
 
 
 def _usage_from(value: Any) -> Usage:
