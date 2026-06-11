@@ -10,6 +10,7 @@ from agent_runtime_kit import (
     AgentTask,
     FilesystemAccess,
     McpServerConfig,
+    PermissionMode,
     PermissionProfile,
 )
 from agent_runtime_kit._errors import UnsupportedTaskInputError
@@ -30,36 +31,23 @@ class FakeSandbox:
 
 
 class FakeApprovalMode:
-    auto_review = "auto-review"
-    deny_all = "deny-all"
-
-
-class FakeCodex:
-    def __init__(self, config: FakeCodexConfig) -> None:
-        self.config = config
-        self.started_kwargs: dict[str, Any] | None = None
-
-    async def __aenter__(self) -> FakeCodex:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
-    async def thread_start(self, **kwargs: Any) -> FakeThread:
-        self.started_kwargs = kwargs
-        return FakeThread("thread-new")
-
-    async def thread_resume(self, thread_id: str, **kwargs: Any) -> FakeThread:
-        self.started_kwargs = kwargs
-        return FakeThread(thread_id)
+    auto_review = "auto_review"
+    deny_all = "deny_all"
 
 
 class FakeThread:
-    def __init__(self, thread_id: str) -> None:
+    last_run_kwargs: dict[str, Any] | None = None
+
+    def __init__(self, thread_id: str, run_result: Any | None = None) -> None:
         self.id = thread_id
+        self._run_result = run_result
 
     async def run(self, prompt: str, **kwargs: Any) -> Any:
+        FakeThread.last_run_kwargs = kwargs
+        if self._run_result is not None:
+            return self._run_result
         return {
+            "status": "completed",
             "final_response": '{"ok": true}' if kwargs.get("output_schema") else f"done: {prompt}",
             "usage": {
                 "total": {
@@ -72,15 +60,44 @@ class FakeThread:
         }
 
 
-@pytest.mark.asyncio
-async def test_codex_runtime_runs_with_injected_sdk() -> None:
-    sink = RecordingEventSink()
-    runtime = CodexAgentRuntime(
-        codex_cls=FakeCodex,
+class FakeCodex:
+    last_started_kwargs: dict[str, Any] | None = None
+
+    def __init__(self, config: FakeCodexConfig, run_result: Any | None = None) -> None:
+        self.config = config
+        self._run_result = run_result
+
+    async def __aenter__(self) -> FakeCodex:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def thread_start(self, **kwargs: Any) -> FakeThread:
+        FakeCodex.last_started_kwargs = kwargs
+        return FakeThread("thread-new", self._run_result)
+
+    async def thread_resume(self, thread_id: str, **kwargs: Any) -> FakeThread:
+        FakeCodex.last_started_kwargs = kwargs
+        return FakeThread(thread_id, self._run_result)
+
+
+def make_runtime(run_result: Any | None = None) -> CodexAgentRuntime:
+    def codex_factory(*, config: FakeCodexConfig) -> FakeCodex:
+        return FakeCodex(config, run_result)
+
+    return CodexAgentRuntime(
+        codex_cls=codex_factory,
         config_cls=FakeCodexConfig,
         sandbox_cls=FakeSandbox,
         approval_mode_cls=FakeApprovalMode,
     )
+
+
+@pytest.mark.asyncio
+async def test_codex_runtime_runs_with_injected_sdk() -> None:
+    sink = RecordingEventSink()
+    runtime = make_runtime()
 
     result = await runtime.run(
         AgentTask(
@@ -99,21 +116,230 @@ async def test_codex_runtime_runs_with_injected_sdk() -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_runtime_rejects_mcp_servers() -> None:
-    runtime = CodexAgentRuntime(
-        codex_cls=FakeCodex,
-        config_cls=FakeCodexConfig,
-        sandbox_cls=FakeSandbox,
-        approval_mode_cls=FakeApprovalMode,
+async def test_codex_thread_start_and_run_kwargs() -> None:
+    runtime = make_runtime()
+
+    await runtime.run(
+        AgentTask(
+            goal="g",
+            system="dev instructions",
+            metadata={"model": "gpt-x", "reasoning_effort": "high"},
+            output_schema={"type": "object"},
+        )
     )
+
+    started = FakeCodex.last_started_kwargs
+    assert started is not None
+    assert started["developer_instructions"] == "dev instructions"
+    assert started["model"] == "gpt-x"
+    assert started["cwd"] is None
+    run_kwargs = FakeThread.last_run_kwargs
+    assert run_kwargs is not None
+    assert run_kwargs["model"] == "gpt-x"
+    assert run_kwargs["output_schema"] == {"type": "object"}
+    assert run_kwargs["effort"] == "high"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        (PermissionMode.STRICT, "deny_all"),
+        (PermissionMode.CAUTIOUS, "deny_all"),
+        (PermissionMode.DEFAULT, "auto_review"),
+        (PermissionMode.PERMISSIVE, "auto_review"),
+    ],
+)
+async def test_codex_approval_mode_mapping(mode: PermissionMode, expected: str) -> None:
+    runtime = make_runtime()
+
+    await runtime.run(AgentTask(goal="x", permissions=PermissionProfile(mode=mode)))
+
+    assert FakeThread.last_run_kwargs is not None
+    assert FakeThread.last_run_kwargs["approval_mode"] == expected
+    assert FakeCodex.last_started_kwargs is not None
+    assert FakeCodex.last_started_kwargs["approval_mode"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("filesystem", "expected"),
+    [
+        (FilesystemAccess.READ_ONLY, "read-only"),
+        (FilesystemAccess.WORKSPACE_WRITE, "workspace-write"),
+        (FilesystemAccess.FULL_ACCESS, "full-access"),
+    ],
+)
+async def test_codex_sandbox_mapping(filesystem: FilesystemAccess, expected: str) -> None:
+    runtime = make_runtime()
+
+    await runtime.run(AgentTask(goal="x", permissions=PermissionProfile(filesystem=filesystem)))
+
+    assert FakeThread.last_run_kwargs is not None
+    assert FakeThread.last_run_kwargs["sandbox"] == expected
+
+
+@pytest.mark.asyncio
+async def test_codex_failed_status_maps_to_error() -> None:
+    run_result = {
+        "status": "failed",
+        "final_response": "partial text that should not be treated as success",
+        "error": {"message": "the sandbox blocked it"},
+    }
+    sink = RecordingEventSink()
+    runtime = make_runtime(run_result)
+
+    result = await runtime.run(AgentTask(goal="x", event_sink=sink))
+
+    assert result.finish_reason == "failed"
+    assert result.error == "the sandbox blocked it"
+    assert sink.events[-1]["name"] == "agent.task.failed"
+
+
+@pytest.mark.asyncio
+async def test_codex_failed_status_without_error_message() -> None:
+    runtime = make_runtime({"status": "failed", "final_response": "", "error": None})
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.finish_reason == "failed"
+    assert result.error == "Codex turn failed"
+
+
+@pytest.mark.asyncio
+async def test_codex_interrupted_status_maps_to_interrupted() -> None:
+    runtime = make_runtime({"status": "interrupted", "final_response": "stopped"})
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.finish_reason == "interrupted"
+    assert result.error == "Codex turn interrupted"
+
+
+@pytest.mark.asyncio
+async def test_codex_builds_tool_audits_from_items() -> None:
+    run_result = {
+        "status": "completed",
+        "final_response": "done",
+        "items": [
+            {"type": "agentMessage", "text": "ignored"},
+            {
+                "type": "commandExecution",
+                "command": "ls -la",
+                "status": "completed",
+                "aggregated_output": "file1\nfile2",
+                "duration_ms": 12,
+            },
+            {
+                "type": "mcpToolCall",
+                "tool": "search",
+                "server": "docs",
+                "arguments": {"q": "x"},
+                "status": "failed",
+                "error": {"message": "nope"},
+            },
+            {"type": "webSearch", "query": "python"},
+        ],
+    }
+    runtime = make_runtime(run_result)
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    names = [(tc.tool_name, tc.status) for tc in result.tool_calls]
+    assert ("command", "ok") in names
+    assert ("search", "error") in names
+    assert ("web_search", "ok") in names
+    command_audit = next(tc for tc in result.tool_calls if tc.tool_name == "command")
+    assert command_audit.arguments == {"command": "ls -la"}
+    assert command_audit.duration_ms == 12
+
+
+@pytest.mark.asyncio
+async def test_codex_unwraps_root_model_items() -> None:
+    @dataclass
+    class _RootWrapper:
+        root: Any
+
+    @dataclass
+    class _Command:
+        type: str
+        command: str
+        status: str
+
+    run_result = {
+        "status": "completed",
+        "final_response": "done",
+        "items": [
+            _RootWrapper(_Command(type="commandExecution", command="pwd", status="completed"))
+        ],
+    }
+    runtime = make_runtime(run_result)
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.tool_calls[0].tool_name == "command"
+    assert result.tool_calls[0].arguments == {"command": "pwd"}
+
+
+@pytest.mark.asyncio
+async def test_codex_rejects_mcp_servers() -> None:
+    runtime = make_runtime()
 
     with pytest.raises(UnsupportedTaskInputError):
         await runtime.run(
-            AgentTask(
-                goal="x",
-                mcp_servers=(McpServerConfig(name="fs", command="mcp"),),
-            )
+            AgentTask(goal="x", mcp_servers=(McpServerConfig(name="fs", command="mcp"),))
         )
+
+
+@pytest.mark.asyncio
+async def test_codex_rejects_allowed_tools() -> None:
+    runtime = make_runtime()
+
+    with pytest.raises(UnsupportedTaskInputError):
+        await runtime.run(
+            AgentTask(goal="x", permissions=PermissionProfile(allowed_tools=("Read",)))
+        )
+
+
+@pytest.mark.asyncio
+async def test_codex_rejects_disallowed_tools() -> None:
+    runtime = make_runtime()
+
+    with pytest.raises(UnsupportedTaskInputError):
+        await runtime.run(
+            AgentTask(goal="x", permissions=PermissionProfile(disallowed_tools=("Bash",)))
+        )
+
+
+@pytest.mark.asyncio
+async def test_codex_rejects_budget() -> None:
+    runtime = make_runtime()
+
+    with pytest.raises(UnsupportedTaskInputError):
+        await runtime.run(AgentTask(goal="x", budget_usd=1.0))
+
+
+@pytest.mark.asyncio
+async def test_codex_rejects_network() -> None:
+    runtime = make_runtime()
+
+    with pytest.raises(UnsupportedTaskInputError):
+        await runtime.run(AgentTask(goal="x", permissions=PermissionProfile(network=False)))
+
+
+@pytest.mark.asyncio
+async def test_codex_usage_fallback_excludes_cached() -> None:
+    run_result = {
+        "status": "completed",
+        "final_response": "done",
+        "usage": {"total": {"input_tokens": 10, "output_tokens": 5, "cached_input_tokens": 4}},
+    }
+    runtime = make_runtime(run_result)
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    # Fallback total is input + output only (cached is already inside input_tokens).
+    assert result.usage.total_tokens == 15
 
 
 def test_codex_availability_uses_injected_sdk() -> None:

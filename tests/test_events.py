@@ -34,14 +34,28 @@ def test_events_redact_sensitive_metadata_and_truncate_text() -> None:
     event = task_started_event(
         AgentTask(
             goal="x" * 1100,
-            metadata={"api_key": "secret", "nested": {"authorization": "token"}},
+            metadata={
+                "api_key": "secret",
+                "access_token": "abc",
+                "github_token": "ghp",
+                "input_tokens": 123,
+                "max_tokens": 456,
+                "nested": {"authorization": "token"},
+            },
         ),
         "fake",
     )
 
     attrs = event["attributes"]
-    assert attrs["metadata"]["api_key"] == "[redacted]"
-    assert attrs["metadata"]["nested"]["authorization"] == "[redacted]"
+    metadata = attrs["metadata"]
+    assert metadata["api_key"] == "[redacted]"
+    assert metadata["nested"]["authorization"] == "[redacted]"
+    # "token" as a full underscore segment redacts.
+    assert metadata["access_token"] == "[redacted]"
+    assert metadata["github_token"] == "[redacted]"
+    # "token" only as a substring (not its own segment) must NOT redact.
+    assert metadata["input_tokens"] == 123
+    assert metadata["max_tokens"] == 456
     assert attrs["task_goal"].endswith("...[truncated]")
 
 
