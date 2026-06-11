@@ -9,7 +9,8 @@ from typing import Any
 from agent_runtime_kit._types import AgentResult, AgentRuntimeKind, AgentTask, ToolCallAudit
 
 DEFAULT_PREVIEW_CHARS = 1000
-SENSITIVE_KEY_PARTS = ("api_key", "apikey", "authorization", "password", "secret", "token")
+SENSITIVE_KEY_SUBSTRINGS = ("api_key", "apikey", "authorization", "password", "secret")
+SENSITIVE_KEY_SEGMENTS = ("token",)
 
 
 def task_started_event(
@@ -119,6 +120,7 @@ def tool_requested_event(
     tool_name: str,
     arguments: Mapping[str, Any] | None = None,
     summary: str | None = None,
+    extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an ``agent.tool.requested`` event."""
 
@@ -129,6 +131,8 @@ def tool_requested_event(
         "argument_count": len(arguments or {}),
         "argument_keys": sorted(str(key) for key in (arguments or {})),
     }
+    if extra:
+        attrs.update(extra)
     return _event("agent.tool.requested", summary or f"tool requested: {tool_name}", attrs)
 
 
@@ -138,6 +142,7 @@ def tool_completed_event(
     audit: ToolCallAudit,
     *,
     summary: str | None = None,
+    extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an ``agent.tool.completed`` event."""
 
@@ -149,6 +154,8 @@ def tool_completed_event(
         "duration_ms": audit.duration_ms,
         "result_preview_length": len(audit.result_preview),
     }
+    if extra:
+        attrs.update(extra)
     return _event(
         "agent.tool.completed",
         summary or f"tool completed: {audit.tool_name} ({audit.status})",
@@ -163,6 +170,7 @@ def vendor_turn_event(
     payload: Mapping[str, Any] | None = None,
     turn_index: int | None = None,
     summary: str | None = None,
+    extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an ``agent.vendor.turn`` event."""
 
@@ -172,6 +180,8 @@ def vendor_turn_event(
         "turn_index": turn_index,
         "payload": dict(payload or {}),
     }
+    if extra:
+        attrs.update(extra)
     return _event("agent.vendor.turn", summary or "vendor turn update", attrs)
 
 
@@ -221,4 +231,7 @@ def _preview(text: str) -> tuple[str, bool]:
 
 def _is_sensitive_key(key: str) -> bool:
     lowered = key.lower().replace("-", "_")
-    return any(part in lowered for part in SENSITIVE_KEY_PARTS)
+    if any(part in lowered for part in SENSITIVE_KEY_SUBSTRINGS):
+        return True
+    segments = lowered.split("_")
+    return any(segment in segments for segment in SENSITIVE_KEY_SEGMENTS)

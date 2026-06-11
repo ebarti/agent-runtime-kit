@@ -11,6 +11,7 @@ from typing import Any
 from agent_runtime_kit._errors import UnsupportedTaskInputError
 from agent_runtime_kit._types import (
     AgentRuntimeKind,
+    AgentTask,
     AvailabilityReason,
     RuntimeAvailability,
 )
@@ -103,16 +104,73 @@ def parse_json_output(output: str) -> Any | None:
         return None
 
 
-def filter_supported_kwargs(factory: Any, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-    """Drop kwargs unsupported by an injected or vendor options constructor."""
+def reject_unsupported_inputs(
+    kind: AgentRuntimeKind,
+    task: AgentTask,
+    *,
+    budget: bool,
+    network: bool,
+    tool_filters: bool,
+) -> None:
+    """Raise ``UnsupportedTaskInputError`` for task fields a runtime cannot honor.
+
+    Each flag selects a field whose silent omission would mislead the caller. The
+    project contract is to reject these inputs rather than drop them quietly, so an
+    adapter passes ``True`` only for fields it has no SDK surface to honor.
+    """
+
+    if budget and task.budget_usd is not None:
+        raise UnsupportedTaskInputError(
+            kind,
+            "budget_usd",
+            "this runtime does not expose a cost budget; remove budget_usd to proceed",
+        )
+    if network and task.permissions.network is not None:
+        raise UnsupportedTaskInputError(
+            kind,
+            "permissions.network",
+            "this runtime does not expose network access control",
+        )
+    if tool_filters:
+        if task.permissions.allowed_tools:
+            raise UnsupportedTaskInputError(
+                kind,
+                "permissions.allowed_tools",
+                "this runtime does not expose a tool allow-list",
+            )
+        if task.permissions.disallowed_tools:
+            raise UnsupportedTaskInputError(
+                kind,
+                "permissions.disallowed_tools",
+                "this runtime does not expose a tool deny-list",
+            )
+
+
+def filter_supported_kwargs(
+    factory: Any, kwargs: Mapping[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    """Split kwargs into those the constructor accepts and those it does not.
+
+    This exists to tolerate vendor option drift: a future SDK version may rename or
+    remove an option this adapter builds. Rather than crash, unsupported keys are
+    dropped, but drops must be observable, so the dropped key names are returned
+    alongside the accepted kwargs and surfaced in ``AgentResult.metadata``.
+    """
 
     try:
         signature = inspect.signature(factory)
     except (TypeError, ValueError):
-        return dict(kwargs)
+        return dict(kwargs), []
     if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
-        return dict(kwargs)
-    return {key: value for key, value in kwargs.items() if key in signature.parameters}
+        return dict(kwargs), []
+    supported: dict[str, Any] = {}
+    dropped: list[str] = []
+    for key, value in kwargs.items():
+        if key in signature.parameters:
+            supported[key] = value
+        else:
+            dropped.append(key)
+    return supported, dropped
 
 
 def _extra_name(kind: AgentRuntimeKind) -> str:

@@ -70,16 +70,18 @@ asyncio.run(main())
 
 `AgentTask` supports goal, system prompt, working directory, permission profile,
 MCP stdio servers, session/resume handles, output schema, budget, metadata, and
-an async event sink.
+an async event sink. Where a runtime cannot honor a field (for example only
+Claude maps `budget_usd`; Codex and Antigravity reject it with a typed
+`UnsupportedTaskInputError`) the adapter raises rather than silently dropping it.
 
 `AgentResult` returns output, finish reason, parsed structured output, usage,
 cost, session id, artifacts, tool-call audits, and provider metadata.
 
 ## Docs
 
-- [Quickstart](docs/quickstart.md)
-- [Provider diagnostics](docs/providers.md)
-- [Capability matrix](docs/capability-matrix.md)
-- [Live smoke tests](docs/live-smoke.md)
-- [Mestre migration notes](docs/mestre-migration.md)
-- [Publish checklist](docs/publish-checklist.md)
+- [Quickstart](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/quickstart.md)
+- [Provider diagnostics](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/providers.md)
+- [Capability matrix](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/capability-matrix.md)
+- [Live smoke tests](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/live-smoke.md)
+- [Mestre migration notes](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/mestre-migration.md)
+- [Publish checklist](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/publish-checklist.md)

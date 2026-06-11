@@ -24,9 +24,19 @@ available; any 200 response means it has been claimed.
 
 ## Release Gate
 
-- `uv run pytest`
+Continuous integration (`.github/workflows/ci.yml`) runs `ruff`, `mypy`, and
+`pytest` on every pull request and push to `main` across Python 3.10–3.13 in
+both the core-only and all-extras dependency lanes, so gate results no longer
+depend on which extras happen to be installed locally. The publish workflow
+itself also gates on tests: its `test` job (core on 3.10, all extras on 3.13)
+must pass before the `build` job runs, so a release cannot be built or published
+unless `ruff`/`mypy`/`pytest` are green against the release tag.
+
+To reproduce the gate locally before tagging:
+
 - `uv run ruff check .`
 - `uv run mypy`
+- `uv run pytest`
 - `uv run python -m build`
 - Optional: provider-specific live smoke tests from `docs/live-smoke.md`
 

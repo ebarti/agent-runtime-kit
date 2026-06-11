@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from agent_runtime_kit._errors import UnsupportedTaskInputError
+from agent_runtime_kit._errors import AgentRuntimeUnavailableError, UnsupportedTaskInputError
 from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentResult,
@@ -14,6 +14,7 @@ from agent_runtime_kit._types import (
     FilesystemAccess,
     PermissionMode,
     RuntimeAvailability,
+    ToolCallAudit,
     Usage,
 )
 from agent_runtime_kit.adapters._common import (
@@ -22,6 +23,7 @@ from agent_runtime_kit.adapters._common import (
     output_schema_from,
     package_availability,
     parse_json_output,
+    reject_unsupported_inputs,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -30,6 +32,14 @@ from agent_runtime_kit.events import (
     task_failed_event,
     task_started_event,
 )
+
+# Vendor ``ThreadItem`` discriminator values that carry a tool/command invocation.
+_COMMAND_ITEM = "commandExecution"
+_MCP_ITEM = "mcpToolCall"
+_DYNAMIC_ITEM = "dynamicToolCall"
+_WEB_SEARCH_ITEM = "webSearch"
+# Vendor status values (camelCase) that mean the invocation did not succeed.
+_TOOL_ERROR_STATUSES = frozenset({"failed", "declined"})
 
 
 class CodexAgentRuntime:
@@ -51,6 +61,7 @@ class CodexAgentRuntime:
         *,
         default_model: str = "gpt-5.5",
         supported_models: tuple[str, ...] | None = None,
+        config_overrides: tuple[str, ...] = ("features.plugins=false",),
         codex_cls: Any | None = None,
         config_cls: Any | None = None,
         sandbox_cls: Any | None = None,
@@ -58,6 +69,9 @@ class CodexAgentRuntime:
     ) -> None:
         self._default_model = default_model
         self._supported_models = supported_models
+        # Plugins are disabled by default so headless runs are deterministic and do
+        # not pick up host-local Codex plugin configuration. Override to opt in.
+        self._config_overrides = config_overrides
         self._codex_cls = codex_cls
         self._config_cls = config_cls
         self._sandbox_cls = sandbox_cls
@@ -85,6 +99,7 @@ class CodexAgentRuntime:
                     "mcp_servers",
                     "openai_codex does not expose per-task MCP server configuration",
                 )
+            reject_unsupported_inputs(self.kind, task, budget=True, network=True, tool_filters=True)
             model = self._model(task)
             ensure_supported_model(
                 kind=self.kind,
@@ -107,7 +122,12 @@ class CodexAgentRuntime:
         if result.output:
             await safe_emit(task, output_delta_event(task, self.kind, text=result.output))
         if result.error:
-            await safe_emit(task, task_failed_event(task, self.kind, error=result.error))
+            await safe_emit(
+                task,
+                task_failed_event(
+                    task, self.kind, error=result.error, finish_reason=result.finish_reason
+                ),
+            )
         else:
             await safe_emit(task, task_completed_event(task, self.kind, result))
         return result
@@ -126,15 +146,16 @@ class CodexAgentRuntime:
                 self._approval_mode_cls,
             )
         try:
-            from openai_codex import (  # type: ignore[import-not-found]
+            from openai_codex import (
                 ApprovalMode,
                 AsyncCodex,
                 CodexConfig,
                 Sandbox,
             )
         except ImportError as exc:
-            raise RuntimeError(
-                "openai-codex is not installed. Install agent-runtime-kit[codex]."
+            raise AgentRuntimeUnavailableError(
+                self.kind,
+                "openai-codex is not installed. Install agent-runtime-kit[codex].",
             ) from exc
         return (
             self._codex_cls or AsyncCodex,
@@ -154,7 +175,7 @@ class CodexAgentRuntime:
         approval_mode_cls: Any,
     ) -> AgentResult:
         cwd = str(task.working_directory) if task.working_directory else None
-        config = config_cls(cwd=cwd, config_overrides=("features.plugins=false",))
+        config = config_cls(cwd=cwd, config_overrides=self._config_overrides)
         async with codex_cls(config=config) as codex:
             thread = await self._start_or_resume_thread(
                 codex,
@@ -214,6 +235,35 @@ def _translate_run_result(
 ) -> AgentResult:
     output = str(_field(raw_result, "final_response", "") or "")
     usage = _codex_usage(_field(raw_result, "usage"))
+    tool_calls = tuple(_tool_audits(_field(raw_result, "items", ()) or ()))
+    metadata = {"model": model, "sdk": "openai_codex"}
+    status = _status_value(_field(raw_result, "status"))
+
+    if status == "failed":
+        return AgentResult(
+            output=output,
+            finish_reason="failed",
+            error=_turn_error(raw_result) or "Codex turn failed",
+            usage=usage,
+            tool_calls=tool_calls,
+            session_id=session_id,
+            rounds=1,
+            metadata=metadata,
+        )
+    if status == "interrupted":
+        return AgentResult(
+            output=output,
+            finish_reason="interrupted",
+            error=_turn_error(raw_result) or "Codex turn interrupted",
+            usage=usage,
+            tool_calls=tool_calls,
+            session_id=session_id,
+            rounds=1,
+            metadata=metadata,
+        )
+
+    # status is "completed" or missing (dict-based fakes): treat as success and keep
+    # the empty-output and schema-parse-failure branches.
     schema = output_schema_from(task.output_schema, task.metadata)
     parsed = parse_json_output(output) if schema is not None else None
     if schema is not None and parsed is None:
@@ -222,9 +272,10 @@ def _translate_run_result(
             finish_reason="failed",
             error="Codex SDK returned output that did not satisfy output_schema",
             usage=usage,
+            tool_calls=tool_calls,
             session_id=session_id,
             rounds=1,
-            metadata={"model": model, "sdk": "openai_codex"},
+            metadata=metadata,
         )
     if not output:
         return AgentResult(
@@ -232,17 +283,94 @@ def _translate_run_result(
             finish_reason="failed",
             error="Codex SDK completed without final_response",
             usage=usage,
+            tool_calls=tool_calls,
             session_id=session_id,
-            metadata={"model": model, "sdk": "openai_codex"},
+            metadata=metadata,
         )
     return AgentResult(
         output=output,
         parsed_output=parsed,
         usage=usage,
+        tool_calls=tool_calls,
         session_id=session_id,
         rounds=1,
-        metadata={"model": model, "sdk": "openai_codex"},
+        metadata=metadata,
     )
+
+
+def _status_value(status: Any) -> str | None:
+    if status is None:
+        return None
+    return str(getattr(status, "value", status) or "")
+
+
+def _turn_error(raw_result: Any) -> str | None:
+    error = _field(raw_result, "error")
+    if error is None:
+        return None
+    message = _field(error, "message")
+    return str(message) if message else None
+
+
+def _tool_audits(items: Any) -> list[ToolCallAudit]:
+    audits: list[ToolCallAudit] = []
+    if isinstance(items, Mapping) or isinstance(items, (str, bytes)):
+        return audits
+    try:
+        iterator = iter(items)
+    except TypeError:
+        return audits
+    for item in iterator:
+        audit = _tool_audit(item)
+        if audit is not None:
+            audits.append(audit)
+    return audits
+
+
+def _tool_audit(item: Any) -> ToolCallAudit | None:
+    # TurnResult.items holds ThreadItem RootModel wrappers whose discriminated value
+    # lives on ``.root``; unwrap it so duck-typed field access reaches the real item.
+    if not isinstance(item, Mapping) and _field(item, "type") is None:
+        root = getattr(item, "root", None)
+        if root is not None:
+            item = root
+    item_type = str(_field(item, "type", "") or "")
+    if item_type == _COMMAND_ITEM:
+        return ToolCallAudit(
+            tool_name="command",
+            arguments={"command": str(_field(item, "command", ""))},
+            result_preview=str(_field(item, "aggregated_output", "") or "")[:256],
+            status=_tool_status(item),
+            duration_ms=_optional_int(_field(item, "duration_ms")),
+        )
+    if item_type in {_MCP_ITEM, _DYNAMIC_ITEM}:
+        return ToolCallAudit(
+            tool_name=str(_field(item, "tool", "tool") or "tool"),
+            arguments=_tool_arguments(_field(item, "arguments")),
+            result_preview=str(_field(item, "result", "") or "")[:256],
+            status=_tool_status(item),
+            duration_ms=_optional_int(_field(item, "duration_ms")),
+        )
+    if item_type == _WEB_SEARCH_ITEM:
+        return ToolCallAudit(
+            tool_name="web_search",
+            arguments={"query": str(_field(item, "query", ""))},
+            status="ok",
+        )
+    return None
+
+
+def _tool_status(item: Any) -> str:
+    status = _status_value(_field(item, "status"))
+    if status in _TOOL_ERROR_STATUSES:
+        return "error"
+    if _field(item, "error") is not None:
+        return "error"
+    return "ok"
+
+
+def _tool_arguments(value: Any) -> Mapping[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _codex_usage(value: Any) -> Usage:
@@ -253,18 +381,22 @@ def _codex_usage(value: Any) -> Usage:
     output_tokens = _optional_int(_field(total, "output_tokens"))
     cached = _optional_int(_field(total, "cached_input_tokens"))
     total_tokens = _optional_int(_field(total, "total_tokens"))
+    # OpenAI reports cached input inside input_tokens, so never add cached on top.
     return Usage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cache_read_tokens=cached,
-        total_tokens=total_tokens or input_tokens + output_tokens + cached,
+        total_tokens=total_tokens or input_tokens + output_tokens,
     )
 
 
 def _approval_mode(mode: PermissionMode, approval_mode_cls: Any) -> Any:
+    # auto_review = sandbox escalations allowed and auto-adjudicated;
+    # deny_all = never escalate. STRICT/CAUTIOUS lock down; DEFAULT/PERMISSIVE allow.
+    deny = mode in {PermissionMode.STRICT, PermissionMode.CAUTIOUS}
     if approval_mode_cls is None:
-        return "auto_review" if mode is not PermissionMode.PERMISSIVE else "deny_all"
-    if mode is PermissionMode.PERMISSIVE:
+        return "deny_all" if deny else "auto_review"
+    if deny:
         return getattr(approval_mode_cls, "deny_all", "deny_all")
     return getattr(approval_mode_cls, "auto_review", "auto_review")
 
