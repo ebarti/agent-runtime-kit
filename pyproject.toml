@@ -64,6 +64,10 @@ packages = ["agent_runtime_kit"]
 strict = true
 warn_unused_configs = true
 
+[[tool.mypy.overrides]]
+module = ["claude_agent_sdk.*", "openai_codex.*", "google.antigravity.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 markers = [
     "live: optional provider smoke tests that require explicit credentials and opt-in flags",

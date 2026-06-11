@@ -58,12 +58,20 @@ class RuntimeRegistry:
         return factory(**kwargs)
 
     def capabilities_for(self, kind: AgentRuntimeKind | str) -> AgentCapabilities:
-        """Construct a runtime and return its advertised capabilities."""
+        """Construct a runtime and return its advertised capabilities.
+
+        This constructs the runtime with no arguments, so any registered factory
+        must be callable with zero args (the built-in adapters are).
+        """
 
         return self.resolve(kind).capabilities
 
     def availability_for(self, kind: AgentRuntimeKind | str) -> RuntimeAvailability:
-        """Construct a runtime and return its availability diagnostic."""
+        """Construct a runtime and return its availability diagnostic.
+
+        This constructs the runtime with no arguments, so any registered factory
+        must be callable with zero args (the built-in adapters are).
+        """
 
         return self.resolve(kind).availability()
 

@@ -175,7 +175,12 @@ class ArtifactRef:
 
 @dataclass(frozen=True)
 class SessionResumeState:
-    """Opaque session handle carried between invocations."""
+    """Opaque session handle carried between invocations.
+
+    ``transcript`` is informational only: it is an opaque payload a caller may
+    carry between turns. The built-in adapters do not consume it (they resume by
+    ``session_id``), so populating it does not change adapter behavior.
+    """
 
     session_id: str
     transcript: tuple[Any, ...] = ()
@@ -183,7 +188,15 @@ class SessionResumeState:
 
 @dataclass(frozen=True)
 class Usage:
-    """Token and cost metadata reported by a runtime."""
+    """Token and cost metadata reported by a runtime.
+
+    ``input_tokens`` counts prompt tokens excluding Anthropic-style cache reads and
+    cache creation, which are reported separately in ``cache_read_tokens`` and
+    ``cache_creation_tokens``. ``total_tokens`` is the vendor-reported total when the
+    runtime provides one, and ``None`` when it does not (so "unknown" is
+    distinguishable from zero). ``cost_usd`` is ``0.0`` when the provider reports no
+    cost.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
@@ -204,6 +217,9 @@ class AgentTask:
     mcp_servers: tuple[McpServerConfig, ...] = ()
     permissions: PermissionProfile = field(default_factory=PermissionProfile)
     event_sink: EventSink | None = None
+    # Informational only: carried into task events for observability, not enforced
+    # by the built-in adapters (no vendor SDK exposes a portable turn-count limit
+    # this maps onto). Treated as a hint, never as a hard cap.
     sdk_executions: int = 1
     budget_usd: float | None = None
     session_id: str | None = None
