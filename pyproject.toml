@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling>=1.25"]
+requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [project]
 name = "agent-runtime-kit"
-version = "0.1.0"
+version = "0.1.1"
 description = "One typed runtime API for Claude, Codex, and Antigravity agent SDKs."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,7 +14,6 @@ keywords = ["agents", "claude", "codex", "antigravity", "sdk"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -50,6 +49,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_runtime_kit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "docs", "examples", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.ruff]
 line-length = 100

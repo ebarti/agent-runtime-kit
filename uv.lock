@@ -7,15 +7,6 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 
-[options]
-exclude-newer = "2026-06-02T21:39:50.308816Z"
-exclude-newer-span = "P8D"
-
-[options.exclude-newer-package]
-claude-agent-sdk = "2026-06-11T00:00:00Z"
-google-antigravity = "2026-06-05T00:00:00Z"
-openai-codex = "2026-06-04T00:00:00Z"
-
 [[package]]
 name = "absl-py"
 version = "2.4.0"
@@ -27,7 +18,7 @@ wheels = [
 
 [[package]]
 name = "agent-runtime-kit"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 
 [package.optional-dependencies]
