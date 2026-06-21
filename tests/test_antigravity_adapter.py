@@ -14,6 +14,7 @@ from agent_runtime_kit import (
     McpServerConfig,
     PermissionMode,
     PermissionProfile,
+    RuntimeAvailability,
 )
 from agent_runtime_kit._errors import UnsupportedTaskInputError
 from agent_runtime_kit.adapters import AntigravityAgentRuntime
@@ -138,9 +139,19 @@ async def _chunks(prompt: str):
     yield FakeTypes.ToolResult("Read", "ok", {"path": "README.md"})
 
 
-def make_runtime(*, data_dir: Path, api_key: str = "key") -> AntigravityAgentRuntime:
+def make_runtime(
+    *,
+    data_dir: Path,
+    api_key: str | None = "key",
+    vertex: bool | None = None,
+    project: str | None = None,
+    location: str | None = None,
+) -> AntigravityAgentRuntime:
     return AntigravityAgentRuntime(
         api_key=api_key,
+        vertex=vertex,
+        project=project,
+        location=location,
         data_dir=data_dir,
         agent_cls=FakeAgent,
         config_cls=FakeConfig,
@@ -179,6 +190,7 @@ async def test_antigravity_runtime_runs_with_injected_sdk(tmp_path: Path) -> Non
     assert sink.events[-1]["name"] == "agent.task.completed"
     assert FakeAgent.last_config is not None
     assert FakeAgent.last_config.kwargs["workspaces"] == [str(tmp_path)]
+    assert FakeAgent.last_config.kwargs["api_key"] == "key"
 
 
 @pytest.mark.asyncio
@@ -327,13 +339,39 @@ async def test_antigravity_rejects_mcp_env(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_antigravity_missing_api_key_raises_unavailable(
+async def test_antigravity_runs_with_vertex_application_default_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "agent_runtime_kit.adapters.antigravity._google_adc_project",
+        lambda: "adc-project",
+    )
+    runtime = make_runtime(data_dir=tmp_path, api_key=None)
+
+    result = await runtime.run(AgentTask(goal="task"))
+
+    assert result.output == "done: task"
+    assert FakeAgent.last_config is not None
+    assert FakeAgent.last_config.kwargs["api_key"] is None
+    assert FakeAgent.last_config.kwargs["vertex"] is True
+    assert FakeAgent.last_config.kwargs["project"] == "adc-project"
+    assert FakeAgent.last_config.kwargs["location"] == "global"
+
+
+@pytest.mark.asyncio
+async def test_antigravity_missing_credentials_raises_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from agent_runtime_kit._errors import AgentRuntimeUnavailableError
 
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GCLOUD_PROJECT", raising=False)
+    monkeypatch.setattr("agent_runtime_kit.adapters.antigravity._google_adc_project", lambda: None)
     runtime = AntigravityAgentRuntime(
         api_key=None,
         data_dir=tmp_path,
@@ -367,3 +405,54 @@ def test_antigravity_availability_uses_injected_sdk(tmp_path: Path) -> None:
 
     assert diagnostic.kind is AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK
     assert diagnostic.available is True
+
+
+def test_antigravity_availability_accepts_application_default_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    monkeypatch.setattr(
+        "agent_runtime_kit.adapters.antigravity.package_availability",
+        lambda *args, **kwargs: RuntimeAvailability.ok(
+            AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK,
+            package="google-antigravity",
+            version="0.1.2",
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_runtime_kit.adapters.antigravity._google_adc_project",
+        lambda: "adc-project",
+    )
+    runtime = AntigravityAgentRuntime(api_key=None)
+
+    diagnostic = runtime.availability()
+
+    assert diagnostic.available is True
+    assert diagnostic.metadata["auth_source"] == "application-default-credentials"
+
+
+def test_antigravity_availability_rejects_missing_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GCLOUD_PROJECT", raising=False)
+    monkeypatch.setattr(
+        "agent_runtime_kit.adapters.antigravity.package_availability",
+        lambda *args, **kwargs: RuntimeAvailability.ok(
+            AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK,
+            package="google-antigravity",
+            version="0.1.2",
+        ),
+    )
+    monkeypatch.setattr("agent_runtime_kit.adapters.antigravity._google_adc_project", lambda: None)
+    runtime = AntigravityAgentRuntime(api_key=None)
+
+    diagnostic = runtime.availability()
+
+    assert diagnostic.available is False
+    assert diagnostic.reason.value == "missing-credentials"

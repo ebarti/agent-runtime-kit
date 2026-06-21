@@ -12,7 +12,7 @@
 | Streaming output events | Yes — incremental output/tool events while the SDK runs | Not enabled in v1 adapter | Yes — from response chunks |
 | Tool audit events | Yes — from streamed message blocks | Yes — parsed from `TurnResult` items | Yes — from tool chunks |
 | Missing package diagnostics | Yes (`AgentRuntimeUnavailableError`) | Yes (`AgentRuntimeUnavailableError`) | Yes (`AgentRuntimeUnavailableError`) |
-| Missing credential diagnostics | Provider-owned/local auth | Provider-owned/local auth | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| Missing credential diagnostics | Provider-owned/local auth, including API key, Bedrock, Vertex, AWS, and Azure modes | Provider-owned/local auth, including ChatGPT/API key/custom providers/Bedrock | API key or Google ADC / Vertex config |
 | Live smoke test | Opt-in | Opt-in | Opt-in |
 
 The matrix is intentionally not a lowest-common-denominator contract. Adapters
