@@ -85,3 +85,4 @@ cost, session id, artifacts, tool-call audits, and provider metadata.
 - [Live smoke tests](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/live-smoke.md)
 - [Mestre migration notes](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/mestre-migration.md)
 - [Publish checklist](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/publish-checklist.md)
+- [SDK evolution agent](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/sdk-evolution-agent.md)

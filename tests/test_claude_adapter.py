@@ -32,6 +32,7 @@ class FakeClaudeOptions:
     max_budget_usd: float | None = None
     output_format: dict[str, Any] | None = None
     setting_sources: list[str] | None = None
+    env: dict[str, str] | None = None
     max_turns: int | None = None
 
 
@@ -304,3 +305,38 @@ def test_claude_availability_uses_injected_sdk() -> None:
 
     assert diagnostic.kind is AgentRuntimeKind.CLAUDE_AGENT_SDK
     assert diagnostic.available is True
+
+
+@pytest.mark.asyncio
+async def test_claude_passes_runtime_env_for_bedrock() -> None:
+    runtime = ClaudeAgentRuntime(
+        env={"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_PROFILE": "agent-runtime-kit"},
+        query_func=make_query([assistant("ok"), result_message()]),
+        options_cls=FakeClaudeOptions,
+    )
+
+    await runtime.run(AgentTask(goal="x"))
+
+    assert RECORDED["options"].env == {
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "AWS_PROFILE": "agent-runtime-kit",
+    }
+
+
+def test_claude_availability_reports_bedrock_auth_source() -> None:
+    runtime = ClaudeAgentRuntime(
+        env={
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "AWS_PROFILE": "agent-runtime-kit",
+            "AWS_REGION": "us-east-1",
+        },
+        query_func=make_query([]),
+        options_cls=FakeClaudeOptions,
+    )
+
+    diagnostic = runtime.availability()
+
+    assert diagnostic.available is True
+    assert diagnostic.metadata["auth_source"] == "amazon-bedrock"
+    assert diagnostic.metadata["credential_chain"] == "aws-sdk"
+    assert diagnostic.metadata["aws_profile_configured"] is True

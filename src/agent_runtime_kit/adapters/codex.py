@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -62,6 +63,7 @@ class CodexAgentRuntime:
         default_model: str = "gpt-5.5",
         supported_models: tuple[str, ...] | None = None,
         config_overrides: tuple[str, ...] = ("features.plugins=false",),
+        env: Mapping[str, str] | None = None,
         codex_cls: Any | None = None,
         config_cls: Any | None = None,
         sandbox_cls: Any | None = None,
@@ -72,6 +74,7 @@ class CodexAgentRuntime:
         # Plugins are disabled by default so headless runs are deterministic and do
         # not pick up host-local Codex plugin configuration. Override to opt in.
         self._config_overrides = config_overrides
+        self._env = dict(env) if env is not None else None
         self._codex_cls = codex_cls
         self._config_cls = config_cls
         self._sandbox_cls = sandbox_cls
@@ -80,12 +83,25 @@ class CodexAgentRuntime:
     def availability(self) -> RuntimeAvailability:
         """Report OpenAI Codex SDK package availability."""
 
+        auth_metadata = _codex_auth_metadata(self._config_overrides, self._env)
         if self._codex_cls is not None:
-            return RuntimeAvailability.ok(self.kind, package="openai-codex")
-        return package_availability(
+            return RuntimeAvailability.ok(
+                self.kind,
+                package="openai-codex",
+                metadata=auth_metadata,
+            )
+        package = package_availability(
             self.kind,
             module_name="openai_codex",
             package_name="openai-codex",
+        )
+        if not package.available:
+            return package
+        return RuntimeAvailability.ok(
+            self.kind,
+            package="openai-codex",
+            version=package.version,
+            metadata={**dict(package.metadata), **auth_metadata},
         )
 
     async def run(self, task: AgentTask) -> AgentResult:
@@ -175,7 +191,13 @@ class CodexAgentRuntime:
         approval_mode_cls: Any,
     ) -> AgentResult:
         cwd = str(task.working_directory) if task.working_directory else None
-        config = config_cls(cwd=cwd, config_overrides=self._config_overrides)
+        config_kwargs: dict[str, Any] = {
+            "cwd": cwd,
+            "config_overrides": self._config_overrides,
+        }
+        if self._env is not None:
+            config_kwargs["env"] = dict(self._env)
+        config = config_cls(**config_kwargs)
         async with codex_cls(config=config) as codex:
             thread = await self._start_or_resume_thread(
                 codex,
@@ -415,6 +437,39 @@ def _sandbox_mode(filesystem: FilesystemAccess, sandbox_cls: Any) -> Any:
 def _thread_id(thread: Any) -> str | None:
     value = getattr(thread, "id", None)
     return str(value) if value else None
+
+
+def _codex_auth_metadata(
+    config_overrides: tuple[str, ...], runtime_env: Mapping[str, str] | None
+) -> dict[str, Any]:
+    if _uses_bedrock_provider(config_overrides):
+        metadata: dict[str, Any] = {
+            "auth_source": "amazon-bedrock",
+            "credential_chain": "aws-sdk",
+        }
+        env = runtime_env or os.environ
+        region = env.get("AWS_REGION") or env.get("AWS_DEFAULT_REGION")
+        if region:
+            metadata["region"] = region
+        if env.get("AWS_PROFILE"):
+            metadata["aws_profile_configured"] = True
+        return metadata
+    env = runtime_env or os.environ
+    if env.get("CODEX_ACCESS_TOKEN"):
+        return {"auth_source": "chatgpt-access-token"}
+    if env.get("OPENAI_API_KEY"):
+        return {"auth_source": "openai-api-key"}
+    return {"auth_source": "provider-owned-local"}
+
+
+def _uses_bedrock_provider(config_overrides: tuple[str, ...]) -> bool:
+    for override in config_overrides:
+        key, _, value = override.partition("=")
+        normalized_key = key.strip().replace('"', "").replace("'", "")
+        normalized_value = value.strip().strip('"').strip("'")
+        if normalized_key == "model_provider" and normalized_value == "amazon-bedrock":
+            return True
+    return False
 
 
 def _field(value: Any, name: str, default: Any = None) -> Any:

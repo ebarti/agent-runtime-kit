@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 from collections.abc import AsyncIterator, Iterable, Mapping
 from typing import Any
 
@@ -56,23 +57,38 @@ class ClaudeAgentRuntime:
         *,
         default_model: str = "claude-sonnet-4-6",
         supported_models: tuple[str, ...] | None = None,
+        env: Mapping[str, str] | None = None,
         query_func: Any | None = None,
         options_cls: Any | None = None,
     ) -> None:
         self._default_model = default_model
         self._supported_models = supported_models
+        self._env = dict(env) if env is not None else None
         self._query_func = query_func
         self._options_cls = options_cls
 
     def availability(self) -> RuntimeAvailability:
         """Report Claude Agent SDK package availability."""
 
+        auth_metadata = _claude_auth_metadata(self._env)
         if self._query_func is not None:
-            return RuntimeAvailability.ok(self.kind, package="claude-agent-sdk")
-        return package_availability(
+            return RuntimeAvailability.ok(
+                self.kind,
+                package="claude-agent-sdk",
+                metadata=auth_metadata,
+            )
+        package = package_availability(
             self.kind,
             module_name="claude_agent_sdk",
             package_name="claude-agent-sdk",
+        )
+        if not package.available:
+            return package
+        return RuntimeAvailability.ok(
+            self.kind,
+            package="claude-agent-sdk",
+            version=package.version,
+            metadata={**dict(package.metadata), **auth_metadata},
         )
 
     async def run(self, task: AgentTask) -> AgentResult:
@@ -147,6 +163,8 @@ class ClaudeAgentRuntime:
         }
         if task.system:
             kwargs["system_prompt"] = task.system
+        if self._env is not None:
+            kwargs["env"] = dict(self._env)
         if task.working_directory is not None:
             kwargs["cwd"] = task.working_directory
         if task.mcp_servers:
@@ -431,6 +449,55 @@ def _usage_from(value: Any, *, current: Usage) -> Usage:
         total_tokens=total,
         cost_usd=current.cost_usd,
     )
+
+
+def _claude_auth_metadata(runtime_env: Mapping[str, str] | None) -> dict[str, Any]:
+    env = runtime_env or os.environ
+    if _env_truthy(env, "CLAUDE_CODE_USE_BEDROCK"):
+        metadata: dict[str, Any] = {
+            "auth_source": "amazon-bedrock",
+            "credential_chain": "aws-sdk",
+        }
+        region = _env_first(env, "AWS_REGION", "AWS_DEFAULT_REGION")
+        if region:
+            metadata["region"] = region
+        if _env_first(env, "AWS_PROFILE"):
+            metadata["aws_profile_configured"] = True
+        if _env_first(env, "AWS_BEARER_TOKEN_BEDROCK"):
+            metadata["bedrock_api_key_configured"] = True
+        return metadata
+    if _env_truthy(env, "CLAUDE_CODE_USE_VERTEX"):
+        metadata = {
+            "auth_source": "google-vertex-ai",
+            "credential_chain": "google-application-default-credentials",
+        }
+        project = _env_first(env, "ANTHROPIC_VERTEX_PROJECT_ID", "GOOGLE_CLOUD_PROJECT")
+        if project:
+            metadata["project_configured"] = True
+        return metadata
+    if _env_truthy(env, "CLAUDE_CODE_USE_ANTHROPIC_AWS"):
+        return {
+            "auth_source": "claude-platform-aws",
+            "workspace_configured": bool(_env_first(env, "ANTHROPIC_AWS_WORKSPACE_ID")),
+        }
+    if _env_truthy(env, "CLAUDE_CODE_USE_FOUNDRY"):
+        return {"auth_source": "azure-ai-foundry"}
+    if _env_first(env, "ANTHROPIC_API_KEY"):
+        return {"auth_source": "anthropic-api-key"}
+    return {"auth_source": "provider-owned-local"}
+
+
+def _env_truthy(env: Mapping[str, str], name: str) -> bool:
+    value = env.get(name)
+    return value is not None and value.lower() not in {"", "0", "false", "no"}
+
+
+def _env_first(env: Mapping[str, str], *names: str) -> str | None:
+    for name in names:
+        value = env.get(name)
+        if value:
+            return value
+    return None
 
 
 def _optional_str(value: Any) -> str | None:

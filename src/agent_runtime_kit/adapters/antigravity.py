@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import enum
+import importlib
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +63,9 @@ class AntigravityAgentRuntime:
         default_model: str = "gemini-3.5-flash",
         supported_models: tuple[str, ...] | None = None,
         api_key: str | None = None,
+        vertex: bool | None = None,
+        project: str | None = None,
+        location: str | None = None,
         data_dir: Path | None = None,
         agent_cls: Any | None = None,
         config_cls: Any | None = None,
@@ -70,6 +75,9 @@ class AntigravityAgentRuntime:
         self._default_model = default_model
         self._supported_models = supported_models
         self._api_key = api_key
+        self._vertex = vertex
+        self._project = project
+        self._location = location
         self._data_dir = data_dir
         self._agent_cls = agent_cls
         self._config_cls = config_cls
@@ -77,7 +85,7 @@ class AntigravityAgentRuntime:
         self._policy = policy_module
 
     def availability(self) -> RuntimeAvailability:
-        """Report Antigravity package and API-key availability."""
+        """Report Antigravity package and credential availability."""
 
         if self._agent_cls is not None:
             return RuntimeAvailability.ok(self.kind, package="google-antigravity")
@@ -88,15 +96,24 @@ class AntigravityAgentRuntime:
         )
         if not package.available:
             return package
-        if self._api_key_value() is None:
+        auth = self._auth_config()
+        if not auth.available:
             return RuntimeAvailability.unavailable(
                 self.kind,
                 reason=AvailabilityReason.MISSING_CREDENTIALS,
-                message="Set GEMINI_API_KEY or GOOGLE_API_KEY to use Antigravity.",
+                message=(
+                    "Set GEMINI_API_KEY or GOOGLE_API_KEY, or configure Google "
+                    "Application Default Credentials with a Vertex AI project/location."
+                ),
                 package="google-antigravity",
                 metadata=package.metadata,
             )
-        return package
+        return RuntimeAvailability.ok(
+            self.kind,
+            package="google-antigravity",
+            version=package.version,
+            metadata={**dict(package.metadata), "auth_source": auth.source},
+        )
 
     async def run(self, task: AgentTask) -> AgentResult:
         """Execute one task with Antigravity."""
@@ -113,13 +130,14 @@ class AntigravityAgentRuntime:
                 supported_models=self._supported_models,
             )
             sdk = self._load_sdk()
-            api_key = self._api_key_value()
-            if api_key is None:
+            auth = self._auth_config()
+            if not auth.available:
                 raise AgentRuntimeUnavailableError(
                     self.kind,
-                    "Antigravity requires GEMINI_API_KEY or GOOGLE_API_KEY",
+                    "Antigravity requires GEMINI_API_KEY, GOOGLE_API_KEY, or Google "
+                    "Application Default Credentials with a Vertex AI project/location",
                 )
-            config = self._build_config(task, model=model, api_key=api_key, sdk=sdk)
+            config = self._build_config(task, model=model, auth=auth, sdk=sdk)
             result = await self._invoke(task, config=config, sdk=sdk, model=model)
         except Exception as exc:
             await safe_emit(task, task_failed_event(task, self.kind, error=str(exc)))
@@ -168,7 +186,7 @@ class AntigravityAgentRuntime:
         task: AgentTask,
         *,
         model: str,
-        api_key: str,
+        auth: _AntigravityAuthConfig,
         sdk: _AntigravitySDK,
     ) -> Any:
         for server in task.mcp_servers:
@@ -182,7 +200,10 @@ class AntigravityAgentRuntime:
         schema = output_schema_from(task.output_schema, task.metadata)
         return sdk.config_cls(
             model=model,
-            api_key=api_key,
+            api_key=auth.api_key,
+            vertex=auth.vertex,
+            project=auth.project,
+            location=auth.location,
             system_instructions=task.system,
             capabilities=capabilities,
             policies=policies,
@@ -305,6 +326,33 @@ class AntigravityAgentRuntime:
     def _api_key_value(self) -> str | None:
         return self._api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 
+    def _auth_config(self) -> _AntigravityAuthConfig:
+        api_key = self._api_key_value()
+        if api_key:
+            return _AntigravityAuthConfig(api_key=api_key, source="api-key")
+        if self._vertex is False:
+            return _AntigravityAuthConfig(source="none")
+
+        adc_project = _google_adc_project()
+        project = (
+            self._project
+            or _env_first("GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT")
+            or adc_project
+        )
+        location = self._location or _env_first(
+            "GOOGLE_CLOUD_LOCATION",
+            "GOOGLE_CLOUD_REGION",
+            "CLOUD_ML_REGION",
+        )
+        if project:
+            return _AntigravityAuthConfig(
+                vertex=True,
+                project=project,
+                location=location or "global",
+                source="application-default-credentials",
+            )
+        return _AntigravityAuthConfig(source="none")
+
     def _model(self, task: AgentTask) -> str:
         return metadata_str(task.metadata, "model") or self._default_model
 
@@ -324,6 +372,21 @@ class _AntigravitySDK:
         self.config_cls = config_cls
         self.types = types
         self.policy = policy
+
+
+@dataclass(frozen=True)
+class _AntigravityAuthConfig:
+    api_key: str | None = None
+    vertex: bool | None = None
+    project: str | None = None
+    location: str | None = None
+    source: str = "none"
+
+    @property
+    def available(self) -> bool:
+        return self.api_key is not None or (
+            self.vertex is True and self.project is not None and self.location is not None
+        )
 
 
 def _capability_policy(
@@ -371,6 +434,23 @@ def _contains_tool(tools: list[Any], subagent: Any) -> bool:
         return False
     target = getattr(subagent, "value", subagent)
     return any(getattr(tool, "value", tool) == target for tool in tools)
+
+
+def _env_first(*names: str) -> str | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def _google_adc_project() -> str | None:
+    try:
+        google_auth = importlib.import_module("google.auth")
+        _, project = google_auth.default()
+    except Exception:
+        return None
+    return str(project) if project else None
 
 
 def _default_tools(task: AgentTask, builtin: Any) -> list[Any]:

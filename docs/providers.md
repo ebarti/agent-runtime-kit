@@ -12,11 +12,18 @@
 
 Claude uses the `claude-agent-sdk` package and maps working directory,
 permissions, MCP servers, sessions, structured output, tool allow/deny lists,
-and budget where supported by the installed SDK. It streams incremental output
-and tool events while the SDK runs, and sets `finish_reason="max_turns"` when a
-turn is truncated by the max-turns limit. `permissions.network` has no SDK
-surface and is rejected with a typed error. Any option kwargs dropped because a
-future SDK renamed or removed them are recorded in
+runtime environment, and budget where supported by the installed SDK. It
+streams incremental output and tool events while the SDK runs, and sets
+`finish_reason="max_turns"` when a turn is truncated by the max-turns limit.
+`permissions.network` has no SDK surface and is rejected with a typed error.
+Claude auth is provider-owned: use Anthropic API key auth, or configure
+third-party provider modes through Claude Code environment/settings such as
+`CLAUDE_CODE_USE_BEDROCK=1` with the AWS SDK credential chain,
+`CLAUDE_CODE_USE_VERTEX=1` with Google credentials,
+`CLAUDE_CODE_USE_ANTHROPIC_AWS=1`, or `CLAUDE_CODE_USE_FOUNDRY=1`.
+`ClaudeAgentRuntime(env=...)` passes those provider-specific environment values
+to the SDK subprocess without scraping credential files. Any option kwargs
+dropped because a future SDK renamed or removed them are recorded in
 `AgentResult.metadata["dropped_options"]` rather than discarded silently.
 
 Codex uses the `openai-codex` package and maps working directory, session
@@ -31,18 +38,29 @@ escalate beyond the sandbox), `DEFAULT`/`PERMISSIVE` → `auto_review`
 rejected with typed errors. The constructor defaults to
 `config_overrides=("features.plugins=false",)` so headless runs are
 deterministic and do not pick up host-local Codex plugin configuration; pass a
-different tuple to opt in.
+different tuple to opt in. Codex auth is owned by the local Codex runtime:
+ChatGPT sign-in, API-key sign-in, access-token setup, and custom providers stay
+in Codex config. For Amazon Bedrock, pass Codex config overrides such as
+`model_provider=amazon-bedrock` and provider-specific model/profile/region
+settings, and pass AWS environment values with `CodexAgentRuntime(env=...)` when
+they should be scoped to the SDK subprocess.
 
-Antigravity uses the `google-antigravity` package and maps API key,
-workspace, permission-derived capabilities/policies, MCP stdio servers,
-conversation id, structured output, session directories, model, and tool
-events. `disallowed_tools` maps to `CapabilitiesConfig.disabled_tools`, and an
-allow-list and a deny-list are mutually exclusive (the SDK forbids combining
-enabled and disabled tool lists), so supplying both is rejected. Tool names are
-validated against the `BuiltinTools` enum (`"view_file"`, not `"Read"`).
-`budget_usd` and `permissions.network` are rejected with typed errors, and
-MCP server configs do not accept per-server env values. The default tool posture
-with no `allowed_tools` is:
+Antigravity uses the `google-antigravity` package and maps API-key or Google
+Application Default Credentials auth, workspace, permission-derived
+capabilities/policies, MCP stdio servers, conversation id, structured output,
+session directories, model, and tool events. API-key auth comes from the
+constructor, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`. Without an API key, the
+adapter uses Vertex AI config with Google ADC when a project can be discovered
+from ADC, `GOOGLE_CLOUD_PROJECT`, or `GCLOUD_PROJECT`; location defaults to
+`global` unless `GOOGLE_CLOUD_LOCATION`, `GOOGLE_CLOUD_REGION`, or
+`CLOUD_ML_REGION` is set. `disallowed_tools` maps to
+`CapabilitiesConfig.disabled_tools`, and an allow-list and a deny-list are
+mutually exclusive (the SDK forbids combining enabled and disabled tool lists),
+so supplying both is rejected. Tool names are validated against the
+`BuiltinTools` enum (`"view_file"`, not `"Read"`). `budget_usd` and
+`permissions.network` are rejected with typed errors, and MCP server configs do
+not accept per-server env values. The default tool posture with no
+`allowed_tools` is:
 
 | `PermissionMode` (or `READ_ONLY` filesystem) | Toolset | Policy |
 |----------------------------------------------|---------|--------|

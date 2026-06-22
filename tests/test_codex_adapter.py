@@ -22,6 +22,7 @@ from agent_runtime_kit.testing import RecordingEventSink
 class FakeCodexConfig:
     cwd: str | None = None
     config_overrides: tuple[str, ...] = ()
+    env: dict[str, str] | None = None
 
 
 class FakeSandbox:
@@ -349,3 +350,44 @@ def test_codex_availability_uses_injected_sdk() -> None:
 
     assert diagnostic.kind is AgentRuntimeKind.CODEX_AGENT_SDK
     assert diagnostic.available is True
+
+
+@pytest.mark.asyncio
+async def test_codex_passes_runtime_env_to_config() -> None:
+    seen: dict[str, Any] = {}
+
+    def codex_factory(*, config: FakeCodexConfig) -> FakeCodex:
+        seen["config"] = config
+        return FakeCodex(config)
+
+    runtime = CodexAgentRuntime(
+        env={"AWS_PROFILE": "agent-runtime-kit"},
+        codex_cls=codex_factory,
+        config_cls=FakeCodexConfig,
+        sandbox_cls=FakeSandbox,
+        approval_mode_cls=FakeApprovalMode,
+    )
+
+    await runtime.run(AgentTask(goal="x"))
+
+    assert seen["config"].env == {"AWS_PROFILE": "agent-runtime-kit"}
+
+
+def test_codex_availability_reports_bedrock_provider() -> None:
+    runtime = CodexAgentRuntime(
+        config_overrides=(
+            "features.plugins=false",
+            "model_provider=amazon-bedrock",
+            "model=anthropic.claude-sonnet-4-6",
+        ),
+        env={"AWS_PROFILE": "agent-runtime-kit", "AWS_REGION": "us-east-1"},
+        codex_cls=FakeCodex,
+        config_cls=FakeCodexConfig,
+    )
+
+    diagnostic = runtime.availability()
+
+    assert diagnostic.available is True
+    assert diagnostic.metadata["auth_source"] == "amazon-bedrock"
+    assert diagnostic.metadata["credential_chain"] == "aws-sdk"
+    assert diagnostic.metadata["aws_profile_configured"] is True

@@ -12,5 +12,8 @@ wheels/
 htmlcov/
 .DS_Store
 
+# Local generated reports
+reports/sdk-evolution/
+
 # Virtual environments
 .venv
