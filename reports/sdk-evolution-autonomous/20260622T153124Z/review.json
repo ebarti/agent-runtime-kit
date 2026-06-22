@@ -1,0 +1,9 @@
+{
+  "reasons": [
+    "Adapter-contract probes pass for both packages with severity none.",
+    "Required adapter configuration fields are successfully preserved.",
+    "API symbol churn does not break the adapter contract."
+  ],
+  "required_changes": [],
+  "status": "pass"
+}

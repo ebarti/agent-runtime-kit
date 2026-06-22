@@ -1,0 +1,22 @@
+{
+  "branch_name": "sdk-evolution-autonomous-update-20260622",
+  "commit_message": "Run SDK evolution update across packages",
+  "create_branch": true,
+  "draft_pr": true,
+  "event_log_path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T153124Z/events.jsonl",
+  "implementation_enabled": true,
+  "inspect_candidates": true,
+  "packages": [
+    "claude-agent-sdk",
+    "openai-codex",
+    "openai-codex-cli-bin",
+    "google-antigravity"
+  ],
+  "pr_base": "sdk-evolution-example-fixes-20260622",
+  "pr_title": "Run SDK evolution update across vendor packages",
+  "refresh_preview": true,
+  "report_dir": "reports/sdk-evolution-autonomous",
+  "run_id": "20260622T153124Z",
+  "runtime": "antigravity-agent-sdk",
+  "workspace": "/private/tmp/ark-evolution-all-packages"
+}

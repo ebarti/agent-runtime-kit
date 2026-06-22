@@ -1,0 +1,286 @@
+# SDK Evolution Agent Report
+
+## Run
+
+- Runtime: `antigravity-agent-sdk`
+- Implementation enabled: `True`
+- Draft PR enabled: `True`
+
+## Upstream Evidence
+
+- claude-agent-sdk: locked=0.2.96 installed=0.2.106 latest=0.2.106
+- openai-codex: locked=0.1.0b3 installed=0.1.0b3 latest=0.1.0b3
+- openai-codex-cli-bin: locked=0.137.0a4 installed=0.137.0a4 latest=0.136.0
+- google-antigravity: locked=0.1.2 installed=0.1.4 latest=0.1.4
+
+## API Diffs
+
+- Diff count: `2`
+
+## Release Notes
+
+- claude-agent-sdk: found (0.2.96 -> 0.2.106)
+- google-antigravity: found (0.1.2 -> 0.1.4)
+
+## Behavior Probes
+
+- Status: `pass`
+- Changed contracts: `0`
+- Breaking contracts: `0`
+- Diff count: `2`
+
+## Direction Of Travel
+
+```json
+{
+  "packages": [
+    {
+      "direction": "Upgrade to version 0.2.106, adding task status tracking symbols ('TERMINAL_TASK_STATUSES', 'TaskUpdatedMessage', 'TaskUpdatedStatus').",
+      "evidence": [
+        "Added TERMINAL_TASK_STATUSES, TaskUpdatedMessage, and TaskUpdatedStatus to API.",
+        "adapter-contract probe passes successfully for candidate version 0.2.106."
+      ],
+      "name": "claude-agent-sdk"
+    },
+    {
+      "direction": "Refactor model configuration and capabilities to support multimodal structures (Audio, Video, Image, Document) and unified model endpoints (Gemini, Vertex) while removing obsolete configuration classes (GeminiConfig, ModelConfig, ModelEntry, mcp).",
+      "evidence": [
+        "Added Audio, Video, Image, Document, ModelTarget, ModelType, VertexEndpoint, GeminiAPIEndpoint to API.",
+        "Removed GeminiConfig, GenerationConfig, ModelConfig, ModelEntry, and mcp from API.",
+        "Changed CapabilitiesConfig, LocalAgentConfig, and ToolContext configurations."
+      ],
+      "name": "google-antigravity"
+    }
+  ],
+  "themes": [
+    {
+      "name": "Multimodal and Unified APIs in Google Antigravity",
+      "summary": "Google Antigravity is moving towards a standardized multimodal representation (Audio, Video, Document, etc.) and centralizing endpoint configurations under distinct Gemini and Vertex definitions, streamlining configuration components."
+    },
+    {
+      "name": "Robust Task Lifecycle Tracking in Claude Agent SDK",
+      "summary": "The Claude Agent SDK is introducing explicit state machinery elements like TERMINAL_TASK_STATUSES and TaskUpdatedMessage to improve tracking of background or long-running tasks."
+    }
+  ],
+  "uncertainty": [
+    "The potential impact on existing client setups from the complete removal of the 'mcp' configuration in google-antigravity.",
+    "The exact schema changes to LocalAgentConfig, CapabilitiesConfig, and ToolContext."
+  ]
+}
+```
+
+## Architecture Decision
+
+- Manual design required: `False`
+- Recursive self-adaptation impact: `False`
+- Safe to implement: `True`
+
+```json
+{
+  "findings": [
+    {
+      "classification": "compatible",
+      "evidence": [
+        "claude-agent-sdk v0.2.96 -> v0.2.106",
+        "Probe adapter-contract has status pass with severity none",
+        "Added symbols: TERMINAL_TASK_STATUSES, TaskUpdatedMessage, TaskUpdatedStatus"
+      ],
+      "summary": "Claude Agent SDK introduces background task monitoring symbols with zero contract disruption."
+    },
+    {
+      "classification": "compatible",
+      "evidence": [
+        "google-antigravity v0.1.2 -> v0.1.4",
+        "Probe adapter-contract has status pass with severity none",
+        "Removed optional symbols GeminiConfig, GenerationConfig, ModelConfig, ModelEntry, and mcp",
+        "Preserved all required LocalAgentConfig adapter fields"
+      ],
+      "summary": "Google Antigravity restructures config symbols for multimodal endpoints while maintaining core adapter compatibility."
+    }
+  ],
+  "manual_design_required": false,
+  "recursive_self_adaptation_impact": false,
+  "safe_to_implement": true,
+  "self_adaptation_plan": [
+    "Upgrade claude-agent-sdk to v0.2.106 and google-antigravity to v0.1.4 in pyproject.toml and update uv lockfile."
+  ],
+  "uncertainty": [],
+  "verification_commands": [
+    "uv lock --dry-run"
+  ]
+}
+```
+
+## Implementation Summary
+
+```json
+{
+  "allowed": true,
+  "applied": true,
+  "blocked_reason": "",
+  "changes": [
+    "Updated uv.lock for resolver-selected SDK packages: claude-agent-sdk, google-antigravity"
+  ],
+  "planned_changes": [
+    "Upgrade claude-agent-sdk to v0.2.106 and google-antigravity to v0.1.4 in pyproject.toml and update uv lockfile."
+  ],
+  "verification_results": [
+    {
+      "command": [
+        "git",
+        "switch",
+        "-c",
+        "sdk-evolution-autonomous-update-20260622"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "Switched to a new branch 'sdk-evolution-autonomous-update-20260622'\n",
+      "stdout": ""
+    },
+    {
+      "command": [
+        "uv",
+        "lock",
+        "-P",
+        "claude-agent-sdk",
+        "-P",
+        "google-antigravity"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "Resolved 69 packages in 102ms\nUpdated claude-agent-sdk v0.2.96 -> v0.2.106\nUpdated google-antigravity v0.1.2 -> v0.1.4\n",
+      "stdout": ""
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "ruff",
+        "check",
+        "."
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "All checks passed!\n"
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "mypy"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Success: no issues found in 14 source files\n"
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "pytest"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "============================= test session starts ==============================\nplatform darwin -- Python 3.10.13, pytest-9.0.3, pluggy-1.6.0\nrootdir: /private/tmp/ark-evolution-all-packages\nconfigfile: pyproject.toml\nplugins: asyncio-1.4.0, anyio-4.13.0\nasyncio: mode=strict, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollected 114 items\n\ntests/test_antigravity_adapter.py ..................                     [ 15%]\ntests/test_claude_adapter.py .................                           [ 30%]\ntests/test_codex_adapter.py .......................                      [ 50%]\ntests/test_core.py ....                                                  [ 54%]\ntests/test_events.py .....                                               [ 58%]\ntests/test_live_smoke.py sss                                             [ 61%]\ntests/test_mestre_compatibility.py ..                                    [ 63%]\ntests/test_optional_dependencies.py .                                    [ 64%]\ntests/test_provider_diagnostics.py .                                     [ 64%]\ntests/test_sdk_contract.py .........                                     [ 72%]\ntests/test_sdk_evolution_agent.py ...............................        [100%]\n\n======================== 111 passed, 3 skipped in 0.99s ========================\n"
+    },
+    {
+      "command": [
+        "uv",
+        "lock",
+        "--check"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "Resolved 69 packages in 3ms\n",
+      "stdout": ""
+    },
+    {
+      "command": [
+        "git",
+        "add",
+        "uv.lock",
+        "reports/sdk-evolution-autonomous/20260622T153124Z"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "command": [
+        "git",
+        "commit",
+        "-m",
+        "Run SDK evolution update across packages"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "[sdk-evolution-autonomous-update-20260622 90f1d12] Run SDK evolution update across packages\n 20 files changed, 3652 insertions(+), 13 deletions(-)\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/api_diffs.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/api_snapshots/01-claude-agent-sdk.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/api_snapshots/02-claude-agent-sdk.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/api_snapshots/03-openai-codex.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/api_snapshots/04-openai-codex-cli-bin.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/api_snapshots/05-google-antigravity.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/api_snapshots/06-google-antigravity.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/architecture_decision.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/behavior_diffs.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/behavior_probes.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/config.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/current_state.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/direction_analysis.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/events.jsonl\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/evidence.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/implementation_summary.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/release_notes.json\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/report.md\n create mode 100644 reports/sdk-evolution-autonomous/20260622T153124Z/review.json\n"
+    },
+    {
+      "command": [
+        "git",
+        "push",
+        "-u",
+        "origin",
+        "sdk-evolution-autonomous-update-20260622"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "remote: \nremote: Create a pull request for 'sdk-evolution-autonomous-update-20260622' on GitHub by visiting:        \nremote:      https://github.com/ebarti/agent-runtime-kit/pull/new/sdk-evolution-autonomous-update-20260622        \nremote: \nremote: GitHub found 5 vulnerabilities on ebarti/agent-runtime-kit's default branch (2 high, 1 moderate, 2 low). To find out more, visit:        \nremote:      https://github.com/ebarti/agent-runtime-kit/security/dependabot        \nremote: \nTo https://github.com/ebarti/agent-runtime-kit.git\n * [new branch]      sdk-evolution-autonomous-update-20260622 -> sdk-evolution-autonomous-update-20260622\n",
+      "stdout": "branch 'sdk-evolution-autonomous-update-20260622' set up to track 'origin/sdk-evolution-autonomous-update-20260622'.\n"
+    },
+    {
+      "command": [
+        "gh",
+        "pr",
+        "create",
+        "--draft",
+        "--title",
+        "Run SDK evolution update across vendor packages",
+        "--body",
+        "## SDK Evolution Report\n\n# SDK Evolution Agent Report\n\n## Run\n\n- Runtime: `antigravity-agent-sdk`\n- Implementation enabled: `True`\n- Draft PR enabled: `True`\n\n## Upstream Evidence\n\n- claude-agent-sdk: locked=0.2.96 installed=0.2.106 latest=0.2.106\n- openai-codex: locked=0.1.0b3 installed=0.1.0b3 latest=0.1.0b3\n- openai-codex-cli-bin: locked=0.137.0a4 installed=0.137.0a4 latest=0.136.0\n- google-antigravity: locked=0.1.2 installed=0.1.4 latest=0.1.4\n\n## API Diffs\n\n- Diff count: `2`\n\n## Release Notes\n\n- claude-agent-sdk: found (0.2.96 -> 0.2.106)\n- google-antigravity: found (0.1.2 -> 0.1.4)\n\n## Behavior Probes\n\n- Status: `pass`\n- Changed contracts: `0`\n- Breaking contracts: `0`\n- Diff count: `2`\n\n## Direction Of Travel\n\n```json\n{\n  \"packages\": [\n    {\n      \"direction\": \"Upgrade to version 0.2.106, adding task status tracking symbols ('TERMINAL_TASK_STATUSES', 'TaskUpdatedMessage', 'TaskUpdatedStatus').\",\n      \"evidence\": [\n        \"Added TERMINAL_TASK_STATUSES, TaskUpdatedMessage, and TaskUpdatedStatus to API.\",\n        \"adapter-contract probe passes successfully for candidate version 0.2.106.\"\n      ],\n      \"name\": \"claude-agent-sdk\"\n    },\n    {\n      \"direction\": \"Refactor model configuration and capabilities to support multimodal structures (Audio, Video, Image, Document) and unified model endpoints (Gemini, Vertex) while removing obsolete configuration classes (GeminiConfig, ModelConfig, ModelEntry, mcp).\",\n      \"evidence\": [\n        \"Added Audio, Video, Image, Document, ModelTarget, ModelType, VertexEndpoint, GeminiAPIEndpoint to API.\",\n        \"Removed GeminiConfig, GenerationConfig, ModelConfig, ModelEntry, and mcp from API.\",\n        \"Changed CapabilitiesConfig, LocalAgentConfig, and ToolContext configurations.\"\n      ],\n      \"name\": \"google-antigravity\"\n    }\n  ],\n  \"themes\": [\n    {\n      \"name\": \"Multimodal and Unified APIs in Google Antigravity\",\n      \"summary\": \"Google Antigravity is moving towards a standardized multimodal representation (Audio, Video, Document, etc.) and centralizing endpoint configurations under distinct Gemini and Vertex definitions, streamlining configuration components.\"\n    },\n    {\n      \"name\": \"Robust Task Lifecycle Tracking in Claude Agent SDK\",\n      \"summary\": \"The Claude Agent SDK is introducing explicit state machinery elements like TERMINAL_TASK_STATUSES and TaskUpdatedMessage to improve tracking of background or long-running tasks.\"\n    }\n  ],\n  \"uncertainty\": [\n    \"The potential impact on existing client setups from the complete removal of the 'mcp' configuration in google-antigravity.\",\n    \"The exact schema changes to LocalAgentConfig, CapabilitiesConfig, and ToolContext.\"\n  ]\n}\n```\n\n## Architecture Decision\n\n- Manual design required: `False`\n- Recursive self-adaptation impact: `False`\n- Safe to implement: `True`\n\n```json\n{\n  \"findings\": [\n    {\n      \"classification\": \"compatible\",\n      \"evidence\": [\n        \"claude-agent-sdk v0.2.96 -> v0.2.106\",\n        \"Probe adapter-contract has status pass with severity none\",\n        \"Added symbols: TERMINAL_TASK_STATUSES, TaskUpdatedMessage, TaskUpdatedStatus\"\n      ],\n      \"summary\": \"Claude Agent SDK introduces background task monitoring symbols with zero contract disruption.\"\n    },\n    {\n      \"classification\": \"compatible\",\n      \"evidence\": [\n        \"google-antigravity v0.1.2 -> v0.1.4\",\n        \"Probe adapter-contract has status pass with severity none\",\n        \"Removed optional symbols GeminiConfig, GenerationConfig, ModelConfig, ModelEntry, and mcp\",\n        \"Preserved all required LocalAgentConfig adapter fields\"\n      ],\n      \"summary\": \"Google Antigravity restructures config symbols for multimodal endpoints while maintaining core adapter compatibility.\"\n    }\n  ],\n  \"manual_design_required\": false,\n  \"recursive_self_adaptation_impact\": false,\n  \"safe_to_implement\": true,\n  \"self_adaptation_plan\": [\n    \"Upgrade claude-agent-sdk to v0.2.106 and google-antigravity to v0.1.4 in pyproject.toml and update uv lockfile.\"\n  ],\n  \"uncertainty\": [],\n  \"verification_commands\": [\n    \"uv lock --dry-run\"\n  ]\n}\n```\n\n## Implementation Summary\n\n```json\n{\n  \"allowed\": true,\n  \"applied\": true,\n  \"blocked_reason\": \"\",\n  \"changes\": [\n    \"Updated uv.lock for resolver-selected SDK packages: claude-agent-sdk, google-antigravity\"\n  ],\n  \"planned_changes\": [\n    \"Upgrade claude-agent-sdk to v0.2.106 and google-antigravity to v0.1.4 in pyproject.toml and update uv lockfile.\"\n  ],\n  \"verification_results\": [\n    {\n      \"command\": [\n        \"git\",\n        \"switch\",\n        \"-c\",\n        \"sdk-evolution-autonomous-update-20260622\"\n      ],\n      \"removed_env\": [],\n      \"returncode\": 0,\n      \"stderr\": \"Switched to a new branch 'sdk-evolution-autonomous-update-20260622'\\n\",\n      \"stdout\": \"\"\n    },\n    {\n      \"command\": [\n        \"uv\",\n        \"lock\",\n        \"-P\",\n        \"claude-agent-sdk\",\n        \"-P\",\n        \"google-antigravity\"\n      ],\n      \"removed_env\": [],\n      \"returncode\": 0,\n      \"stderr\": \"Resolved 69 packages in 102ms\\nUpdated claude-agent-sdk v0.2.96 -> v0.2.106\\nUpdated google-antigravity v0.1.2 -> v0.1.4\\n\",\n      \"stdout\": \"\"\n    },\n    {\n      \"command\": [\n        \"uv\",\n        \"run\",\n        \"ruff\",\n        \"check\",\n        \".\"\n      ],\n      \"removed_env\": [],\n      \"returncode\": 0,\n      \"stderr\": \"\",\n      \"stdout\": \"All checks passed!\\n\"\n    },\n    {\n      \"command\": [\n        \"uv\",\n        \"run\",\n        \"mypy\"\n      ],\n      \"removed_env\": [],\n      \"returncode\": 0,\n      \"stderr\": \"\",\n      \"stdout\": \"Success: no issues found in 14 source files\\n\"\n    },\n    {\n      \"command\": [\n        \"uv\",\n        \"run\",\n        \"pytest\"\n      ],\n      \"removed_env\": [],\n      \"returncode\": 0,\n      \"stderr\": \"\",\n      \"stdout\": \"============================= test session starts ==============================\\nplatform darwin -- Python 3.10.13, pytest-9.0.3, pluggy-1.6.0\\nrootdir: /private/tmp/ark-evolution-all-packages\\nconfigfile: pyproject.toml\\nplugins: asyncio-1.4.0, anyio-4.13.0\\nasyncio: mode=strict, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\\ncollected 114 items\\n\\ntests/test_antigravity_adapter.py ..................                     [ 15%]\\ntests/test_claude_adapter.py .................                           [ 30%]\\ntests/test_codex_adapter.py .......................                      [ 50%]\\ntests/test_core.py ....                                                  [ 54%]\\ntests/test_events.py .....                                               [ 58%]\\ntests/test_live_smoke.py sss                                             [ 61%]\\ntests/test_mestre_compatibility.py ..                                    [ 63%]\\ntests/test_optional_dependencies.py .                                    [ 64%]\\ntests/test_provider_diagnostics.py .                                     [ 64%]\\ntests/test_sdk_contract.py .........                                     [ 72%]\\ntests/test_sdk_evolution_agent.py ...............................        [100%]\\n\\n======================== 111 passed, 3 skipped in 0.99s ========================\\n\"\n    },\n    {\n      \"command\": [\n        \"uv\",\n        \"lock\",\n        \"--check\"\n      ],\n      \"removed_env\": [],\n      \"returncode\": 0,\n      \"stderr\": \"Resolved 69 packages in 3ms\\n\",\n      \"stdout\": \"\"\n    }\n  ]\n}\n```\n\n## Current State Baseline\n\n- Promotion status: `promoted`\n- Promoted: `True`\n\n## Reviewer Output\n\n```json\n{\n  \"reasons\": [\n    \"Adapter-contract probes pass for both packages with severity none.\",\n    \"Required adapter configuration fields are successfully preserved.\",\n    \"API symbol churn does not break the adapter contract.\"\n  ],\n  \"required_changes\": [],\n  \"status\": \"pass\"\n}\n```\n\n## Manual Review Checklist\n\n- Verify source references are enough for every architecture finding.\n- Verify vendor-specific behavior has not been flattened.\n- Verify recursive self-adaptation impact is handled or explicitly blocked.\n- Verify tests, docs, examples, and migration notes match public API changes.\n- Confirm no auto-merge or unsupported credential scraping was used.\n\n\n## Safety\n\n- Draft PR only.\n- No auto-merge.\n- Local credentials are not scraped.",
+        "--base",
+        "sdk-evolution-example-fixes-20260622",
+        "--head",
+        "sdk-evolution-autonomous-update-20260622"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "https://github.com/ebarti/agent-runtime-kit/pull/12\n"
+    }
+  ]
+}
+```
+
+## Current State Baseline
+
+- Promotion status: `promoted`
+- Promoted: `True`
+
+## Reviewer Output
+
+```json
+{
+  "reasons": [
+    "Adapter-contract probes pass for both packages with severity none.",
+    "Required adapter configuration fields are successfully preserved.",
+    "API symbol churn does not break the adapter contract."
+  ],
+  "required_changes": [],
+  "status": "pass"
+}
+```
+
+## Manual Review Checklist
+
+- Verify source references are enough for every architecture finding.
+- Verify vendor-specific behavior has not been flattened.
+- Verify recursive self-adaptation impact is handled or explicitly blocked.
+- Verify tests, docs, examples, and migration notes match public API changes.
+- Confirm no auto-merge or unsupported credential scraping was used.

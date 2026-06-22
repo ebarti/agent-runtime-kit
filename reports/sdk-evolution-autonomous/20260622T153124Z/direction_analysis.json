@@ -1,0 +1,35 @@
+{
+  "packages": [
+    {
+      "direction": "Upgrade to version 0.2.106, adding task status tracking symbols ('TERMINAL_TASK_STATUSES', 'TaskUpdatedMessage', 'TaskUpdatedStatus').",
+      "evidence": [
+        "Added TERMINAL_TASK_STATUSES, TaskUpdatedMessage, and TaskUpdatedStatus to API.",
+        "adapter-contract probe passes successfully for candidate version 0.2.106."
+      ],
+      "name": "claude-agent-sdk"
+    },
+    {
+      "direction": "Refactor model configuration and capabilities to support multimodal structures (Audio, Video, Image, Document) and unified model endpoints (Gemini, Vertex) while removing obsolete configuration classes (GeminiConfig, ModelConfig, ModelEntry, mcp).",
+      "evidence": [
+        "Added Audio, Video, Image, Document, ModelTarget, ModelType, VertexEndpoint, GeminiAPIEndpoint to API.",
+        "Removed GeminiConfig, GenerationConfig, ModelConfig, ModelEntry, and mcp from API.",
+        "Changed CapabilitiesConfig, LocalAgentConfig, and ToolContext configurations."
+      ],
+      "name": "google-antigravity"
+    }
+  ],
+  "themes": [
+    {
+      "name": "Multimodal and Unified APIs in Google Antigravity",
+      "summary": "Google Antigravity is moving towards a standardized multimodal representation (Audio, Video, Document, etc.) and centralizing endpoint configurations under distinct Gemini and Vertex definitions, streamlining configuration components."
+    },
+    {
+      "name": "Robust Task Lifecycle Tracking in Claude Agent SDK",
+      "summary": "The Claude Agent SDK is introducing explicit state machinery elements like TERMINAL_TASK_STATUSES and TaskUpdatedMessage to improve tracking of background or long-running tasks."
+    }
+  ],
+  "uncertainty": [
+    "The potential impact on existing client setups from the complete removal of the 'mcp' configuration in google-antigravity.",
+    "The exact schema changes to LocalAgentConfig, CapabilitiesConfig, and ToolContext."
+  ]
+}
