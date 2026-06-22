@@ -62,7 +62,8 @@ flowchart TD
     K -- "No" --> L["Write report with manual review checklist"]
     K -- "Yes" --> M["Apply safe implementation"]
     M --> N["Run verification"]
-    N --> O["Write report and optional draft PR"]
+    N --> O["Promote updated state to current baseline"]
+    O --> P["Write report and optional draft PR"]
 ```
 
 Step responsibilities:
@@ -131,10 +132,15 @@ Step responsibilities:
   architecture decision. At minimum, this should cover formatting/linting,
   typing, unit tests, lock checks, report generation checks, and any available
   live smoke needed for the affected runtime behavior.
+- **Promote updated state to current baseline**: After implementation and
+  verification pass, save the updated lock/package/API/release-note/probe state
+  as the new current-state baseline for the next run. This promotion should be
+  explicit, atomic, and tied to the verified commit or workspace state. Failed,
+  blocked, or manual-design-required runs must not replace the current baseline.
 - **Write report and optional draft PR**: Write the final local report with
-  evidence, decisions, implementation summary, test results, uncertainty, and
-  manual checklist. If explicitly configured and authenticated, create or update
-  a draft PR. This step must never auto-merge.
+  evidence, decisions, implementation summary, baseline-promotion result, test
+  results, uncertainty, and manual checklist. If explicitly configured and
+  authenticated, create or update a draft PR. This step must never auto-merge.
 
 Every box before direction analysis is deterministic. AI stages may interpret
 evidence, but they should not invent evidence that was not collected.
@@ -241,6 +247,16 @@ This catches obvious adapter risks:
 - new provider-specific capabilities worth exposing.
 
 API shape is necessary but insufficient. It does not prove behavior.
+
+After a successful implementation, the candidate API snapshots and diffs that
+were verified must be promoted to the current-state baseline. That ensures the
+next run compares new upstream candidates against the SDK state that was
+actually accepted, not against stale pre-update artifacts.
+
+If the evidence schema changes, promotion should include a schema refresh of the
+current package state even when the package version did not change. Otherwise
+future runs may compare candidate evidence against artifacts that no longer mean
+the same thing.
 
 ### 3. Changelog and Release-Note Evidence
 
@@ -458,6 +474,7 @@ release_notes.json
 api_snapshots/
 api_diffs.json
 behavior_probes.json
+current_state.json
 direction_analysis.json
 architecture_decision.json
 implementation_summary.json
@@ -472,11 +489,36 @@ report.md
 - release-note coverage,
 - API diff count and affected packages,
 - behavior probe status,
+- current-state baseline promotion status,
 - direction-of-travel themes,
 - architecture decision,
 - reviewer status,
 - implementation result,
 - uncertainty and manual review checklist.
+
+`current_state.json` should be the manifest that makes the next run
+artifact-aware. It should record:
+
+- evidence schema version,
+- generated timestamp,
+- source run ID,
+- commit SHA or explicit dirty-worktree marker,
+- lockfile hash,
+- package names and accepted current versions,
+- paths or content hashes for current API snapshots,
+- paths or content hashes for release-note evidence,
+- paths or content hashes for behavior probe results,
+- whether the baseline was promoted, refreshed, skipped, or blocked.
+
+Promotion rules should be conservative:
+
+- promote only after implementation and verification pass,
+- do not promote failed, blocked, report-only, or manual-design-required runs as
+  the new current state,
+- preserve the previous baseline so a bad promotion can be inspected,
+- refresh the current-state baseline when the evidence schema changes, even if
+  package versions did not change,
+- make the final report say exactly which artifacts became the new baseline.
 
 ## Caveats and Concerns
 
