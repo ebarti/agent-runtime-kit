@@ -5,7 +5,7 @@
       "kind": "adapter-source",
       "label": "agent-runtime-kit adapter source claude.py",
       "note": "",
-      "path": "/private/tmp/ark-evolution-proof-main/src/agent_runtime_kit/adapters/claude.py",
+      "path": "/private/tmp/ark-evolution-proof-preupdate/src/agent_runtime_kit/adapters/claude.py",
       "url": null,
       "version": null
     },
@@ -14,7 +14,7 @@
       "kind": "adapter-source",
       "label": "agent-runtime-kit adapter source codex.py",
       "note": "",
-      "path": "/private/tmp/ark-evolution-proof-main/src/agent_runtime_kit/adapters/codex.py",
+      "path": "/private/tmp/ark-evolution-proof-preupdate/src/agent_runtime_kit/adapters/codex.py",
       "url": null,
       "version": null
     },
@@ -23,7 +23,7 @@
       "kind": "adapter-source",
       "label": "agent-runtime-kit adapter source antigravity.py",
       "note": "",
-      "path": "/private/tmp/ark-evolution-proof-main/src/agent_runtime_kit/adapters/antigravity.py",
+      "path": "/private/tmp/ark-evolution-proof-preupdate/src/agent_runtime_kit/adapters/antigravity.py",
       "url": null,
       "version": null
     },
@@ -32,7 +32,7 @@
       "kind": "adapter-source",
       "label": "agent-runtime-kit adapter source __init__.py",
       "note": "",
-      "path": "/private/tmp/ark-evolution-proof-main/src/agent_runtime_kit/adapters/__init__.py",
+      "path": "/private/tmp/ark-evolution-proof-preupdate/src/agent_runtime_kit/adapters/__init__.py",
       "url": null,
       "version": null
     }
@@ -86,8 +86,8 @@
     ],
     "removed_env": [],
     "returncode": 0,
-    "stderr": "Resolved 69 packages in 232ms\nUpdate google-antigravity v0.1.2 -> v0.1.4\n",
+    "stderr": "Resolved 69 packages in 118ms\nUpdate google-antigravity v0.1.2 -> v0.1.4\n",
     "stdout": ""
   },
-  "workspace": "/private/tmp/ark-evolution-proof-main"
+  "workspace": "/private/tmp/ark-evolution-proof-preupdate"
 }

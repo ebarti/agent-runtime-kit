@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -137,7 +138,7 @@ async def run_stage(
     permissions = _stage_permissions(runtime, write_enabled=write_enabled)
     task = AgentTask(
         goal=json.dumps(payload, sort_keys=True, default=str),
-        system=_stage_system_prompt(stage),
+        system=_stage_system_prompt(stage, schema),
         working_directory=context.workspace,
         permissions=permissions,
         event_sink=context.event_sink,
@@ -177,6 +178,7 @@ async def run_analysis_pipeline(
         schema=DIRECTION_ANALYSIS_SCHEMA,
         context=context,
     )
+    direction = _compact_stage_output(direction)
     architecture = await run_stage(
         runtime,
         stage="architecture-decision",
@@ -189,6 +191,9 @@ async def run_analysis_pipeline(
         context=context,
     )
     architecture = with_recursive_impact(architecture, api_diffs)
+    architecture = with_candidate_api_diff_guard(architecture, evidence, api_diffs)
+    architecture = with_manual_design_gate(architecture)
+    architecture = _compact_stage_output(architecture)
     review = await run_stage(
         runtime,
         stage="review",
@@ -313,13 +318,108 @@ def with_recursive_impact(
     return result
 
 
-def _stage_system_prompt(stage: str) -> str:
+def with_candidate_api_diff_guard(
+    architecture: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    api_diffs: Sequence[Mapping[str, Any] | ApiDiff],
+) -> dict[str, Any]:
+    """Block SDK update implementation when candidate API evidence is missing."""
+
+    update_packages = _refresh_update_packages(evidence)
+    if not update_packages:
+        return dict(architecture)
+    diff_packages = {
+        diff.package if isinstance(diff, ApiDiff) else str(diff.get("package") or "")
+        for diff in api_diffs
+    }
+    missing = tuple(sorted(package for package in update_packages if package not in diff_packages))
+    if not missing:
+        return dict(architecture)
+
+    result = dict(architecture)
+    result["safe_to_implement"] = False
+    result["manual_design_required"] = True
+    findings = list(result.get("findings") or [])
+    findings.append(
+        {
+            "classification": "manual-design-required",
+            "summary": (
+                "SDK update candidates require candidate-version API snapshot diffs "
+                "before implementation can be considered safe."
+            ),
+            "evidence": [f"missing api_diffs for {package}" for package in missing],
+        }
+    )
+    result["findings"] = findings
+    uncertainty = list(result.get("uncertainty") or [])
+    uncertainty.append(
+        "Candidate API diffs were not available for update candidate(s): "
+        + ", ".join(missing)
+    )
+    result["uncertainty"] = uncertainty
+    plan = list(result.get("self_adaptation_plan") or [])
+    plan.append(
+        "Rerun with candidate API inspection and review the generated api_diffs before "
+        "changing adapters or dependency locks."
+    )
+    result["self_adaptation_plan"] = plan
+    return result
+
+
+def with_manual_design_gate(architecture: Mapping[str, Any]) -> dict[str, Any]:
+    """Make manual design decisions block implementation unambiguously."""
+
+    result = dict(architecture)
+    if result.get("manual_design_required"):
+        result["safe_to_implement"] = False
+    return result
+
+
+def _refresh_update_packages(evidence: Mapping[str, Any]) -> tuple[str, ...]:
+    preview = evidence.get("refresh_preview")
+    if not isinstance(preview, Mapping):
+        return ()
+    text = f"{preview.get('stdout') or ''}\n{preview.get('stderr') or ''}"
+    return tuple(
+        sorted(set(re.findall(r"Update\s+([A-Za-z0-9_.-]+)\s+v\S+\s+->\s+v\S+", text)))
+    )
+
+
+def _compact_stage_output(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: _compact_stage_value(item) for key, item in value.items()}
+
+
+def _compact_stage_value(value: Any, *, string_limit: int = 800, list_limit: int = 8) -> Any:
+    if isinstance(value, str):
+        if len(value) <= string_limit:
+            return value
+        return value[: string_limit - 16].rstrip() + " [truncated]"
+    if isinstance(value, list):
+        return [
+            _compact_stage_value(item, string_limit=string_limit, list_limit=list_limit)
+            for item in value[:list_limit]
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _compact_stage_value(item, string_limit=string_limit, list_limit=list_limit)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
     return (
         "You are running inside the local SDK evolution agent. "
         "Use only the provided evidence. Preserve vendor-specific behavior, "
         "state uncertainty explicitly, and never claim implementation occurred "
         "unless it is reflected in the provided artifacts. "
-        f"Current stage: {stage}."
+        "Return only one JSON object that validates against the provided schema. "
+        "Do not include Markdown, code fences, file links, or prose outside JSON. "
+        "Do not call shell, command, file, or workspace tools; the deterministic "
+        "evidence bundle already contains the inspected data. "
+        "Keep each array to at most five high-signal items and each string concise. "
+        f"Current stage: {stage}. "
+        f"Output schema: {json.dumps(schema, sort_keys=True)}"
     )
 
 
