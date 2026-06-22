@@ -30,6 +30,7 @@ from examples.sdk_evolution_agent.collectors import (
     run_lock_update,
     run_refresh_preview,
 )
+from examples.sdk_evolution_agent.current_state import build_current_state
 from examples.sdk_evolution_agent.models import ApiSnapshot, CommandResult, RunContext
 from examples.sdk_evolution_agent.pr import build_draft_pr_body
 from examples.sdk_evolution_agent.release_notes import collect_release_notes
@@ -344,6 +345,45 @@ def test_behavior_probe_guard_blocks_breaking_candidate_diff() -> None:
 
     assert guarded["safe_to_implement"] is False
     assert guarded["manual_design_required"] is True
+
+
+def test_current_state_artifact_paths_are_repo_relative(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text(
+        """
+[[package]]
+name = "claude-agent-sdk"
+version = "0.2.106"
+""",
+        encoding="utf-8",
+    )
+    report_root = tmp_path / "reports" / "sdk-evolution" / "run-1"
+    report_root.mkdir(parents=True)
+    (report_root / "evidence.json").write_text("{}", encoding="utf-8")
+    snapshots = report_root / "api_snapshots"
+    snapshots.mkdir()
+    (snapshots / "01-claude-agent-sdk.json").write_text("{}", encoding="utf-8")
+    context = RunContext(
+        run_id="run-1",
+        workspace=tmp_path,
+        report_root=report_root,
+        runtime="fake",
+        event_log_path=report_root / "events.jsonl",
+        implementation_enabled=True,
+        draft_pr=False,
+    )
+
+    state = build_current_state(
+        context,
+        promoted=True,
+        status="promoted",
+        implementation={"applied": True},
+    )
+
+    paths = [artifact["path"] for artifact in state["artifacts"].values()]
+    assert "reports/sdk-evolution/run-1/evidence.json" in paths
+    assert "reports/sdk-evolution/run-1/api_snapshots/01-claude-agent-sdk.json" in paths
+    assert all(not path.startswith("/") for path in paths)
+    assert all("/private/tmp" not in path and "/tmp/" not in path for path in paths)
 
 
 def test_snapshot_and_diff_public_api(monkeypatch: pytest.MonkeyPatch) -> None:
