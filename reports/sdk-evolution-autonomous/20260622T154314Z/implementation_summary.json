@@ -1,0 +1,86 @@
+{
+  "allowed": true,
+  "applied": true,
+  "blocked_reason": "",
+  "changes": [
+    "Updated uv.lock for resolver-selected SDK packages: claude-agent-sdk, google-antigravity"
+  ],
+  "planned_changes": [
+    "Update lockfile dependencies to claude-agent-sdk v0.2.106 and google-antigravity v0.1.4.",
+    "Run behavior tests to verify the adapter continues to perform correctly."
+  ],
+  "verification_results": [
+    {
+      "command": [
+        "git",
+        "switch",
+        "-c",
+        "sdk-evolution-autonomous-update-20260622-3"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "Switched to a new branch 'sdk-evolution-autonomous-update-20260622-3'\n",
+      "stdout": ""
+    },
+    {
+      "command": [
+        "uv",
+        "lock",
+        "-P",
+        "claude-agent-sdk",
+        "-P",
+        "google-antigravity"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "Resolved 69 packages in 99ms\nUpdated claude-agent-sdk v0.2.96 -> v0.2.106\nUpdated google-antigravity v0.1.2 -> v0.1.4\n",
+      "stdout": ""
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "ruff",
+        "check",
+        "."
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "All checks passed!\n"
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "mypy"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Success: no issues found in 14 source files\n"
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "pytest"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "============================= test session starts ==============================\nplatform darwin -- Python 3.10.13, pytest-9.0.3, pluggy-1.6.0\nrootdir: /private/tmp/ark-evolution-all-packages\nconfigfile: pyproject.toml\nplugins: asyncio-1.4.0, anyio-4.13.0\nasyncio: mode=strict, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollected 114 items\n\ntests/test_antigravity_adapter.py ..................                     [ 15%]\ntests/test_claude_adapter.py .................                           [ 30%]\ntests/test_codex_adapter.py .......................                      [ 50%]\ntests/test_core.py ....                                                  [ 54%]\ntests/test_events.py .....                                               [ 58%]\ntests/test_live_smoke.py sss                                             [ 61%]\ntests/test_mestre_compatibility.py ..                                    [ 63%]\ntests/test_optional_dependencies.py .                                    [ 64%]\ntests/test_provider_diagnostics.py .                                     [ 64%]\ntests/test_sdk_contract.py .........                                     [ 72%]\ntests/test_sdk_evolution_agent.py ...............................        [100%]\n\n======================== 111 passed, 3 skipped in 0.91s ========================\n"
+    },
+    {
+      "command": [
+        "uv",
+        "lock",
+        "--check"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "Resolved 69 packages in 3ms\n",
+      "stdout": ""
+    }
+  ]
+}

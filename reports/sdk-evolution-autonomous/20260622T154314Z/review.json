@@ -1,0 +1,11 @@
+{
+  "reasons": [
+    "All adapter-contract behavior probes passed successfully with severity none.",
+    "Release notes for upgraded packages were successfully located and verified.",
+    "No evidence exists indicating that removed API symbols are in use by the adapter sources."
+  ],
+  "required_changes": [
+    "Update lockfile dependencies to claude-agent-sdk v0.2.106 and google-antigravity v0.1.4."
+  ],
+  "status": "pass"
+}

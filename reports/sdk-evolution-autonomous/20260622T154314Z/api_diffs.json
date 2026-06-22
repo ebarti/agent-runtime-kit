@@ -1,0 +1,51 @@
+[
+  {
+    "added": [
+      "TERMINAL_TASK_STATUSES",
+      "TaskUpdatedMessage",
+      "TaskUpdatedStatus"
+    ],
+    "changed": [],
+    "from_version": "0.2.96",
+    "package": "claude-agent-sdk",
+    "removed": [],
+    "to_version": "0.2.106"
+  },
+  {
+    "added": [
+      "Audio",
+      "BuiltinTools",
+      "Content",
+      "CustomSystemInstructions",
+      "Document",
+      "GeminiAPIEndpoint",
+      "GeminiModelOptions",
+      "Image",
+      "ModelEndpoint",
+      "ModelTarget",
+      "ModelType",
+      "SystemInstructionSection",
+      "SystemInstructions",
+      "TemplatedSystemInstructions",
+      "VertexEndpoint",
+      "Video",
+      "from_file",
+      "models"
+    ],
+    "changed": [
+      "CapabilitiesConfig",
+      "LocalAgentConfig",
+      "ToolContext"
+    ],
+    "from_version": "0.1.2",
+    "package": "google-antigravity",
+    "removed": [
+      "GeminiConfig",
+      "GenerationConfig",
+      "ModelConfig",
+      "ModelEntry",
+      "mcp"
+    ],
+    "to_version": "0.1.4"
+  }
+]
