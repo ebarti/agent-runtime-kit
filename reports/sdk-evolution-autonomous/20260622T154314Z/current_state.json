@@ -1,67 +1,67 @@
 {
   "artifacts": {
     "api_diffs.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/api_diffs.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/api_diffs.json",
       "sha256": "3b30cf3af70c549e37924a2ee258a3fe0e778280cb744d286cafa90a8004d98c"
     },
     "api_snapshots/01-claude-agent-sdk.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/01-claude-agent-sdk.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/01-claude-agent-sdk.json",
       "sha256": "921a38d37c0989d4919c429d636f680fba6806276beb8f478e3d303d1a176585"
     },
     "api_snapshots/02-claude-agent-sdk.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/02-claude-agent-sdk.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/02-claude-agent-sdk.json",
       "sha256": "6d454ad4d29d6dc099faa8f72e44290329dd68a1c5c66a634e9fc40049683e36"
     },
     "api_snapshots/03-openai-codex.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/03-openai-codex.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/03-openai-codex.json",
       "sha256": "07ef9c9c2671f478ae48d281ca2a96fd551fb41561a7d7110c6c2548db845288"
     },
     "api_snapshots/04-openai-codex-cli-bin.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/04-openai-codex-cli-bin.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/04-openai-codex-cli-bin.json",
       "sha256": "7f2301fb097b08216e4138e048823619532f03f289634d8917bc18aae9b9fd3f"
     },
     "api_snapshots/05-google-antigravity.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/05-google-antigravity.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/05-google-antigravity.json",
       "sha256": "8185b03effd5850302ef32e777822beb24b3fa570602c763a6d34894f059b4ae"
     },
     "api_snapshots/06-google-antigravity.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/06-google-antigravity.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/api_snapshots/06-google-antigravity.json",
       "sha256": "0cd8802a31a1bcdeea70bdab9c2d706c4bab9aceb6f95a8e77307281e63c5a20"
     },
     "architecture_decision.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/architecture_decision.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/architecture_decision.json",
       "sha256": "dea70f23fce10bd3c95cb296ae1e01aae500e39c761775a2bdb1d7671bff71bb"
     },
     "behavior_diffs.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/behavior_diffs.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/behavior_diffs.json",
       "sha256": "5474a08f8c45aeb29fed80e3d30742e50425f9a18925b975c4e1a6f5d663127c"
     },
     "behavior_probes.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/behavior_probes.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/behavior_probes.json",
       "sha256": "4098221011225763d1e7cc76049eaef35d85273aab166fde79ea38b855ce9bd4"
     },
     "direction_analysis.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/direction_analysis.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/direction_analysis.json",
       "sha256": "a86b05ae255ca137f8b8923fac068152cb167413b97c300d29448eb7acfeacfc"
     },
     "evidence.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/evidence.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/evidence.json",
       "sha256": "e2b7879499289e9f4df08af85a9927f24cf3216c316a9c021b271d4d7ea71e79"
     },
     "implementation_summary.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/implementation_summary.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/implementation_summary.json",
       "sha256": "6844b6774302b8ed00c8fa4156524f1b0783c9b3ee46694726a023bcc7da2399"
     },
     "release_notes.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/release_notes.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/release_notes.json",
       "sha256": "e1f94b483668ede2c22f25952fe27461aa8aac5d5b30b252699d7527c1a64c06"
     },
     "report.md": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/report.md",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/report.md",
       "sha256": "dbcd84cb055f6b01ee7855c210322681413dab48bdc6581e92d3f29512d6d63d"
     },
     "review.json": {
-      "path": "/private/tmp/ark-evolution-all-packages/reports/sdk-evolution-autonomous/20260622T154314Z/review.json",
+      "path": "reports/sdk-evolution-autonomous/20260622T154314Z/review.json",
       "sha256": "fb4fec662f425c7b7e049a366d1589e7e17258aecd06af747ff53d63c3dbc6f3"
     }
   },
