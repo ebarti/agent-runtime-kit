@@ -76,10 +76,17 @@ cutoff variables must not hide candidate releases.
 
 ## Candidate API Inspection
 
-By default, the command snapshots SDK APIs importable in the current
-environment. Use `--inspect-candidates` to install latest candidate SDK versions
-in temporary isolated virtualenvs for API snapshots and diffs. This avoids
-mutating the project lockfile or working environment.
+The command snapshots SDK APIs importable in the current environment. For any
+package whose latest upstream version differs from the lockfile baseline, it
+also installs the candidate version in a temporary isolated virtualenv and
+writes an API snapshot plus `api_diffs.json` entry. This is always enabled for
+update candidates; `--inspect-candidates` remains accepted only for CLI
+compatibility.
+
+If `uv lock --dry-run -P ...` reports an SDK update but the run cannot produce a
+candidate-version API diff for that package, implementation is blocked and the
+architecture decision is marked `manual_design_required`. An empty added /
+removed / changed diff is valid; a missing diff object is not.
 
 ## Implementation Gates
 

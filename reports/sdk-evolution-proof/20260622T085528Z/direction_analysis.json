@@ -1,0 +1,36 @@
+{
+  "packages": [
+    {
+      "direction": "upgrade from v0.1.2 to v0.1.4",
+      "evidence": [
+        "uv lock dry-run shows update from v0.1.2 to v0.1.4",
+        "api diff indicates removal of GeminiConfig, GenerationConfig, ModelConfig, ModelEntry, mcp",
+        "api diff indicates addition of GeminiAPIEndpoint, GeminiModelOptions, SystemInstructions, Audio, Image, Video"
+      ],
+      "name": "google-antigravity"
+    }
+  ],
+  "themes": [
+    {
+      "name": "Modular Model and Endpoint Configuration",
+      "summary": "Transition from unified GeminiConfig/ModelConfig to distinct GeminiAPIEndpoint, VertexEndpoint, and GeminiModelOptions."
+    },
+    {
+      "name": "Rich Multimodal and Document Inputs",
+      "summary": "Addition of dedicated classes/helpers like Audio, Video, Image, Document, and from_file to handle structured content."
+    },
+    {
+      "name": "Dedicated System Instructions Framework",
+      "summary": "Replacement of basic configs with SystemInstructions, CustomSystemInstructions, TemplatedSystemInstructions, and SystemInstructionSection."
+    },
+    {
+      "name": "Deprecation of ModelConfig and MCP",
+      "summary": "The removal of basic configs like ModelConfig and module mcp requires adapting the tool execution and config parsing code."
+    }
+  ],
+  "uncertainty": [
+    "Whether the local antigravity adapter uses the removed GeminiConfig or GenerationConfig.",
+    "Impact of removing mcp imports on the current tool execution model in the adapter.",
+    "Compatibility of updated CapabilitiesConfig, LocalAgentConfig, and ToolContext configurations."
+  ]
+}
