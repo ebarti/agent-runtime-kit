@@ -1,0 +1,34 @@
+{
+  "packages": [
+    {
+      "direction": "Integrate new task tracking status updates and terminal task status features into the adapter.",
+      "evidence": [
+        "Added TERMINAL_TASK_STATUSES, TaskUpdatedMessage, TaskUpdatedStatus in claude-agent-sdk v0.2.106."
+      ],
+      "name": "claude-agent-sdk"
+    },
+    {
+      "direction": "Refactor the adapter to use the new ModelTarget, ModelType, and Endpoint APIs while transitioning away from legacy ModelConfig and GeminiConfig.",
+      "evidence": [
+        "Removed GeminiConfig, GenerationConfig, ModelConfig, ModelEntry, and mcp.",
+        "Added ModelTarget, ModelType, GeminiAPIEndpoint, VertexEndpoint, GeminiModelOptions, SystemInstructions, Audio, Video, Image, Document, Content.",
+        "Changed CapabilitiesConfig, LocalAgentConfig, ToolContext."
+      ],
+      "name": "google-antigravity"
+    }
+  ],
+  "themes": [
+    {
+      "name": "Configuration Modernization",
+      "summary": "Transition from generic config structures (GeminiConfig, ModelConfig) to structured and typed model/endpoint definitions (ModelTarget, GeminiAPIEndpoint, VertexEndpoint, and GeminiModelOptions)."
+    },
+    {
+      "name": "Advanced Task State Tracking",
+      "summary": "Addition of task and status updates (TaskUpdatedMessage, TaskUpdatedStatus, TERMINAL_TASK_STATUSES) allowing more robust asynchronous tracking of agent progress."
+    }
+  ],
+  "uncertainty": [
+    "The exact schema and behavior changes in CapabilitiesConfig, LocalAgentConfig, and ToolContext.",
+    "The specific required migration path for the now removed mcp module or configuration."
+  ]
+}
