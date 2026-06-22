@@ -35,6 +35,8 @@ from examples.sdk_evolution_agent.schemas import (
 from examples.sdk_evolution_agent.snapshots import diff_snapshots, snapshot_current_api
 from examples.sdk_evolution_agent.stages import (
     SDK_EVOLUTION_CODEX_HOME,
+    SDK_EVOLUTION_CODEX_MODEL,
+    SDK_EVOLUTION_CODEX_REASONING_EFFORT,
     FixtureEvolutionRuntime,
     StageExecutionError,
     build_registry,
@@ -361,6 +363,34 @@ async def test_stage_execution_uses_agent_task_runtime_primitives(tmp_path: Path
     assert runtime.task.working_directory == tmp_path
     assert runtime.task.permissions.filesystem is FilesystemAccess.READ_ONLY
     assert runtime.task.metadata["stage"] == "direction-analysis"
+    assert "model" not in runtime.task.metadata
+    assert "reasoning_effort" not in runtime.task.metadata
+
+
+@pytest.mark.asyncio
+async def test_codex_stage_execution_uses_gpt_55_xhigh_thinking(tmp_path: Path) -> None:
+    runtime = RecordingRuntime(kind=AgentRuntimeKind.CODEX_AGENT_SDK)
+    context = RunContext(
+        run_id="run-1",
+        workspace=tmp_path,
+        report_root=tmp_path / "reports",
+        runtime="codex-agent-sdk",
+        event_log_path=tmp_path / "events.jsonl",
+        implementation_enabled=False,
+        draft_pr=False,
+    )
+
+    await run_stage(
+        runtime,
+        stage="direction-analysis",
+        payload={"evidence": {}, "api_diffs": []},
+        schema=DIRECTION_ANALYSIS_SCHEMA,
+        context=context,
+    )
+
+    assert runtime.task is not None
+    assert runtime.task.metadata["model"] == SDK_EVOLUTION_CODEX_MODEL
+    assert runtime.task.metadata["reasoning_effort"] == SDK_EVOLUTION_CODEX_REASONING_EFFORT
 
 
 @pytest.mark.asyncio
@@ -547,6 +577,7 @@ def test_build_registry_injects_isolated_codex_home() -> None:
     runtime = build_registry().resolve(AgentRuntimeKind.CODEX_AGENT_SDK)
 
     assert isinstance(runtime, CodexAgentRuntime)
+    assert runtime._default_model == SDK_EVOLUTION_CODEX_MODEL
     assert runtime._env is not None
     assert runtime._env["CODEX_HOME"] == str(SDK_EVOLUTION_CODEX_HOME)
 

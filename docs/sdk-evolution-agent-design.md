@@ -166,6 +166,11 @@ python -m examples.sdk_evolution_agent --runtime codex-agent-sdk --refresh-previ
 python -m examples.sdk_evolution_agent --runtime antigravity-agent-sdk --refresh-preview
 ```
 
+When `codex-agent-sdk` is selected for SDK update work, every AI-backed stage
+should run on `gpt-5.5` with `reasoning_effort=xhigh`. This is a Codex runtime
+policy, not a portable metadata field: Claude and Antigravity runs should not
+receive a `gpt-5.5` model override.
+
 Package filters narrow evidence collection for debugging, but normal evolution
 runs should inspect all tracked packages:
 

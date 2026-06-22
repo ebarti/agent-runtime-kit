@@ -36,6 +36,13 @@ directory is created with private permissions before the Codex runtime starts;
 authenticate that Codex home through supported Codex login/API-key/access-token
 flows before using it for real Codex-backed runs.
 
+Codex-backed SDK evolution runs explicitly choose `gpt-5.5` with
+`reasoning_effort=xhigh` for the AI stages that analyze direction, decide the
+update plan, implement allowed changes, and review the result. This model policy
+is applied only to `codex-agent-sdk`; Claude and Antigravity runs keep their
+provider-native model selection because `gpt-5.5` is not a valid model override
+for those adapters.
+
 For Antigravity, local auth can use `GEMINI_API_KEY` / `GOOGLE_API_KEY` or
 Google Application Default Credentials. ADC runs use Vertex AI config; provide a
 project through ADC, `GOOGLE_CLOUD_PROJECT`, or `GCLOUD_PROJECT`, and optionally

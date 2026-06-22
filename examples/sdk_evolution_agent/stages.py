@@ -45,6 +45,8 @@ class StageExecutionError(RuntimeError):
 
 
 SDK_EVOLUTION_CODEX_HOME = Path("~/.codex_agent_runtime_sdk").expanduser()
+SDK_EVOLUTION_CODEX_MODEL = "gpt-5.5"
+SDK_EVOLUTION_CODEX_REASONING_EFFORT = "xhigh"
 
 
 class FixtureEvolutionRuntime:
@@ -106,6 +108,7 @@ def _codex_evolution_runtime(**kwargs: Any) -> CodexAgentRuntime:
     SDK_EVOLUTION_CODEX_HOME.chmod(0o700)
     env = dict(kwargs.pop("env", {}) or {})
     env.setdefault("CODEX_HOME", str(SDK_EVOLUTION_CODEX_HOME))
+    kwargs.setdefault("default_model", SDK_EVOLUTION_CODEX_MODEL)
     return CodexAgentRuntime(env=env, **kwargs)
 
 
@@ -143,7 +146,7 @@ async def run_stage(
         permissions=permissions,
         event_sink=context.event_sink,
         output_schema=schema,
-        metadata={"stage": stage, "run_id": context.run_id},
+        metadata=_stage_metadata(runtime, stage=stage, context=context),
     )
     try:
         result = await runtime.run(task)
@@ -437,6 +440,19 @@ def _stage_permissions(runtime: AgentRuntime, *, write_enabled: bool) -> Permiss
         filesystem=permissions.filesystem,
         allowed_tools=("finish",),
     )
+
+
+def _stage_metadata(
+    runtime: AgentRuntime,
+    *,
+    stage: str,
+    context: RunContext,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"stage": stage, "run_id": context.run_id}
+    if runtime.kind is AgentRuntimeKind.CODEX_AGENT_SDK:
+        metadata["model"] = SDK_EVOLUTION_CODEX_MODEL
+        metadata["reasoning_effort"] = SDK_EVOLUTION_CODEX_REASONING_EFFORT
+    return metadata
 
 
 def _fixture_payload(stage: str, task: AgentTask) -> dict[str, Any]:
