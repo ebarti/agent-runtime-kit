@@ -18,14 +18,14 @@ from agent_runtime_kit import (
     RuntimeAvailability,
 )
 from agent_runtime_kit.adapters import CodexAgentRuntime
-from examples.sdk_evolution_agent.cli import RunOptions, parse_args, run_agent
+from examples.sdk_evolution_agent.cli import RunOptions, _collect_snapshots, parse_args, run_agent
 from examples.sdk_evolution_agent.collectors import (
     build_refresh_preview_command,
     collect_evidence,
     cutoff_free_env,
     run_refresh_preview,
 )
-from examples.sdk_evolution_agent.models import CommandResult, RunContext
+from examples.sdk_evolution_agent.models import ApiSnapshot, CommandResult, RunContext
 from examples.sdk_evolution_agent.pr import build_draft_pr_body
 from examples.sdk_evolution_agent.schemas import (
     DIRECTION_ANALYSIS_SCHEMA,
@@ -35,12 +35,16 @@ from examples.sdk_evolution_agent.schemas import (
 from examples.sdk_evolution_agent.snapshots import diff_snapshots, snapshot_current_api
 from examples.sdk_evolution_agent.stages import (
     SDK_EVOLUTION_CODEX_HOME,
+    SDK_EVOLUTION_CODEX_MODEL,
+    SDK_EVOLUTION_CODEX_REASONING_EFFORT,
     FixtureEvolutionRuntime,
     StageExecutionError,
     build_registry,
     detects_recursive_impact,
     evaluate_implementation_gate,
     run_stage,
+    with_candidate_api_diff_guard,
+    with_manual_design_gate,
     with_recursive_impact,
 )
 
@@ -154,6 +158,179 @@ def test_snapshot_and_diff_public_api(monkeypatch: pytest.MonkeyPatch) -> None:
     assert diff.changed == ("run",)
 
 
+def test_parse_args_inspects_candidates_by_default() -> None:
+    options = parse_args(["--runtime", "fake"])
+
+    assert options.inspect_candidates is True
+
+
+def test_collect_snapshots_uses_lockfile_baseline_for_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    def current_snapshot(package: str, *, version: str | None = None) -> ApiSnapshot:
+        calls.append(("current", version))
+        return ApiSnapshot(package=package, version=version, module="google.antigravity")
+
+    def candidate_snapshot(package: str, version: str) -> ApiSnapshot:
+        calls.append(("candidate", version))
+        return ApiSnapshot(
+            package=package,
+            version=version,
+            module="google.antigravity",
+            source="isolated-venv",
+        )
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        current_snapshot,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        candidate_snapshot,
+    )
+
+    snapshots = _collect_snapshots(
+        {
+            "packages": [
+                {
+                    "name": "google-antigravity",
+                    "locked_version": "0.1.2",
+                    "installed_version": "0.1.4",
+                    "latest_version": "0.1.4",
+                }
+            ]
+        },
+        inspect_candidates=False,
+    )
+
+    assert len(snapshots) == 2
+    assert calls == [("current", "0.1.4"), ("candidate", "0.1.4")]
+
+
+def test_collect_snapshots_uses_refresh_preview_update_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str | None]] = []
+
+    def current_snapshot(package: str, *, version: str | None = None) -> ApiSnapshot:
+        calls.append(("current", package, version))
+        return ApiSnapshot(package=package, version=version, module=package.replace("-", "_"))
+
+    def candidate_snapshot(package: str, version: str) -> ApiSnapshot:
+        calls.append(("candidate", package, version))
+        return ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+            source="isolated-venv",
+        )
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        current_snapshot,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        candidate_snapshot,
+    )
+
+    snapshots = _collect_snapshots(
+        {
+            "packages": [
+                {
+                    "name": "claude-agent-sdk",
+                    "locked_version": "0.2.96",
+                    "installed_version": "0.2.96",
+                    "latest_version": "0.2.106",
+                },
+                {
+                    "name": "openai-codex-cli-bin",
+                    "locked_version": "0.137.0a4",
+                    "installed_version": "0.137.0a4",
+                    "latest_version": "0.136.0",
+                },
+            ],
+            "refresh_preview": {
+                "stdout": "",
+                "stderr": "Update claude-agent-sdk v0.2.96 -> v0.2.106\n",
+            },
+        },
+    )
+
+    assert len(snapshots) == 3
+    assert calls == [
+        ("current", "claude-agent-sdk", "0.2.96"),
+        ("candidate", "claude-agent-sdk", "0.2.106"),
+        ("current", "openai-codex-cli-bin", "0.137.0a4"),
+    ]
+
+
+def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
+    guarded = with_candidate_api_diff_guard(
+        {
+            "findings": [],
+            "safe_to_implement": True,
+            "manual_design_required": False,
+            "uncertainty": [],
+            "self_adaptation_plan": [],
+        },
+        {
+            "refresh_preview": {
+                "stdout": "",
+                "stderr": "Update google-antigravity v0.1.2 -> v0.1.4\n",
+            }
+        },
+        [],
+    )
+
+    assert guarded["safe_to_implement"] is False
+    assert guarded["manual_design_required"] is True
+    assert "missing api_diffs for google-antigravity" in guarded["findings"][-1]["evidence"]
+
+
+def test_candidate_api_diff_guard_accepts_empty_update_diff() -> None:
+    guarded = with_candidate_api_diff_guard(
+        {
+            "findings": [],
+            "safe_to_implement": True,
+            "manual_design_required": False,
+        },
+        {
+            "refresh_preview": {
+                "stdout": "",
+                "stderr": "Update google-antigravity v0.1.2 -> v0.1.4\n",
+            }
+        },
+        [
+            {
+                "package": "google-antigravity",
+                "from_version": "0.1.2",
+                "to_version": "0.1.4",
+                "added": [],
+                "removed": [],
+                "changed": [],
+            }
+        ],
+    )
+
+    assert guarded["safe_to_implement"] is True
+    assert guarded["manual_design_required"] is False
+
+
+def test_manual_design_gate_forces_safe_to_implement_false() -> None:
+    architecture = with_manual_design_gate(
+        {
+            "findings": [],
+            "safe_to_implement": True,
+            "manual_design_required": True,
+        }
+    )
+
+    assert architecture["safe_to_implement"] is False
+
+
 def test_schema_validation_rejects_missing_required_field() -> None:
     with pytest.raises(SchemaValidationError):
         validate_mapping({"packages": [], "themes": []}, DIRECTION_ANALYSIS_SCHEMA, name="stage")
@@ -186,6 +363,34 @@ async def test_stage_execution_uses_agent_task_runtime_primitives(tmp_path: Path
     assert runtime.task.working_directory == tmp_path
     assert runtime.task.permissions.filesystem is FilesystemAccess.READ_ONLY
     assert runtime.task.metadata["stage"] == "direction-analysis"
+    assert "model" not in runtime.task.metadata
+    assert "reasoning_effort" not in runtime.task.metadata
+
+
+@pytest.mark.asyncio
+async def test_codex_stage_execution_uses_gpt_55_xhigh_thinking(tmp_path: Path) -> None:
+    runtime = RecordingRuntime(kind=AgentRuntimeKind.CODEX_AGENT_SDK)
+    context = RunContext(
+        run_id="run-1",
+        workspace=tmp_path,
+        report_root=tmp_path / "reports",
+        runtime="codex-agent-sdk",
+        event_log_path=tmp_path / "events.jsonl",
+        implementation_enabled=False,
+        draft_pr=False,
+    )
+
+    await run_stage(
+        runtime,
+        stage="direction-analysis",
+        payload={"evidence": {}, "api_diffs": []},
+        schema=DIRECTION_ANALYSIS_SCHEMA,
+        context=context,
+    )
+
+    assert runtime.task is not None
+    assert runtime.task.metadata["model"] == SDK_EVOLUTION_CODEX_MODEL
+    assert runtime.task.metadata["reasoning_effort"] == SDK_EVOLUTION_CODEX_REASONING_EFFORT
 
 
 @pytest.mark.asyncio
@@ -290,7 +495,10 @@ def test_reviewer_rejection_blocks_implementation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_agent_report_only_generates_artifacts(tmp_path: Path) -> None:
+async def test_run_agent_report_only_generates_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     (tmp_path / "pyproject.toml").write_text(
         """
 [project.optional-dependencies]
@@ -299,6 +507,23 @@ claude = ["claude-agent-sdk>=0.2"]
         encoding="utf-8",
     )
     (tmp_path / "uv.lock").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        lambda package, *, version=None: ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+        ),
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        lambda package, version: ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+            source="isolated-venv",
+        ),
+    )
 
     report_path = await run_agent(
         RunOptions(
@@ -307,6 +532,7 @@ claude = ["claude-agent-sdk>=0.2"]
             packages=("claude-agent-sdk",),
             report_dir=Path("reports"),
             implementation_enabled=False,
+            inspect_candidates=False,
         ),
         pypi_client=_fake_pypi,
         runtime=FixtureEvolutionRuntime(),
@@ -320,6 +546,9 @@ claude = ["claude-agent-sdk>=0.2"]
     assert (report_path.parent / "implementation_summary.json").exists()
     assert (report_path.parent / "review.json").exists()
     assert (report_path.parent / "events.jsonl").exists()
+    assert '"package": "claude-agent-sdk"' in (report_path.parent / "api_diffs.json").read_text(
+        encoding="utf-8"
+    )
     assert "Recursive self-adaptation impact" in report_path.read_text(encoding="utf-8")
 
 
@@ -338,6 +567,7 @@ def test_parse_args_and_pr_body() -> None:
 
     assert options.runtime == "claude-agent-sdk"
     assert options.packages == ("claude-agent-sdk",)
+    assert options.inspect_candidates is True
     assert options.implementation_enabled is True
     assert options.draft_pr is True
     assert "No auto-merge" in body
@@ -347,6 +577,7 @@ def test_build_registry_injects_isolated_codex_home() -> None:
     runtime = build_registry().resolve(AgentRuntimeKind.CODEX_AGENT_SDK)
 
     assert isinstance(runtime, CodexAgentRuntime)
+    assert runtime._default_model == SDK_EVOLUTION_CODEX_MODEL
     assert runtime._env is not None
     assert runtime._env["CODEX_HOME"] == str(SDK_EVOLUTION_CODEX_HOME)
 

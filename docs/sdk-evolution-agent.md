@@ -4,6 +4,10 @@ The SDK evolution agent is a local dogfood workflow for keeping
 agent-runtime-kit aligned with Claude Agent SDK, OpenAI Codex SDK, and Google
 Antigravity SDK as those upstream packages evolve.
 
+For the intended architecture, evidence contract, behavior probe strategy,
+changelog strategy, caveats, and alternatives, see
+[`docs/sdk-evolution-agent-design.md`](sdk-evolution-agent-design.md).
+
 Run it from the repository:
 
 ```bash
@@ -31,6 +35,13 @@ Codex home while still using supported Codex authentication mechanisms. The
 directory is created with private permissions before the Codex runtime starts;
 authenticate that Codex home through supported Codex login/API-key/access-token
 flows before using it for real Codex-backed runs.
+
+Codex-backed SDK evolution runs explicitly choose `gpt-5.5` with
+`reasoning_effort=xhigh` for the AI stages that analyze direction, decide the
+update plan, implement allowed changes, and review the result. This model policy
+is applied only to `codex-agent-sdk`; Claude and Antigravity runs keep their
+provider-native model selection because `gpt-5.5` is not a valid model override
+for those adapters.
 
 For Antigravity, local auth can use `GEMINI_API_KEY` / `GOOGLE_API_KEY` or
 Google Application Default Credentials. ADC runs use Vertex AI config; provide a
@@ -76,10 +87,20 @@ cutoff variables must not hide candidate releases.
 
 ## Candidate API Inspection
 
-By default, the command snapshots SDK APIs importable in the current
-environment. Use `--inspect-candidates` to install latest candidate SDK versions
-in temporary isolated virtualenvs for API snapshots and diffs. This avoids
-mutating the project lockfile or working environment.
+The command snapshots SDK APIs importable in the current environment. When a
+refresh preview is available, package update candidates come from the resolver's
+`uv lock --dry-run -P ...` output, not only from PyPI's `latest` metadata. For
+each resolver update candidate, the agent installs the target version in a
+temporary isolated virtualenv and writes an API snapshot plus `api_diffs.json`
+entry. This avoids false downgrade diffs for packages whose locked prerelease is
+newer than PyPI's stable latest field. Candidate inspection is always enabled
+for update candidates; `--inspect-candidates` remains accepted only for CLI
+compatibility.
+
+If `uv lock --dry-run -P ...` reports an SDK update but the run cannot produce a
+candidate-version API diff for that package, implementation is blocked and the
+architecture decision is marked `manual_design_required`. An empty added /
+removed / changed diff is valid; a missing diff object is not.
 
 ## Implementation Gates
 

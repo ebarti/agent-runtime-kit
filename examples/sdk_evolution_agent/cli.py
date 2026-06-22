@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import re
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -78,7 +80,11 @@ def parse_args(argv: list[str] | None = None) -> RunOptions:
     parser.add_argument(
         "--inspect-candidates",
         action="store_true",
-        help="Inspect latest candidate SDK versions in temporary virtualenvs.",
+        default=True,
+        help=(
+            "Inspect latest candidate SDK versions in temporary virtualenvs. "
+            "Always enabled for update candidates; accepted for compatibility."
+        ),
     )
     parser.add_argument("--create-branch", action="store_true", help="Create a local branch first.")
     parser.add_argument("--branch-name", help="Branch name for optional branch creation.")
@@ -114,6 +120,7 @@ async def run_agent(
 ) -> Path:
     """Run the full local SDK evolution workflow."""
 
+    options = replace(options, inspect_candidates=True)
     run_id = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     report_root = (options.workspace / options.report_dir / run_id).resolve()
     event_log_path = report_root / "events.jsonl"
@@ -136,7 +143,7 @@ async def run_agent(
         pypi_client=pypi_client,
         command_runner=command_runner,
     )
-    snapshots = _collect_snapshots(evidence, inspect_candidates=options.inspect_candidates)
+    snapshots = _collect_snapshots(evidence)
     api_diffs = [to_jsonable(diff) for diff in diff_snapshot_groups(snapshots)]
     direction, architecture, review = await run_analysis_pipeline(
         selected_runtime,
@@ -222,15 +229,36 @@ async def run_agent(
     return report_path
 
 
-def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool) -> list[Any]:
+def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = True) -> list[Any]:
+    del inspect_candidates  # Candidate inspection is mandatory for update candidates.
     snapshots = []
+    update_versions = _refresh_update_versions(evidence)
+    refresh_preview_seen = evidence.get("refresh_preview") is not None
     for package in evidence.get("packages", []):
         if not isinstance(package, dict):
             continue
         name = str(package.get("name"))
         snapshots.append(snapshot_current_api(name, version=package.get("installed_version")))
-        latest = package.get("latest_version")
-        installed = package.get("installed_version") or package.get("locked_version")
-        if inspect_candidates and latest and latest != installed:
-            snapshots.append(snapshot_candidate_in_venv(name, str(latest)))
+        candidate = update_versions.get(name)
+        if candidate is None and not refresh_preview_seen:
+            latest = package.get("latest_version")
+            baseline = package.get("locked_version") or package.get("installed_version")
+            if latest and latest != baseline:
+                candidate = str(latest)
+        if candidate:
+            snapshots.append(snapshot_candidate_in_venv(name, candidate))
     return snapshots
+
+
+def _refresh_update_versions(evidence: dict[str, Any]) -> dict[str, str]:
+    preview = evidence.get("refresh_preview")
+    if not isinstance(preview, dict):
+        return {}
+    text = f"{preview.get('stdout') or ''}\n{preview.get('stderr') or ''}"
+    return {
+        package: version
+        for package, version in re.findall(
+            r"Update\s+([A-Za-z0-9_.-]+)\s+v\S+\s+->\s+v(\S+)",
+            text,
+        )
+    }
