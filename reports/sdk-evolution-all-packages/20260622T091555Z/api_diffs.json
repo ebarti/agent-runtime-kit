@@ -1,6 +1,18 @@
 [
   {
     "added": [
+      "TERMINAL_TASK_STATUSES",
+      "TaskUpdatedMessage",
+      "TaskUpdatedStatus"
+    ],
+    "changed": [],
+    "from_version": "0.2.96",
+    "package": "claude-agent-sdk",
+    "removed": [],
+    "to_version": "0.2.106"
+  },
+  {
+    "added": [
       "Audio",
       "BuiltinTools",
       "Content",

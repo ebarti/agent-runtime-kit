@@ -1,0 +1,15 @@
+{
+  "reasons": [
+    "google-antigravity v0.1.4 introduces breaking changes by removing GeminiConfig, GenerationConfig, ModelConfig, ModelEntry, and mcp.",
+    "The CapabilitiesConfig, LocalAgentConfig, and ToolContext configurations have changed with no direct visibility into their new internal structures.",
+    "The removal of the mcp module requires a manual migration or replacement alignment.",
+    "Integrated task tracking additions (TaskUpdatedMessage) in claude-agent-sdk v0.2.106 require manual adapter code modifications."
+  ],
+  "required_changes": [
+    "Design and implement a new config schema mapping LocalAgentConfig and CapabilitiesConfig to the new ModelTarget and GeminiAPIEndpoint structures.",
+    "Determine if removed mcp functionalities should be replaced by BuiltinTools or another mechanism.",
+    "Refactor the claude adapter to consume TaskUpdatedMessage and handle terminal task statuses.",
+    "Verify the compatibility of upgraded config schemas and tracking events through comprehensive unit testing."
+  ],
+  "status": "rejected"
+}

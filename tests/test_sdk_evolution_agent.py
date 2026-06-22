@@ -207,6 +207,64 @@ def test_collect_snapshots_uses_lockfile_baseline_for_candidates(
     assert calls == [("current", "0.1.4"), ("candidate", "0.1.4")]
 
 
+def test_collect_snapshots_uses_refresh_preview_update_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str | None]] = []
+
+    def current_snapshot(package: str, *, version: str | None = None) -> ApiSnapshot:
+        calls.append(("current", package, version))
+        return ApiSnapshot(package=package, version=version, module=package.replace("-", "_"))
+
+    def candidate_snapshot(package: str, version: str) -> ApiSnapshot:
+        calls.append(("candidate", package, version))
+        return ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+            source="isolated-venv",
+        )
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        current_snapshot,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        candidate_snapshot,
+    )
+
+    snapshots = _collect_snapshots(
+        {
+            "packages": [
+                {
+                    "name": "claude-agent-sdk",
+                    "locked_version": "0.2.96",
+                    "installed_version": "0.2.96",
+                    "latest_version": "0.2.106",
+                },
+                {
+                    "name": "openai-codex-cli-bin",
+                    "locked_version": "0.137.0a4",
+                    "installed_version": "0.137.0a4",
+                    "latest_version": "0.136.0",
+                },
+            ],
+            "refresh_preview": {
+                "stdout": "",
+                "stderr": "Update claude-agent-sdk v0.2.96 -> v0.2.106\n",
+            },
+        },
+    )
+
+    assert len(snapshots) == 3
+    assert calls == [
+        ("current", "claude-agent-sdk", "0.2.96"),
+        ("candidate", "claude-agent-sdk", "0.2.106"),
+        ("current", "openai-codex-cli-bin", "0.137.0a4"),
+    ]
+
+
 def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
     guarded = with_candidate_api_diff_guard(
         {

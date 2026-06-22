@@ -41,7 +41,7 @@
       "kind": "class",
       "module": "google.antigravity.types",
       "name": "ModelConfig",
-      "signature": "(*, default: typing.Annotated[google.antigravity.types.ModelEntry, BeforeValidator(func=<function _coerce_model_entry at 0x1066d3d90>, json_schema_input_type=PydanticUndefined)] = <factory>, image_generation: typing.Annotated[google.antigravity.types.ModelEntry, BeforeValidator(func=<function _coerce_model_entry at 0x1066d3d90>, json_schema_input_type=PydanticUndefined)] = <factory>) -> None"
+      "signature": "(*, default: typing.Annotated[google.antigravity.types.ModelEntry, BeforeValidator(func=<function _coerce_model_entry at 0x109549b40>, json_schema_input_type=PydanticUndefined)] = <factory>, image_generation: typing.Annotated[google.antigravity.types.ModelEntry, BeforeValidator(func=<function _coerce_model_entry at 0x109549b40>, json_schema_input_type=PydanticUndefined)] = <factory>) -> None"
     },
     {
       "kind": "class",

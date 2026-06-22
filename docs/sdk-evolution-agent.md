@@ -76,11 +76,14 @@ cutoff variables must not hide candidate releases.
 
 ## Candidate API Inspection
 
-The command snapshots SDK APIs importable in the current environment. For any
-package whose latest upstream version differs from the lockfile baseline, it
-also installs the candidate version in a temporary isolated virtualenv and
-writes an API snapshot plus `api_diffs.json` entry. This is always enabled for
-update candidates; `--inspect-candidates` remains accepted only for CLI
+The command snapshots SDK APIs importable in the current environment. When a
+refresh preview is available, package update candidates come from the resolver's
+`uv lock --dry-run -P ...` output, not only from PyPI's `latest` metadata. For
+each resolver update candidate, the agent installs the target version in a
+temporary isolated virtualenv and writes an API snapshot plus `api_diffs.json`
+entry. This avoids false downgrade diffs for packages whose locked prerelease is
+newer than PyPI's stable latest field. Candidate inspection is always enabled
+for update candidates; `--inspect-candidates` remains accepted only for CLI
 compatibility.
 
 If `uv lock --dry-run -P ...` reports an SDK update but the run cannot produce a

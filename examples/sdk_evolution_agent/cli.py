@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -231,13 +232,33 @@ async def run_agent(
 def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = True) -> list[Any]:
     del inspect_candidates  # Candidate inspection is mandatory for update candidates.
     snapshots = []
+    update_versions = _refresh_update_versions(evidence)
+    refresh_preview_seen = evidence.get("refresh_preview") is not None
     for package in evidence.get("packages", []):
         if not isinstance(package, dict):
             continue
         name = str(package.get("name"))
         snapshots.append(snapshot_current_api(name, version=package.get("installed_version")))
-        latest = package.get("latest_version")
-        baseline = package.get("locked_version") or package.get("installed_version")
-        if latest and latest != baseline:
-            snapshots.append(snapshot_candidate_in_venv(name, str(latest)))
+        candidate = update_versions.get(name)
+        if candidate is None and not refresh_preview_seen:
+            latest = package.get("latest_version")
+            baseline = package.get("locked_version") or package.get("installed_version")
+            if latest and latest != baseline:
+                candidate = str(latest)
+        if candidate:
+            snapshots.append(snapshot_candidate_in_venv(name, candidate))
     return snapshots
+
+
+def _refresh_update_versions(evidence: dict[str, Any]) -> dict[str, str]:
+    preview = evidence.get("refresh_preview")
+    if not isinstance(preview, dict):
+        return {}
+    text = f"{preview.get('stdout') or ''}\n{preview.get('stderr') or ''}"
+    return {
+        package: version
+        for package, version in re.findall(
+            r"Update\s+([A-Za-z0-9_.-]+)\s+v\S+\s+->\s+v(\S+)",
+            text,
+        )
+    }

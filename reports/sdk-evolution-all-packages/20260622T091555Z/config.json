@@ -2,16 +2,19 @@
   "branch_name": null,
   "create_branch": false,
   "draft_pr": false,
-  "event_log_path": "/private/tmp/ark-sdk-evolution-proof-with-diffs/20260622T085528Z/events.jsonl",
+  "event_log_path": "/private/tmp/ark-sdk-evolution-all-report/20260622T091555Z/events.jsonl",
   "implementation_enabled": false,
   "inspect_candidates": true,
   "packages": [
+    "claude-agent-sdk",
+    "openai-codex",
+    "openai-codex-cli-bin",
     "google-antigravity"
   ],
   "pr_title": "Adapt agent-runtime-kit to upstream SDK evolution",
   "refresh_preview": true,
-  "report_dir": "/tmp/ark-sdk-evolution-proof-with-diffs",
-  "run_id": "20260622T085528Z",
+  "report_dir": "/tmp/ark-sdk-evolution-all-report",
+  "run_id": "20260622T091555Z",
   "runtime": "antigravity-agent-sdk",
-  "workspace": "/private/tmp/ark-evolution-proof-preupdate"
+  "workspace": "/private/tmp/ark-evolution-all-preupdate"
 }
