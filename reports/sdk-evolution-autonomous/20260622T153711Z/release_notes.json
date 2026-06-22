@@ -1,0 +1,150 @@
+[
+  {
+    "checked_urls": [
+      "https://raw.githubusercontent.com/anthropics/claude-agent-sdk-python/main/CHANGELOG.md",
+      "https://code.claude.com/docs/en/agent-sdk/overview"
+    ],
+    "from_version": "0.2.96",
+    "package": "claude-agent-sdk",
+    "sources": [
+      {
+        "available": true,
+        "kind": "changelog",
+        "label": "Claude Agent SDK Python changelog",
+        "note": "",
+        "path": null,
+        "url": "https://raw.githubusercontent.com/anthropics/claude-agent-sdk-python/main/CHANGELOG.md",
+        "version": "0.2.106"
+      },
+      {
+        "available": true,
+        "kind": "docs",
+        "label": "Claude Agent SDK overview",
+        "note": "",
+        "path": null,
+        "url": "https://code.claude.com/docs/en/agent-sdk/overview",
+        "version": "0.2.106"
+      }
+    ],
+    "status": "found",
+    "summaries": [
+      "0.2.106",
+      "Internal/Other Changes",
+      "0.2.96",
+      "Bug Fixes"
+    ],
+    "to_version": "0.2.106",
+    "unavailable_reason": ""
+  },
+  {
+    "checked_urls": [],
+    "from_version": "0.1.0b3",
+    "package": "openai-codex",
+    "sources": [
+      {
+        "available": true,
+        "kind": "docs",
+        "label": "Codex SDK docs",
+        "note": "",
+        "path": null,
+        "url": "https://developers.openai.com/codex/sdk",
+        "version": null
+      },
+      {
+        "available": true,
+        "kind": "changelog",
+        "label": "Codex changelog",
+        "note": "",
+        "path": null,
+        "url": "https://developers.openai.com/codex/changelog",
+        "version": null
+      },
+      {
+        "available": true,
+        "kind": "release",
+        "label": "Codex repository releases",
+        "note": "",
+        "path": null,
+        "url": "https://github.com/openai/codex/releases",
+        "version": null
+      }
+    ],
+    "status": "not-needed",
+    "summaries": [],
+    "to_version": null,
+    "unavailable_reason": "no resolver-selected update"
+  },
+  {
+    "checked_urls": [],
+    "from_version": "0.137.0a4",
+    "package": "openai-codex-cli-bin",
+    "sources": [
+      {
+        "available": true,
+        "kind": "release",
+        "label": "Codex repository releases",
+        "note": "",
+        "path": null,
+        "url": "https://github.com/openai/codex/releases",
+        "version": null
+      },
+      {
+        "available": true,
+        "kind": "package-metadata",
+        "label": "Codex CLI binary package metadata",
+        "note": "",
+        "path": null,
+        "url": "https://pypi.org/project/openai-codex-cli-bin/",
+        "version": null
+      }
+    ],
+    "status": "not-needed",
+    "summaries": [],
+    "to_version": null,
+    "unavailable_reason": "no resolver-selected update"
+  },
+  {
+    "checked_urls": [
+      "https://antigravity.google/changelog",
+      "https://github.com/google-antigravity/antigravity-sdk-python",
+      "https://pypi.org/project/google-antigravity/"
+    ],
+    "from_version": "0.1.2",
+    "package": "google-antigravity",
+    "sources": [
+      {
+        "available": true,
+        "kind": "changelog",
+        "label": "Google Antigravity changelog",
+        "note": "",
+        "path": null,
+        "url": "https://antigravity.google/changelog",
+        "version": "0.1.4"
+      },
+      {
+        "available": true,
+        "kind": "repository",
+        "label": "Antigravity SDK repository",
+        "note": "",
+        "path": null,
+        "url": "https://github.com/google-antigravity/antigravity-sdk-python",
+        "version": "0.1.4"
+      },
+      {
+        "available": true,
+        "kind": "package-metadata",
+        "label": "Antigravity package metadata",
+        "note": "",
+        "path": null,
+        "url": "https://pypi.org/project/google-antigravity/",
+        "version": "0.1.4"
+      }
+    ],
+    "status": "found",
+    "summaries": [
+      "Official sources were fetched, but no package-version-specific entry for 0.1.4 was found."
+    ],
+    "to_version": "0.1.4",
+    "unavailable_reason": "sources fetched but no matching version text was found"
+  }
+]

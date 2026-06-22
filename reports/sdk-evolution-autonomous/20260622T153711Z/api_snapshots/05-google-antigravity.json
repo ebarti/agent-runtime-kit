@@ -1,0 +1,123 @@
+{
+  "import_error": null,
+  "members": [
+    {
+      "kind": "class",
+      "module": "google.antigravity.agent",
+      "name": "Agent",
+      "signature": "(config: google.antigravity.connections.connection.AgentConfig)"
+    },
+    {
+      "kind": "class",
+      "module": "google.antigravity.connections.connection",
+      "name": "AgentConfig",
+      "signature": "(*, system_instructions: str | google.antigravity.types.CustomSystemInstructions | google.antigravity.types.TemplatedSystemInstructions | None = None, capabilities: google.antigravity.types.CapabilitiesConfig = <factory>, tools: list[typing.Callable[..., typing.Any]] = <factory>, policies: list[typing.Any] = <factory>, hooks: list[typing.Any] = <factory>, triggers: list[typing.Any] = <factory>, mcp_servers: list[google.antigravity.types.McpStdioServer | google.antigravity.types.McpStreamableHttpServer] = <factory>, workspaces: list[str] = <factory>, conversation_id: str | None = None, save_dir: str | None = None, app_data_dir: str | None = None, response_schema: dict[str, typing.Any] | type[pydantic.main.BaseModel] | str | None = None, skills_paths: list[str] = <factory>) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "google.antigravity.types",
+      "name": "CapabilitiesConfig",
+      "signature": "(*, enable_subagents: bool = True, enabled_tools: list[google.antigravity.types.BuiltinTools] | None = None, disabled_tools: list[google.antigravity.types.BuiltinTools] | None = None, compaction_threshold: int | None = None, image_model: str = 'gemini-3.1-flash-image-preview', finish_tool_schema_json: str | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "google.antigravity.types",
+      "name": "GeminiConfig",
+      "signature": "(*, api_key: str | None = None, vertex: bool = False, project: str | None = None, location: str | None = None, models: google.antigravity.types.ModelConfig = <factory>) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "google.antigravity.types",
+      "name": "GenerationConfig",
+      "signature": "(*, thinking_level: google.antigravity.types.ThinkingLevel | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "google.antigravity.connections.local.local_connection_config",
+      "name": "LocalAgentConfig",
+      "signature": "(*, system_instructions: str | google.antigravity.types.CustomSystemInstructions | google.antigravity.types.TemplatedSystemInstructions | None = None, capabilities: google.antigravity.types.CapabilitiesConfig | None = None, tools: list[typing.Callable[..., typing.Any]] | None = None, policies: list[typing.Any] | None = None, hooks: list[typing.Any] | None = None, triggers: list[typing.Any] | None = None, mcp_servers: list[google.antigravity.types.McpStdioServer | google.antigravity.types.McpStreamableHttpServer] | None = None, workspaces: list[str] | None = None, conversation_id: str | None = None, save_dir: str | None = None, app_data_dir: str | None = None, response_schema: dict[str, typing.Any] | type[pydantic.main.BaseModel] | str | None = None, skills_paths: list[str] | None = None, gemini_config: google.antigravity.types.GeminiConfig | None = None, model: str | None = None, api_key: str | None = None, vertex: bool | None = None, project: str | None = None, location: str | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "google.antigravity.types",
+      "name": "ModelConfig",
+      "signature": "(*, default: typing.Annotated[google.antigravity.types.ModelEntry, BeforeValidator(func=<function _coerce_model_entry at 0x1013cfbe0>, json_schema_input_type=PydanticUndefined)] = <factory>, image_generation: typing.Annotated[google.antigravity.types.ModelEntry, BeforeValidator(func=<function _coerce_model_entry at 0x1013cfbe0>, json_schema_input_type=PydanticUndefined)] = <factory>) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "google.antigravity.types",
+      "name": "ModelEntry",
+      "signature": "(*, name: str, api_key: str | None = None, generation: google.antigravity.types.GenerationConfig = <factory>) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "google.antigravity.types",
+      "name": "ThinkingLevel",
+      "signature": "(value, names=None, *, module=None, qualname=None, type=None, start=1)"
+    },
+    {
+      "kind": "class",
+      "module": "google.antigravity.tools.tool_context",
+      "name": "ToolContext",
+      "signature": "(conn: google.antigravity.connections.connection.Connection) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "google.antigravity.types",
+      "name": "UsageMetadata",
+      "signature": "(*, prompt_token_count: int | None = None, cached_content_token_count: int | None = None, candidates_token_count: int | None = None, thoughts_token_count: int | None = None, total_token_count: int | None = None) -> None"
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "agent",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "connections",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "conversation",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "hooks",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "mcp",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "tools",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "triggers",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "types",
+      "signature": ""
+    }
+  ],
+  "module": "google.antigravity",
+  "package": "google-antigravity",
+  "source": "isolated-venv",
+  "version": "0.1.2"
+}

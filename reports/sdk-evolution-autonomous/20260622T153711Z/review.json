@@ -1,0 +1,9 @@
+{
+  "reasons": [
+    "No breaking behavior changes detected for claude-agent-sdk and google-antigravity.",
+    "All adapter contract probes pass successfully before and after upgrades.",
+    "Release notes were successfully found and collected for both package upgrades."
+  ],
+  "required_changes": [],
+  "status": "pass"
+}

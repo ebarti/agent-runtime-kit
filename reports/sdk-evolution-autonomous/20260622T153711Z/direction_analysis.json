@@ -1,0 +1,40 @@
+{
+  "packages": [
+    {
+      "direction": "Introduce standardized task status tracking and lifecycle update monitoring.",
+      "evidence": [
+        "Added TERMINAL_TASK_STATUSES, TaskUpdatedMessage, and TaskUpdatedStatus in version 0.2.106."
+      ],
+      "name": "claude-agent-sdk"
+    },
+    {
+      "direction": "Refactor model and endpoint configurations for multi-model targets, unified endpoints, and rich multimodal media assets.",
+      "evidence": [
+        "Added GeminiModelOptions, ModelTarget, ModelType, ModelEndpoint, GeminiAPIEndpoint, VertexEndpoint.",
+        "Added Audio, Video, Image, and Document classes for multimodal input.",
+        "Removed GeminiConfig, GenerationConfig, ModelConfig, ModelEntry, and top-level mcp.",
+        "Replaced gemini_config with models field on LocalAgentConfig."
+      ],
+      "name": "google-antigravity"
+    }
+  ],
+  "themes": [
+    {
+      "name": "Multimodal Agent Capability Expansion",
+      "summary": "The integration of native Audio, Video, Image, and Document types indicates the package is moving to fully-featured support for rich media processing within the agent's tool context and content layers."
+    },
+    {
+      "name": "Heterogeneous Endpoint Abstraction",
+      "summary": "Decoupling model target definitions from proprietary configs (like GeminiConfig) to generalized model endpoints and targets signals a transition towards supporting diverse backend types (e.g. Gemini, Vertex, and other providers) seamlessly."
+    },
+    {
+      "name": "Robust Task State Tracking",
+      "summary": "Standardization of terminal status constants and task update events guarantees status consistency, allowing the framework to observe and manage async task states deterministically."
+    }
+  ],
+  "uncertainty": [
+    "Mapping logic and structural compatibility between legacy gemini_config options and the newly introduced models list.",
+    "The replacement strategy for the removed top-level mcp module in google-antigravity.",
+    "The precise data type and possible values contained in TERMINAL_TASK_STATUSES in claude-agent-sdk."
+  ]
+}
