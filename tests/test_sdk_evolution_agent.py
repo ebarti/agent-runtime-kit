@@ -915,13 +915,13 @@ version = "0.2.1"
     assert ("uv", "lock", "-P", "claude-agent-sdk") in commands
     assert any(command[:3] == ("git", "commit", "-m") for command in commands)
     assert any(command[:4] == ("gh", "pr", "create", "--draft") for command in commands)
-    assert ("git", "commit", "--amend", "--no-edit") in commands
-    assert ("git", "push", "--force-with-lease", "origin", "sdk-update-test") in commands
+    assert ("git", "commit", "-m", "Finalize SDK evolution report") in commands
+    assert commands.count(("git", "push", "-u", "origin", "sdk-update-test")) == 2
     pr_index = next(
         i for i, command in enumerate(commands) if command[:3] == ("gh", "pr", "create")
     )
-    amend_index = commands.index(("git", "commit", "--amend", "--no-edit"))
-    assert amend_index > pr_index
+    finalize_index = commands.index(("git", "commit", "-m", "Finalize SDK evolution report"))
+    assert finalize_index > pr_index
 
 
 def test_parse_args_and_pr_body() -> None:

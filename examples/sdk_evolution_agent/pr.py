@@ -74,32 +74,6 @@ def push_branch(
     return command_runner(("git", "push", "-u", "origin", branch_name), cwd=root)
 
 
-def amend_last_commit(
-    root: Path,
-    *,
-    command_runner: CommandRunner | None = None,
-) -> CommandResult:
-    """Amend the current commit without changing its message."""
-
-    command_runner = command_runner or run_command
-    return command_runner(("git", "commit", "--amend", "--no-edit"), cwd=root)
-
-
-def force_push_branch(
-    root: Path,
-    *,
-    branch_name: str,
-    command_runner: CommandRunner | None = None,
-) -> CommandResult:
-    """Update the autonomous PR branch after amending its report commit."""
-
-    command_runner = command_runner or run_command
-    return command_runner(
-        ("git", "push", "--force-with-lease", "origin", branch_name),
-        cwd=root,
-    )
-
-
 def create_draft_pr(
     root: Path,
     *,

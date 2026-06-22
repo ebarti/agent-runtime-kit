@@ -27,12 +27,10 @@ from examples.sdk_evolution_agent.models import (
     to_jsonable,
 )
 from examples.sdk_evolution_agent.pr import (
-    amend_last_commit,
     build_draft_pr_body,
     commit_staged,
     create_branch,
     create_draft_pr,
-    force_push_branch,
     push_branch,
     stage_paths,
 )
@@ -293,7 +291,7 @@ async def run_agent(
             implementation=implementation,
             review=review,
         )
-        _amend_autonomous_pr_report(
+        _commit_final_autonomous_pr_report(
             options.workspace,
             report_path=report_path,
             options=options,
@@ -426,7 +424,7 @@ def _create_autonomous_pr(
     return results
 
 
-def _amend_autonomous_pr_report(
+def _commit_final_autonomous_pr_report(
     root: Path,
     *,
     report_path: Path,
@@ -437,16 +435,18 @@ def _amend_autonomous_pr_report(
     relative_report = _relative_path(root, report_path.parent)
     results = [
         stage_paths(root, (relative_report,), command_runner=command_runner),
-        amend_last_commit(root, command_runner=command_runner),
+        commit_staged(
+            root,
+            message="Finalize SDK evolution report",
+            command_runner=command_runner,
+        ),
     ]
     if branch_name:
-        results.append(
-            force_push_branch(root, branch_name=branch_name, command_runner=command_runner)
-        )
+        results.append(push_branch(root, branch_name=branch_name, command_runner=command_runner))
     failed = [result for result in results if result.returncode != 0]
     if failed:
         detail = failed[0].stderr or failed[0].stdout
-        raise RuntimeError(f"failed to amend final autonomous PR report: {detail}")
+        raise RuntimeError(f"failed to commit final autonomous PR report: {detail}")
 
 
 def _current_branch(root: Path, *, command_runner: CommandRunner | None) -> str:
