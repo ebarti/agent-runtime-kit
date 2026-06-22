@@ -56,7 +56,7 @@ flowchart TD
     E --> F["Run adapter behavior probes"]
     F --> G["Build evidence bundle"]
     G --> H["Direction analysis through agent-runtime-kit"]
-    H --> I["Architecture decision through agent-runtime-kit"]
+    H --> I["Architecture decision and update plan through agent-runtime-kit"]
     I --> J["Independent review through agent-runtime-kit"]
     J --> K{"Gates pass?"}
     K -- "No" --> L["Write report with manual review checklist"]
@@ -64,6 +64,74 @@ flowchart TD
     M --> N["Run verification"]
     N --> O["Write report and optional draft PR"]
 ```
+
+Step responsibilities:
+
+- **Start local command**: Parse the selected runtime, package filters, report
+  directory, refresh options, implementation flag, branch option, and draft PR
+  option. This step also establishes the run ID and local report directory.
+- **Collect deterministic evidence**: Read local project state without using AI:
+  `pyproject.toml`, `uv.lock`, installed distributions, package metadata,
+  configured source hints, local environment facts, and supported auth
+  availability. This produces raw facts, not recommendations.
+- **Resolve update candidates**: Run the targeted resolver preview with
+  freshness cutoffs removed. This step decides which packages are real update
+  candidates for the run. It should use resolver output rather than only PyPI
+  `latest` metadata, especially for prerelease packages.
+- **Inspect current and candidate APIs**: Snapshot the public import surface for
+  the currently locked/installed package and for every resolver-selected
+  candidate version. This step owns API snapshot and API diff artifacts. If an
+  update candidate has no candidate API diff, the run should not proceed to
+  implementation.
+- **Collect changelog and release-note evidence**: Fetch or read official
+  changelogs, release pages, docs changelogs, repository releases, and package
+  metadata links. This step records what changed according to the vendor and
+  explicitly marks missing or incomplete release-note coverage.
+- **Run adapter behavior probes**: Execute deterministic unit probes, installed
+  SDK contract probes, and optional live probes. This step answers whether the
+  adapter behavior still holds, including permissions, sandbox/workspace
+  handling, streaming, structured output, MCP/tool support, auth discovery, and
+  session/resume behavior.
+- **Build evidence bundle**: Normalize package facts, resolver facts, API
+  snapshots, API diffs, release-note evidence, behavior probe results, source
+  references, and uncertainty into a compact bundle for the AI stages. This step
+  should preserve provenance so later reasoning can be traced back to evidence.
+- **Direction analysis through agent-runtime-kit**: Ask a runtime, via
+  `AgentTask`, to infer direction-of-travel themes from the evidence. This step
+  identifies whether changes look isolated or part of a broader SDK direction,
+  but it does not own the concrete implementation plan.
+- **Architecture decision and update plan through agent-runtime-kit**: Ask a
+  runtime, via `AgentTask`, to turn direction analysis into the concrete plan:
+  adapter-only, test-only, docs-only, capability metadata change,
+  provider-specific extension, public API evolution, compatibility shim,
+  deprecation/migration, architectural rework, or `manual_design_required`.
+  This is the step responsible for saying what should be updated.
+- **Independent review through agent-runtime-kit**: Run a separate reviewer task
+  through the runtime. The reviewer challenges evidence sufficiency, direction
+  inference, plan scope, vendor-specific capability preservation, and whether
+  tests, docs, and migration notes match the proposed change.
+- **Gates pass?**: Apply deterministic pass/fail rules. The gates block
+  implementation when required API diffs are missing, release-note coverage is
+  missing, behavior probes fail or are skipped for required contracts, the
+  reviewer rejects the plan, recursive self-adaptation is unresolved, or manual
+  design is required.
+- **Write report with manual review checklist**: If gates fail, write the local
+  report with the evidence bundle, analysis, decision, reviewer output,
+  uncertainty, blocked reasons, and the exact manual review questions. This is a
+  valid end state, not a failed run.
+- **Apply safe implementation**: Apply only the changes allowed by the accepted
+  architecture decision and deterministic gates. This may include lockfile
+  updates, adapter changes, tests, docs, examples, compatibility shims, or report
+  changes. It must not implement changes that were classified as
+  `manual_design_required`.
+- **Run verification**: Run the verification commands required by the
+  architecture decision. At minimum, this should cover formatting/linting,
+  typing, unit tests, lock checks, report generation checks, and any available
+  live smoke needed for the affected runtime behavior.
+- **Write report and optional draft PR**: Write the final local report with
+  evidence, decisions, implementation summary, test results, uncertainty, and
+  manual checklist. If explicitly configured and authenticated, create or update
+  a draft PR. This step must never auto-merge.
 
 Every box before direction analysis is deterministic. AI stages may interpret
 evidence, but they should not invent evidence that was not collected.
