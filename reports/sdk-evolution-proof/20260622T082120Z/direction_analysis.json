@@ -1,0 +1,22 @@
+{
+  "packages": [
+    {
+      "direction": "update",
+      "evidence": [
+        "uv lock dry-run successfully resolves 69 packages to update google-antigravity from v0.1.2 to v0.1.4.",
+        "The pyproject.toml constraint 'google-antigravity>=0.1.2' is compatible with the latest version v0.1.4.",
+        "An adapter for antigravity exists in the codebase (src/agent_runtime_kit/adapters/antigravity.py)."
+      ],
+      "name": "google-antigravity"
+    }
+  ],
+  "themes": [
+    {
+      "name": "Dependency Alignment",
+      "summary": "Update google-antigravity to version 0.1.4 to keep up with the latest version constraints and maintain adapter compatibility."
+    }
+  ],
+  "uncertainty": [
+    "API diffs are not provided for the google-antigravity package update from 0.1.2 to 0.1.4. There is uncertainty regarding whether any breaking changes were introduced in 0.1.3 or 0.1.4 that could impact src/agent_runtime_kit/adapters/antigravity.py."
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "branch_name": null,
+  "create_branch": false,
+  "draft_pr": false,
+  "event_log_path": "/private/tmp/ark-evolution-proof-main/reports/sdk-evolution-proof/20260622T082120Z/events.jsonl",
+  "implementation_enabled": false,
+  "inspect_candidates": false,
+  "packages": [
+    "google-antigravity"
+  ],
+  "pr_title": "Adapt agent-runtime-kit to upstream SDK evolution",
+  "refresh_preview": true,
+  "report_dir": "reports/sdk-evolution-proof",
+  "run_id": "20260622T082120Z",
+  "runtime": "antigravity-agent-sdk",
+  "workspace": "/private/tmp/ark-evolution-proof-main"
+}
