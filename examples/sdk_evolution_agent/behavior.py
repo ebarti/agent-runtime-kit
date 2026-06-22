@@ -102,7 +102,7 @@ def diff_behavior_results(results: Sequence[BehaviorProbeResult]) -> tuple[Behav
         after = scopes.get("candidate") or scopes.get("isolated-venv")
         if before is None or after is None:
             continue
-        if before.status == after.status and before.details == after.details:
+        if before.status == after.status and _contract_details(before) == _contract_details(after):
             severity = "none"
             summary = "No behavior contract difference detected."
         elif before.status == "pass" and after.status != "pass":
@@ -201,7 +201,7 @@ def _probe_claude(*, version: str | None, scope: str) -> BehaviorProbeResult:
             if not missing
             else "ClaudeAgentOptions is missing required adapter fields."
         ),
-        details={"fields": sorted(fields), "missing": missing},
+        details={"fields": sorted(fields), "required_fields": sorted(expected), "missing": missing},
     )
 
 
@@ -232,6 +232,8 @@ def _probe_codex(*, version: str | None, scope: str) -> BehaviorProbeResult:
         details={
             "run_params": sorted(run_params),
             "start_params": sorted(start_params),
+            "required_run_params": sorted(expected_run),
+            "required_start_params": sorted(expected_start),
             "missing": missing,
         },
     )
@@ -296,7 +298,7 @@ def _probe_antigravity(*, version: str | None, scope: str) -> BehaviorProbeResul
             if not missing
             else "Antigravity LocalAgentConfig is missing required adapter fields."
         ),
-        details={"fields": sorted(fields), "missing": missing},
+        details={"fields": sorted(fields), "required_fields": sorted(expected), "missing": missing},
     )
 
 
@@ -309,6 +311,22 @@ def _fields(cls: Any) -> set[str]:
         return set(inspect.signature(cls).parameters)
     except (TypeError, ValueError):
         return set()
+
+
+def _contract_details(result: BehaviorProbeResult) -> dict[str, Any]:
+    if result.probe != "adapter-contract":
+        return result.details
+    details = result.details
+    if "missing" not in details:
+        return details
+    contract: dict[str, Any] = {"missing": sorted(details.get("missing") or [])}
+    if "required_fields" in details:
+        contract["required_fields"] = sorted(details.get("required_fields") or [])
+    if "required_run_params" in details:
+        contract["required_run_params"] = sorted(details.get("required_run_params") or [])
+    if "required_start_params" in details:
+        contract["required_start_params"] = sorted(details.get("required_start_params") or [])
+    return contract
 
 
 def _failed(
@@ -393,7 +411,11 @@ _PROBE_SCRIPT = textwrap.dedent(
                 "fail" if missing else "pass",
                 "ClaudeAgentOptions exposes required adapter fields." if not missing
                 else "ClaudeAgentOptions is missing required adapter fields.",
-                {"fields": sorted(option_fields), "missing": missing},
+                {
+                    "fields": sorted(option_fields),
+                    "required_fields": sorted(expected),
+                    "missing": missing,
+                },
             )]
         elif package == "openai-codex":
             module = importlib.import_module("openai_codex")
@@ -412,6 +434,8 @@ _PROBE_SCRIPT = textwrap.dedent(
                 {
                     "run_params": sorted(run_params),
                     "start_params": sorted(start_params),
+                    "required_run_params": sorted(expected_run),
+                    "required_start_params": sorted(expected_start),
                     "missing": missing,
                 },
             )]
@@ -444,7 +468,11 @@ _PROBE_SCRIPT = textwrap.dedent(
                 "fail" if missing else "pass",
                 "Antigravity LocalAgentConfig exposes required adapter fields." if not missing
                 else "Antigravity LocalAgentConfig is missing required adapter fields.",
-                {"fields": sorted(config_fields), "missing": missing},
+                {
+                    "fields": sorted(config_fields),
+                    "required_fields": sorted(expected),
+                    "missing": missing,
+                },
             )]
         else:
             payload = [result("package-import", "skip", "No behavior probe is defined.", {})]

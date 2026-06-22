@@ -275,11 +275,16 @@ def evaluate_implementation_gate(
         "self_adaptation_plan"
     ):
         return GateResult(False, "recursive self-adaptation requires a migration plan")
-    if str(review.get("status", "")).lower() != "pass":
+    if not _review_passed(review):
         return GateResult(False, "reviewer did not pass the proposal")
     if not architecture.get("safe_to_implement"):
         return GateResult(False, "architecture decision is not safe to implement")
     return GateResult(True, "implementation enabled and gates passed")
+
+
+def _review_passed(review: Mapping[str, Any]) -> bool:
+    status = str(review.get("status", "")).strip().lower()
+    return status in {"pass", "passed", "approve", "approved", "accepted"}
 
 
 def detects_recursive_impact(api_diffs: Sequence[Mapping[str, Any] | ApiDiff]) -> bool:
@@ -488,7 +493,7 @@ def _compact_stage_value(value: Any, *, string_limit: int = 800, list_limit: int
 
 
 def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
-    return (
+    prompt = (
         "You are running inside the local SDK evolution agent. "
         "Use only the provided evidence. Preserve vendor-specific behavior, "
         "state uncertainty explicitly, and never claim implementation occurred "
@@ -501,6 +506,26 @@ def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
         f"Current stage: {stage}. "
         f"Output schema: {json.dumps(schema, sort_keys=True)}"
     )
+    if stage in {"architecture-decision", "review"}:
+        prompt += (
+            " Deterministic gate policy: candidate API diffs prove API shape drift, "
+            "while behavior_diffs prove whether the adapter contract still holds. "
+            "For adapter-contract probes, severity none means the required adapter "
+            "contract is compatible even when probe details or public API snapshots "
+            "show optional field churn. "
+            "Do not mark manual_design_required, unsafe, or review rejection solely "
+            "because public top-level symbols were added or removed when behavior "
+            "probes pass before and after and there is no adapter-source evidence "
+            "that the removed symbols are used. Breaking behavior_diffs, missing "
+            "candidate API diffs, unavailable required release-note evidence, "
+            "reviewer-identified unsupported vendor behavior, or recursive "
+            "runtime-contract impact remain hard blockers. Release-note status found "
+            "is collected evidence, not unavailable evidence, even when the summary "
+            "states that no package-version-specific entry was found."
+        )
+    if stage == "review":
+        prompt += " The review status must be exactly pass or reject."
+    return prompt
 
 
 def _stage_permissions(runtime: AgentRuntime, *, write_enabled: bool) -> PermissionProfile:

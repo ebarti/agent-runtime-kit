@@ -98,7 +98,7 @@ REVIEWER_OUTPUT_SCHEMA: JsonSchema = {
     "required": ["status", "reasons", "required_changes"],
     "additionalProperties": False,
     "properties": {
-        "status": {"type": "string"},
+        "status": {"type": "string", "enum": ["pass", "reject"]},
         "reasons": {"type": "array", "items": {"type": "string"}},
         "required_changes": {"type": "array", "items": {"type": "string"}},
     },

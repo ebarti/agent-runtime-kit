@@ -196,6 +196,23 @@ def test_release_notes_collects_matching_update_source() -> None:
     assert any("TaskUpdatedMessage" in summary for summary in notes[0].summaries)
 
 
+def test_antigravity_release_notes_record_source_coverage_without_version_match() -> None:
+    notes = collect_release_notes(
+        [
+            {
+                "name": "google-antigravity",
+                "locked_version": "0.1.2",
+                "installed_version": "0.1.2",
+            }
+        ],
+        {"google-antigravity": "0.1.4"},
+        fetcher=lambda url: "Google Antigravity product changelog",
+    )
+
+    assert notes[0].status == "found"
+    assert "no package-version-specific" in notes[0].summaries[0]
+
+
 def test_release_note_guard_blocks_unavailable_update_source() -> None:
     guarded = with_release_note_guard(
         {
@@ -238,6 +255,39 @@ def test_behavior_diffs_track_candidate_contract_changes() -> None:
     )
 
     assert diffs[0].severity == "breaking"
+
+
+def test_behavior_diffs_ignore_optional_field_churn_when_contract_holds() -> None:
+    required = ["api_key", "mcp_servers", "model"]
+    diffs = diff_behavior_results(
+        [
+            _probe(
+                "google-antigravity",
+                "0.1.2",
+                "current-baseline",
+                "pass",
+                {
+                    "fields": ["api_key", "gemini_config", "mcp_servers", "model"],
+                    "required_fields": required,
+                    "missing": [],
+                },
+            ),
+            _probe(
+                "google-antigravity",
+                "0.1.4",
+                "candidate",
+                "pass",
+                {
+                    "fields": ["api_key", "mcp_servers", "model", "models"],
+                    "required_fields": required,
+                    "missing": [],
+                },
+            ),
+        ]
+    )
+
+    assert diffs[0].severity == "none"
+    assert diffs[0].summary == "No behavior contract difference detected."
 
 
 def test_behavior_evidence_uses_locked_baseline_when_environment_drifted(
@@ -699,6 +749,20 @@ def test_reviewer_rejection_blocks_implementation() -> None:
 
     assert gate.allowed is False
     assert "reviewer" in gate.reason
+
+
+def test_reviewer_approved_status_allows_implementation() -> None:
+    gate = evaluate_implementation_gate(
+        {
+            "safe_to_implement": True,
+            "manual_design_required": False,
+            "recursive_self_adaptation_impact": False,
+        },
+        {"status": "approved"},
+        implementation_enabled=True,
+    )
+
+    assert gate.allowed is True
 
 
 @pytest.mark.asyncio

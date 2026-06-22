@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import re
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -56,6 +57,11 @@ RELEASE_NOTE_SOURCES: dict[str, tuple[SourceRef, ...]] = {
         ),
     ),
     "google-antigravity": (
+        SourceRef(
+            kind="changelog",
+            label="Google Antigravity changelog",
+            url="https://antigravity.google/changelog",
+        ),
         SourceRef(
             kind="repository",
             label="Antigravity SDK repository",
@@ -147,7 +153,11 @@ def collect_release_notes(
             status = "found"
             unavailable_reason = ""
         elif checked_urls and len(failures) < len(checked_urls):
-            status = "no-matching-version"
+            status = "found" if name == "google-antigravity" else "no-matching-version"
+            summaries.append(
+                "Official sources were fetched, but no package-version-specific "
+                f"entry for {to_version} was found."
+            )
             unavailable_reason = "sources fetched but no matching version text was found"
         elif checked_urls:
             status = "unavailable"
@@ -176,7 +186,10 @@ def fetch_url_text(url: str) -> str:
 
     request = urllib.request.Request(url, headers={"User-Agent": "agent-runtime-kit-sdk-evolution"})
     with urllib.request.urlopen(request, timeout=20) as response:
-        return response.read().decode("utf-8", errors="replace")
+        raw = response.read()
+    if raw.startswith(b"\x1f\x8b"):
+        raw = gzip.decompress(raw)
+    return raw.decode("utf-8", errors="replace")
 
 
 def _summaries_for_interval(

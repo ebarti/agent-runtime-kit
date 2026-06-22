@@ -275,7 +275,7 @@ The agent should collect release-note context when a vendor publishes it.
 | `claude-agent-sdk` | Python SDK `CHANGELOG.md` and Claude Agent SDK docs | Claude often ships behavioral changes around task progress, sessions, tools, permissions, and model support. |
 | `openai-codex` | Codex SDK docs, Codex changelog, and `openai/codex` releases | Codex changes can involve sandboxing, working directories, remote execution, app-server behavior, and SDK maturity. |
 | `openai-codex-cli-bin` | `openai/codex` releases and package metadata | The binary package is runtime infrastructure, so behavior can change even when the Python SDK surface does not. |
-| `google-antigravity` | Repository, package metadata, examples, and public API snapshots | A first-party changelog is not clearly available, so the agent should mark release-note evidence as missing instead of pretending it exists. |
+| `google-antigravity` | Antigravity changelog, repository, package metadata, examples, and public API snapshots | Antigravity release context may be product-level instead of package-version-specific, so the agent must preserve source coverage and uncertainty separately. |
 
 The report should preserve source references and a short excerpt or summary. If
 release notes are unavailable, that absence is evidence and should increase
@@ -288,10 +288,13 @@ Primary sources should be recorded with URLs in `release_notes.json`:
 - Codex SDK docs: `https://developers.openai.com/codex/sdk`
 - Codex changelog: `https://developers.openai.com/codex/changelog`
 - Codex repository releases: `https://github.com/openai/codex/releases`
+- Antigravity changelog: `https://antigravity.google/changelog`
 - Antigravity repository: `https://github.com/google-antigravity/antigravity-sdk-python`
 
 If a package has no release-note source for the exact version interval, the
 agent should still record what it checked and why the source was insufficient.
+Fetched official sources with no package-version-specific entry are evidence
+with explicit uncertainty; they are not the same as a collection failure.
 
 ### 4. Behavior Probe Evidence
 
@@ -341,6 +344,12 @@ Each probe result should include:
 `behavior_diffs.json` compares current-environment probes against
 candidate-version probes for resolver-selected updates. Breaking candidate probe
 changes block implementation deterministically before any local lock update.
+
+`behavior_probes.json` may include observed SDK fields or parameters that are
+not part of the adapter contract. `behavior_diffs.json` compares the required
+adapter contract, not every optional field. Public API and signature churn
+remains visible in `api_diffs.json` and probe details, but it should only block
+implementation when the required behavior contract fails or becomes ambiguous.
 
 ### 5. Runtime-Generated Analysis
 
@@ -427,10 +436,10 @@ For `openai-codex`, the Codex SDK docs and Codex changelog should be checked.
 The `openai/codex` release page is also relevant because the Python SDK depends
 on a bundled or pinned runtime.
 
-For `google-antigravity`, if no first-party changelog is found, the agent should
-not treat that as a pass. It should compensate with package metadata, examples,
-API snapshots, adapter contract tests, and live smoke where credentials are
-available.
+For `google-antigravity`, if the official changelog or repository does not have
+a package-version-specific entry, the agent should not pretend the source is
+complete. It should compensate with package metadata, examples, API snapshots,
+adapter contract tests, and live smoke where credentials are available.
 
 ## Behavior Probe Strategy
 

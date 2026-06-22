@@ -109,6 +109,12 @@ candidate-version API diff for that package, implementation is blocked and the
 architecture decision is marked `manual_design_required`. An empty added /
 removed / changed diff is valid; a missing diff object is not.
 
+Behavior probes intentionally separate observed SDK surface churn from adapter
+contract breakage. `behavior_probes.json` records fields and parameters seen in
+current and candidate packages, while `behavior_diffs.json` compares the
+required adapter contract. Optional field changes remain visible in the report
+and API diffs, but only breaking adapter-contract diffs block implementation.
+
 ## Implementation Gates
 
 Report-only mode is the default. To allow the implementation stage, pass:
