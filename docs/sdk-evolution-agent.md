@@ -4,6 +4,10 @@ The SDK evolution agent is a local dogfood workflow for keeping
 agent-runtime-kit aligned with Claude Agent SDK, OpenAI Codex SDK, and Google
 Antigravity SDK as those upstream packages evolve.
 
+For the intended architecture, evidence contract, behavior probe strategy,
+changelog strategy, caveats, and alternatives, see
+[`docs/sdk-evolution-agent-design.md`](sdk-evolution-agent-design.md).
+
 Run it from the repository:
 
 ```bash
