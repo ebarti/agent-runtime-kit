@@ -78,11 +78,14 @@ Step responsibilities:
   freshness cutoffs removed. This step decides which packages are real update
   candidates for the run. It should use resolver output rather than only PyPI
   `latest` metadata, especially for prerelease packages.
-- **Inspect current and candidate APIs**: Snapshot the public import surface for
-  the currently locked/installed package and for every resolver-selected
-  candidate version. This step owns API snapshot and API diff artifacts. If an
-  update candidate has no candidate API diff, the run should not proceed to
-  implementation.
+- **Inspect current and candidate APIs**: Load API snapshot and diff artifacts
+  from the last update run, then focus new inspection on packages that the
+  resolver selected for update or packages whose evidence is missing, stale, or
+  incompatible with the current evidence schema. This step owns API snapshot and
+  API diff artifacts. If the evidence signature changes, the agent may need to
+  refresh the current-state snapshot or gather more current-state data before
+  comparing candidates. If an update candidate has no candidate API diff, the
+  run should not proceed to implementation.
 - **Collect changelog and release-note evidence**: Fetch or read official
   changelogs, release pages, docs changelogs, repository releases, and package
   metadata links. This step records what changed according to the vendor and
@@ -210,8 +213,19 @@ stable value reported by package metadata.
 
 ### 2. API Shape Evidence
 
-The agent snapshots public import surfaces for the current and candidate
-versions. For importable packages, snapshots record:
+The agent should treat API inspection artifacts as reusable evidence from the
+last update run. A normal run starts by loading the prior `api_snapshots/` and
+`api_diffs.json` artifacts, then inspects only the packages that need fresh
+facts:
+
+- packages selected by the resolver for update,
+- packages whose prior artifacts are missing,
+- packages whose prior artifacts were produced by an older evidence schema,
+- packages whose current locked or installed version no longer matches the
+  artifact baseline,
+- packages needed to answer a specific adapter-compatibility question.
+
+For importable packages, snapshots record:
 
 - public member names,
 - member kind,
