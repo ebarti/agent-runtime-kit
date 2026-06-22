@@ -32,7 +32,6 @@ from examples.sdk_evolution_agent.models import (
 from examples.sdk_evolution_agent.schemas import (
     ARCHITECTURE_DECISION_SCHEMA,
     DIRECTION_ANALYSIS_SCHEMA,
-    IMPLEMENTATION_SUMMARY_SCHEMA,
     REVIEWER_OUTPUT_SCHEMA,
     JsonSchema,
     SchemaValidationError,
@@ -169,11 +168,18 @@ async def run_analysis_pipeline(
     *,
     evidence: Mapping[str, Any],
     api_diffs: Sequence[Mapping[str, Any]],
+    release_notes: Sequence[Mapping[str, Any]],
+    behavior: Mapping[str, Any],
     context: RunContext,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Run direction, architecture, and reviewer stages."""
 
-    stage_payload = {"evidence": evidence, "api_diffs": list(api_diffs)}
+    stage_payload = {
+        "evidence": evidence,
+        "api_diffs": list(api_diffs),
+        "release_notes": list(release_notes),
+        "behavior": behavior,
+    }
     direction = await run_stage(
         runtime,
         stage="direction-analysis",
@@ -188,6 +194,8 @@ async def run_analysis_pipeline(
         payload={
             "evidence": evidence,
             "api_diffs": list(api_diffs),
+            "release_notes": list(release_notes),
+            "behavior": behavior,
             "direction_analysis": direction,
         },
         schema=ARCHITECTURE_DECISION_SCHEMA,
@@ -195,6 +203,8 @@ async def run_analysis_pipeline(
     )
     architecture = with_recursive_impact(architecture, api_diffs)
     architecture = with_candidate_api_diff_guard(architecture, evidence, api_diffs)
+    architecture = with_release_note_guard(architecture, release_notes)
+    architecture = with_behavior_probe_guard(architecture, behavior)
     architecture = with_manual_design_gate(architecture)
     architecture = _compact_stage_output(architecture)
     review = await run_stage(
@@ -203,6 +213,8 @@ async def run_analysis_pipeline(
         payload={
             "evidence": evidence,
             "api_diffs": list(api_diffs),
+            "release_notes": list(release_notes),
+            "behavior": behavior,
             "direction_analysis": direction,
             "architecture_decision": architecture,
         },
@@ -231,23 +243,20 @@ async def maybe_run_implementation(
     if not gate.allowed:
         return {
             "applied": False,
+            "allowed": False,
             "changes": [],
             "verification_results": [],
             "blocked_reason": gate.reason,
         }
-    return await run_stage(
-        runtime,
-        stage="implementation",
-        payload={
-            "evidence": evidence,
-            "direction_analysis": direction,
-            "architecture_decision": architecture,
-            "review": review,
-        },
-        schema=IMPLEMENTATION_SUMMARY_SCHEMA,
-        context=context,
-        write_enabled=True,
-    )
+    del runtime, evidence, direction, review
+    return {
+        "applied": False,
+        "allowed": True,
+        "changes": [],
+        "verification_results": [],
+        "blocked_reason": "",
+        "planned_changes": list(architecture.get("self_adaptation_plan") or []),
+    }
 
 
 def evaluate_implementation_gate(
@@ -366,6 +375,74 @@ def with_candidate_api_diff_guard(
         "changing adapters or dependency locks."
     )
     result["self_adaptation_plan"] = plan
+    return result
+
+
+def with_release_note_guard(
+    architecture: Mapping[str, Any],
+    release_notes: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Block implementation when release-note collection itself failed."""
+
+    failed = [
+        str(item.get("package"))
+        for item in release_notes
+        if item.get("to_version") and item.get("status") == "unavailable"
+    ]
+    if not failed:
+        return dict(architecture)
+    result = dict(architecture)
+    result["safe_to_implement"] = False
+    result["manual_design_required"] = True
+    findings = list(result.get("findings") or [])
+    findings.append(
+        {
+            "classification": "manual-design-required",
+            "summary": "Release-note evidence could not be collected for update candidates.",
+            "evidence": [f"release notes unavailable for {package}" for package in failed],
+        }
+    )
+    result["findings"] = findings
+    uncertainty = list(result.get("uncertainty") or [])
+    uncertainty.append("Missing release-note evidence for: " + ", ".join(sorted(failed)))
+    result["uncertainty"] = uncertainty
+    return result
+
+
+def with_behavior_probe_guard(
+    architecture: Mapping[str, Any],
+    behavior: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Block implementation when candidate behavior probes fail."""
+
+    diffs = behavior.get("diffs")
+    if not isinstance(diffs, list):
+        return dict(architecture)
+    breaking = [
+        diff
+        for diff in diffs
+        if isinstance(diff, Mapping) and str(diff.get("severity")) == "breaking"
+    ]
+    if not breaking:
+        return dict(architecture)
+    result = dict(architecture)
+    result["safe_to_implement"] = False
+    result["manual_design_required"] = True
+    findings = list(result.get("findings") or [])
+    findings.append(
+        {
+            "classification": "manual-design-required",
+            "summary": "Candidate SDK behavior probes detected breaking adapter-contract drift.",
+            "evidence": [
+                f"{diff.get('package')}:{diff.get('probe')} {diff.get('summary')}"
+                for diff in breaking
+            ],
+        }
+    )
+    result["findings"] = findings
+    uncertainty = list(result.get("uncertainty") or [])
+    uncertainty.append("Breaking behavior probes require manual adapter design review.")
+    result["uncertainty"] = uncertainty
     return result
 
 

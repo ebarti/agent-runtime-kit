@@ -26,6 +26,9 @@ def write_run_report(
     evidence: dict[str, Any],
     snapshots: list[dict[str, Any]],
     api_diffs: list[dict[str, Any]],
+    release_notes: list[dict[str, Any]],
+    behavior: dict[str, Any],
+    current_state: dict[str, Any],
     direction: dict[str, Any],
     architecture: dict[str, Any],
     implementation: dict[str, Any],
@@ -37,11 +40,15 @@ def write_run_report(
     context.report_root.mkdir(parents=True, exist_ok=True)
     write_json(context.report_root / "config.json", config)
     write_json(context.report_root / "evidence.json", evidence)
+    write_json(context.report_root / "release_notes.json", release_notes)
     write_json(context.report_root / "api_diffs.json", api_diffs)
+    write_json(context.report_root / "behavior_probes.json", behavior.get("results", []))
+    write_json(context.report_root / "behavior_diffs.json", behavior.get("diffs", []))
     write_json(context.report_root / "direction_analysis.json", direction)
     write_json(context.report_root / "architecture_decision.json", architecture)
     write_json(context.report_root / "implementation_summary.json", implementation)
     write_json(context.report_root / "review.json", review)
+    write_json(context.report_root / "current_state.json", current_state)
     snapshots_dir = context.report_root / "api_snapshots"
     snapshots_dir.mkdir(exist_ok=True)
     for index, snapshot in enumerate(snapshots, start=1):
@@ -55,6 +62,9 @@ def write_run_report(
             config=config,
             evidence=evidence,
             api_diffs=api_diffs,
+            release_notes=release_notes,
+            behavior=behavior,
+            current_state=current_state,
             direction=direction,
             architecture=architecture,
             implementation=implementation,
@@ -70,6 +80,9 @@ def render_markdown_report(
     config: dict[str, Any],
     evidence: dict[str, Any],
     api_diffs: list[dict[str, Any]],
+    release_notes: list[dict[str, Any]],
+    behavior: dict[str, Any],
+    current_state: dict[str, Any],
     direction: dict[str, Any],
     architecture: dict[str, Any],
     implementation: dict[str, Any],
@@ -92,6 +105,19 @@ def render_markdown_report(
         )
     manual = architecture.get("manual_design_required")
     recursive = architecture.get("recursive_self_adaptation_impact")
+    release_lines = [
+        "- {package}: {status} ({from_version} -> {to_version})".format(
+            package=item.get("package"),
+            status=item.get("status"),
+            from_version=item.get("from_version"),
+            to_version=item.get("to_version"),
+        )
+        for item in release_notes
+        if isinstance(item, dict) and item.get("to_version")
+    ]
+    behavior_summary = behavior.get("summary") if isinstance(behavior, dict) else {}
+    behavior_diffs = behavior.get("diffs", []) if isinstance(behavior, dict) else []
+    promotion = current_state.get("promotion", {}) if isinstance(current_state, dict) else {}
     return "\n".join(
         [
             "# SDK Evolution Agent Report",
@@ -109,6 +135,17 @@ def render_markdown_report(
             "## API Diffs",
             "",
             f"- Diff count: `{len(api_diffs)}`",
+            "",
+            "## Release Notes",
+            "",
+            *(release_lines or ["- No SDK update release-note evidence required."]),
+            "",
+            "## Behavior Probes",
+            "",
+            f"- Status: `{behavior_summary.get('status')}`",
+            f"- Changed contracts: `{behavior_summary.get('changed_count')}`",
+            f"- Breaking contracts: `{behavior_summary.get('breaking_count')}`",
+            f"- Diff count: `{len(behavior_diffs)}`",
             "",
             "## Direction Of Travel",
             "",
@@ -131,6 +168,11 @@ def render_markdown_report(
             "```json",
             json.dumps(implementation, indent=2, sort_keys=True, default=str),
             "```",
+            "",
+            "## Current State Baseline",
+            "",
+            f"- Promotion status: `{promotion.get('status')}`",
+            f"- Promoted: `{promotion.get('promoted')}`",
             "",
             "## Reviewer Output",
             "",

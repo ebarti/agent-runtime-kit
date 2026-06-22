@@ -224,10 +224,13 @@ stable value reported by package metadata.
 
 ### 2. API Shape Evidence
 
-The agent should treat API inspection artifacts as reusable evidence from the
-last update run. A normal run starts by loading the prior `api_snapshots/` and
-`api_diffs.json` artifacts, then inspects only the packages that need fresh
-facts:
+The agent should treat the lockfile as the current SDK baseline. If the active
+Python environment has drifted from `uv.lock`, the agent inspects the locked
+baseline in an isolated virtualenv instead of using the installed package. API
+inspection artifacts are reusable evidence from the last update run when their
+schema, lockfile version, and artifact hashes still match. A normal run starts
+by loading the prior `api_snapshots/` and `api_diffs.json` artifacts, then
+inspects only the packages that need fresh facts:
 
 - packages selected by the resolver for update,
 - packages whose prior artifacts are missing,
@@ -323,6 +326,7 @@ Behavior probe output should be a first-class report artifact, for example:
 
 ```text
 behavior_probes.json
+behavior_diffs.json
 ```
 
 Each probe result should include:
@@ -333,6 +337,10 @@ Each probe result should include:
 - pass/fail/skip status,
 - stdout/stderr summary,
 - skipped reason when optional credentials are missing.
+
+`behavior_diffs.json` compares current-environment probes against
+candidate-version probes for resolver-selected updates. Breaking candidate probe
+changes block implementation deterministically before any local lock update.
 
 ### 5. Runtime-Generated Analysis
 
@@ -479,6 +487,7 @@ release_notes.json
 api_snapshots/
 api_diffs.json
 behavior_probes.json
+behavior_diffs.json
 current_state.json
 direction_analysis.json
 architecture_decision.json
@@ -583,16 +592,22 @@ Partially useful but not sufficient. Provider-specific probes are valuable, but
 the top-level agent still needs a cross-provider architecture view so public API
 changes do not accidentally favor one runtime and flatten another.
 
-## Proposed Implementation Sequence
+## Implemented Artifact Contract
 
-1. Add release-note source collection with explicit unavailable-source records.
-2. Add behavior probe execution and `behavior_probes.json`.
-3. Add deterministic gates for missing required release-note coverage and failed
-   behavior probes.
-4. Update AI stage payloads to include release-note and behavior evidence.
-5. Update report rendering and PR body generation.
-6. Regenerate the all-package report.
-7. Run unit, contract, and live smoke verification.
+The example implements the deterministic evidence artifacts described above:
 
-Implementation should stop after step 3 if the probe matrix reveals an adapter
-behavior regression that needs human design.
+- `release_notes.json` records official source checks and whether matching
+  version evidence was found, missing, or unavailable.
+- `behavior_probes.json` records current and candidate adapter-contract probes.
+- `behavior_diffs.json` records behavior differences between current and
+  candidate probes.
+- `current_state.json` records the run baseline, lockfile hash, accepted
+  package versions, artifact hashes, and promotion status.
+
+The implementation path is gated by deterministic checks before the local
+lockfile update runs. Missing candidate API diffs, unavailable required
+release-note evidence, breaking behavior diffs, reviewer rejection,
+`manual_design_required`, and unresolved recursive self-adaptation all block
+implementation. When implementation is allowed, the example applies the
+resolver-selected SDK lock update locally, runs verification, writes the report
+artifacts, commits them, pushes the branch, and opens a draft PR when configured.

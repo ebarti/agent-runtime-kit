@@ -38,17 +38,57 @@ def create_branch(
     return command_runner(("git", "switch", "-c", branch_name), cwd=root)
 
 
+def stage_paths(
+    root: Path,
+    paths: tuple[str, ...],
+    *,
+    command_runner: CommandRunner | None = None,
+) -> CommandResult:
+    """Stage paths for an autonomous SDK update PR."""
+
+    command_runner = command_runner or run_command
+    return command_runner(("git", "add", *paths), cwd=root)
+
+
+def commit_staged(
+    root: Path,
+    *,
+    message: str,
+    command_runner: CommandRunner | None = None,
+) -> CommandResult:
+    """Commit staged SDK update artifacts."""
+
+    command_runner = command_runner or run_command
+    return command_runner(("git", "commit", "-m", message), cwd=root)
+
+
+def push_branch(
+    root: Path,
+    *,
+    branch_name: str,
+    command_runner: CommandRunner | None = None,
+) -> CommandResult:
+    """Push the current SDK update branch."""
+
+    command_runner = command_runner or run_command
+    return command_runner(("git", "push", "-u", "origin", branch_name), cwd=root)
+
+
 def create_draft_pr(
     root: Path,
     *,
     title: str,
     body: str,
+    base: str | None = None,
+    head: str | None = None,
     command_runner: CommandRunner | None = None,
 ) -> CommandResult:
     """Open a draft PR with gh when authenticated."""
 
     command_runner = command_runner or run_command
-    return command_runner(
-        ("gh", "pr", "create", "--draft", "--title", title, "--body", body),
-        cwd=root,
-    )
+    command = ["gh", "pr", "create", "--draft", "--title", title, "--body", body]
+    if base:
+        command.extend(("--base", base))
+    if head:
+        command.extend(("--head", head))
+    return command_runner(tuple(command), cwd=root)

@@ -10,12 +10,15 @@ from pathlib import Path
 from typing import Any
 
 from agent_runtime_kit import AgentRuntime, RuntimeRegistry
+from examples.sdk_evolution_agent.behavior import collect_behavior_evidence
 from examples.sdk_evolution_agent.collectors import (
     CommandRunner,
     PypiClient,
     collect_evidence,
+    run_lock_update,
     run_verification_commands,
 )
+from examples.sdk_evolution_agent.current_state import build_current_state
 from examples.sdk_evolution_agent.events import JsonlEventSink
 from examples.sdk_evolution_agent.models import (
     DEFAULT_PACKAGES,
@@ -23,7 +26,15 @@ from examples.sdk_evolution_agent.models import (
     RunOptions,
     to_jsonable,
 )
-from examples.sdk_evolution_agent.pr import build_draft_pr_body, create_branch, create_draft_pr
+from examples.sdk_evolution_agent.pr import (
+    build_draft_pr_body,
+    commit_staged,
+    create_branch,
+    create_draft_pr,
+    push_branch,
+    stage_paths,
+)
+from examples.sdk_evolution_agent.release_notes import collect_release_notes
 from examples.sdk_evolution_agent.report import write_run_report
 from examples.sdk_evolution_agent.snapshots import (
     diff_snapshot_groups,
@@ -34,6 +45,13 @@ from examples.sdk_evolution_agent.stages import (
     maybe_run_implementation,
     resolve_runtime,
     run_analysis_pipeline,
+)
+
+DEFAULT_VERIFICATION_COMMANDS = (
+    "uv run ruff check .",
+    "uv run mypy",
+    "uv run pytest",
+    "uv lock --check",
 )
 
 
@@ -89,6 +107,12 @@ def parse_args(argv: list[str] | None = None) -> RunOptions:
     parser.add_argument("--create-branch", action="store_true", help="Create a local branch first.")
     parser.add_argument("--branch-name", help="Branch name for optional branch creation.")
     parser.add_argument("--draft-pr", action="store_true", help="Create a draft PR with gh.")
+    parser.add_argument("--pr-base", help="Base branch for optional draft PR creation.")
+    parser.add_argument(
+        "--commit-message",
+        default="Run SDK evolution update",
+        help="Commit message for optional autonomous SDK update PR.",
+    )
     parser.add_argument(
         "--pr-title",
         default="Adapt agent-runtime-kit to upstream SDK evolution",
@@ -106,6 +130,8 @@ def parse_args(argv: list[str] | None = None) -> RunOptions:
         create_branch=args.create_branch,
         branch_name=args.branch_name,
         draft_pr=args.draft_pr,
+        pr_base=args.pr_base,
+        commit_message=args.commit_message,
         pr_title=args.pr_title,
     )
 
@@ -136,6 +162,18 @@ async def run_agent(
         event_sink=event_sink,
     )
     selected_runtime = runtime or resolve_runtime(options.runtime, registry=registry)
+    pre_run_results: list[dict[str, Any]] = []
+    if options.create_branch and options.branch_name:
+        branch_result = create_branch(
+            options.workspace,
+            options.branch_name,
+            command_runner=command_runner,
+        )
+        pre_run_results.append(to_jsonable(branch_result))
+        if branch_result.returncode != 0:
+            raise RuntimeError(
+                f"failed to create branch {options.branch_name}: {branch_result.stderr}"
+            )
     evidence = collect_evidence(
         options.workspace,
         packages=options.packages,
@@ -143,12 +181,20 @@ async def run_agent(
         pypi_client=pypi_client,
         command_runner=command_runner,
     )
+    update_versions = _refresh_update_versions(evidence)
     snapshots = _collect_snapshots(evidence)
     api_diffs = [to_jsonable(diff) for diff in diff_snapshot_groups(snapshots)]
+    release_notes = [
+        to_jsonable(item)
+        for item in collect_release_notes(evidence.get("packages", []), update_versions)
+    ]
+    behavior = to_jsonable(collect_behavior_evidence(evidence.get("packages", []), update_versions))
     direction, architecture, review = await run_analysis_pipeline(
         selected_runtime,
         evidence=evidence,
         api_diffs=api_diffs,
+        release_notes=release_notes,
+        behavior=behavior,
         context=RunContext(
             run_id=context.run_id,
             workspace=context.workspace,
@@ -168,65 +214,225 @@ async def run_agent(
         review=review,
         context=context,
     )
+    implementation.setdefault("verification_results", []).extend(pre_run_results)
     config = to_jsonable(options)
     config["run_id"] = run_id
     config["event_log_path"] = str(context.event_log_path)
-    report_path = write_run_report(
+
+    if options.implementation_enabled and implementation.get("allowed"):
+        implementation = _run_local_sdk_update(
+            options,
+            update_versions=update_versions,
+            implementation=implementation,
+            command_runner=command_runner,
+        )
+
+    promoted = bool(implementation.get("applied")) and _verification_passed(implementation)
+    current_state: dict[str, Any] = {
+        "promotion": {
+            "promoted": False,
+            "status": "pending-report-write",
+        }
+    }
+    report_path = _write_full_report(
         context,
         config=config,
         evidence=evidence,
         snapshots=[to_jsonable(snapshot) for snapshot in snapshots],
         api_diffs=api_diffs,
+        release_notes=release_notes,
+        behavior=behavior,
+        current_state=current_state,
         direction=direction,
         architecture=architecture,
         implementation=implementation,
         review=review,
     )
-    optional_results_changed = False
-    if options.implementation_enabled and implementation.get("applied"):
-        verification_results = run_verification_commands(
-            options.workspace,
-            tuple(str(item) for item in architecture.get("verification_commands", [])),
-            command_runner=command_runner,
-        )
-        implementation.setdefault("verification_results", []).extend(
-            to_jsonable(verification_results)
-        )
-        optional_results_changed = True
-    if options.create_branch and options.branch_name:
-        branch_result = create_branch(
-            options.workspace,
-            options.branch_name,
-            command_runner=command_runner,
-        )
-        implementation.setdefault("verification_results", []).append(to_jsonable(branch_result))
-        optional_results_changed = True
+    current_state = build_current_state(
+        context,
+        promoted=promoted,
+        status="promoted" if promoted else str(implementation.get("blocked_reason") or "skipped"),
+        implementation=implementation,
+    )
+    report_path = _write_full_report(
+        context,
+        config=config,
+        evidence=evidence,
+        snapshots=[to_jsonable(snapshot) for snapshot in snapshots],
+        api_diffs=api_diffs,
+        release_notes=release_notes,
+        behavior=behavior,
+        current_state=current_state,
+        direction=direction,
+        architecture=architecture,
+        implementation=implementation,
+        review=review,
+    )
+
     if options.draft_pr:
-        body = build_draft_pr_body(report_path.read_text(encoding="utf-8"))
-        pr_result = create_draft_pr(
+        git_results = _create_autonomous_pr(
             options.workspace,
-            title=options.pr_title,
-            body=body,
+            report_path=report_path,
+            options=options,
             command_runner=command_runner,
         )
-        implementation.setdefault("verification_results", []).append(to_jsonable(pr_result))
-        optional_results_changed = True
-    else:
-        body = None
-    if optional_results_changed:
-        report_path = write_run_report(
+        implementation.setdefault("verification_results", []).extend(git_results)
+        report_path = _write_full_report(
             context,
             config=config,
             evidence=evidence,
             snapshots=[to_jsonable(snapshot) for snapshot in snapshots],
             api_diffs=api_diffs,
+            release_notes=release_notes,
+            behavior=behavior,
+            current_state=current_state,
             direction=direction,
             architecture=architecture,
             implementation=implementation,
             review=review,
-            pr_body=body,
         )
     return report_path
+
+
+def _run_local_sdk_update(
+    options: RunOptions,
+    *,
+    update_versions: dict[str, str],
+    implementation: dict[str, Any],
+    command_runner: CommandRunner | None,
+) -> dict[str, Any]:
+    packages = tuple(sorted(update_versions))
+    if not packages:
+        return {
+            **implementation,
+            "applied": False,
+            "blocked_reason": "no resolver-selected SDK updates",
+        }
+    update_result = run_lock_update(
+        options.workspace,
+        packages,
+        command_runner=command_runner,
+    )
+    results = list(implementation.get("verification_results") or [])
+    results.append(to_jsonable(update_result))
+    applied = update_result.returncode == 0
+    changes = list(implementation.get("changes") or [])
+    if applied:
+        changes.append("Updated uv.lock for resolver-selected SDK packages: " + ", ".join(packages))
+        verification_commands = tuple(DEFAULT_VERIFICATION_COMMANDS)
+        verification_results = run_verification_commands(
+            options.workspace,
+            verification_commands,
+            command_runner=command_runner,
+        )
+        results.extend(to_jsonable(verification_results))
+    return {
+        **implementation,
+        "applied": applied,
+        "changes": changes,
+        "verification_results": results,
+        "blocked_reason": "" if applied else update_result.stderr or update_result.stdout,
+    }
+
+
+def _write_full_report(
+    context: RunContext,
+    *,
+    config: dict[str, Any],
+    evidence: dict[str, Any],
+    snapshots: list[dict[str, Any]],
+    api_diffs: list[dict[str, Any]],
+    release_notes: list[dict[str, Any]],
+    behavior: dict[str, Any],
+    current_state: dict[str, Any],
+    direction: dict[str, Any],
+    architecture: dict[str, Any],
+    implementation: dict[str, Any],
+    review: dict[str, Any],
+    pr_body: str | None = None,
+) -> Path:
+    return write_run_report(
+        context,
+        config=config,
+        evidence=evidence,
+        snapshots=snapshots,
+        api_diffs=api_diffs,
+        release_notes=release_notes,
+        behavior=behavior,
+        current_state=current_state,
+        direction=direction,
+        architecture=architecture,
+        implementation=implementation,
+        review=review,
+        pr_body=pr_body,
+    )
+
+
+def _verification_passed(implementation: dict[str, Any]) -> bool:
+    results = implementation.get("verification_results")
+    if not isinstance(results, list):
+        return False
+    command_results = [item for item in results if isinstance(item, dict) and "returncode" in item]
+    return bool(command_results) and all(
+        int(item.get("returncode", 1)) == 0 for item in command_results
+    )
+
+
+def _create_autonomous_pr(
+    root: Path,
+    *,
+    report_path: Path,
+    options: RunOptions,
+    command_runner: CommandRunner | None,
+) -> list[dict[str, Any]]:
+    branch_name = options.branch_name or _current_branch(root, command_runner=command_runner)
+    body = build_draft_pr_body(report_path.read_text(encoding="utf-8"))
+    relative_report = _relative_path(root, report_path.parent)
+    paths = ("uv.lock", relative_report)
+    results = [
+        to_jsonable(stage_paths(root, paths, command_runner=command_runner)),
+        to_jsonable(
+            commit_staged(
+                root,
+                message=options.commit_message,
+                command_runner=command_runner,
+            )
+        ),
+    ]
+    if branch_name:
+        results.append(
+            to_jsonable(push_branch(root, branch_name=branch_name, command_runner=command_runner))
+        )
+    results.append(
+        to_jsonable(
+            create_draft_pr(
+                root,
+                title=options.pr_title,
+                body=body,
+                base=options.pr_base,
+                head=branch_name,
+                command_runner=command_runner,
+            )
+        )
+    )
+    return results
+
+
+def _current_branch(root: Path, *, command_runner: CommandRunner | None) -> str:
+    runner = command_runner or None
+    if runner is None:
+        from examples.sdk_evolution_agent.collectors import run_command
+
+        runner = run_command
+    result = runner(("git", "branch", "--show-current"), cwd=root)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _relative_path(root: Path, path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(root.resolve()))
+    except ValueError:
+        return str(path)
 
 
 def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = True) -> list[Any]:
@@ -238,11 +444,16 @@ def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = T
         if not isinstance(package, dict):
             continue
         name = str(package.get("name"))
-        snapshots.append(snapshot_current_api(name, version=package.get("installed_version")))
+        locked = package.get("locked_version")
+        installed = package.get("installed_version")
+        baseline = locked or installed
+        if locked and installed and locked != installed:
+            snapshots.append(snapshot_candidate_in_venv(name, str(locked)))
+        else:
+            snapshots.append(snapshot_current_api(name, version=baseline))
         candidate = update_versions.get(name)
         if candidate is None and not refresh_preview_seen:
             latest = package.get("latest_version")
-            baseline = package.get("locked_version") or package.get("installed_version")
             if latest and latest != baseline:
                 candidate = str(latest)
         if candidate:

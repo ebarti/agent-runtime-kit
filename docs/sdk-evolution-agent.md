@@ -57,8 +57,12 @@ Each run writes a timestamped directory under `reports/sdk-evolution/` with:
 
 - `config.json`
 - `evidence.json`
+- `release_notes.json`
 - `api_snapshots/`
 - `api_diffs.json`
+- `behavior_probes.json`
+- `behavior_diffs.json`
+- `current_state.json`
 - `direction_analysis.json`
 - `architecture_decision.json`
 - `implementation_summary.json`
@@ -67,7 +71,8 @@ Each run writes a timestamped directory under `reports/sdk-evolution/` with:
 - `report.md`
 
 The report separates deterministic facts from runtime-generated analysis and
-calls out uncertainty, recursive self-adaptation impact, implementation status,
+calls out uncertainty, release-note coverage, API diffs, behavior diffs,
+baseline promotion, recursive self-adaptation impact, implementation status,
 test results, reviewer output, and manual review items.
 
 ## Upstream Freshness
@@ -87,15 +92,17 @@ cutoff variables must not hide candidate releases.
 
 ## Candidate API Inspection
 
-The command snapshots SDK APIs importable in the current environment. When a
-refresh preview is available, package update candidates come from the resolver's
-`uv lock --dry-run -P ...` output, not only from PyPI's `latest` metadata. For
-each resolver update candidate, the agent installs the target version in a
-temporary isolated virtualenv and writes an API snapshot plus `api_diffs.json`
-entry. This avoids false downgrade diffs for packages whose locked prerelease is
-newer than PyPI's stable latest field. Candidate inspection is always enabled
-for update candidates; `--inspect-candidates` remains accepted only for CLI
-compatibility.
+The command treats `uv.lock` as the current baseline. If the active `.venv`
+contains a different installed version, the agent inspects the locked baseline
+in a temporary isolated virtualenv instead of trusting the drifted environment.
+When a refresh preview is available, package update candidates come from the
+resolver's `uv lock --dry-run -P ...` output, not only from PyPI's `latest`
+metadata. For each resolver update candidate, the agent installs the target
+version in a temporary isolated virtualenv and writes an API snapshot plus
+`api_diffs.json` entry. This avoids false downgrade diffs for packages whose
+locked prerelease is newer than PyPI's stable latest field. Candidate inspection
+is always enabled for update candidates; `--inspect-candidates` remains accepted
+only for CLI compatibility.
 
 If `uv lock --dry-run -P ...` reports an SDK update but the run cannot produce a
 candidate-version API diff for that package, implementation is blocked and the
@@ -114,6 +121,9 @@ Implementation is still blocked when:
 
 - the architecture decision sets `manual_design_required`,
 - the reviewer rejects the evidence or design,
+- a resolver-selected update lacks a candidate API diff,
+- required release-note evidence could not be collected,
+- candidate behavior probes show a breaking adapter-contract difference,
 - required structured output or permission behavior is unsupported by the
   selected runtime,
 - recursive self-adaptation is required but no safe migration plan exists.
@@ -135,8 +145,13 @@ python -m examples.sdk_evolution_agent \
   --implementation-enabled \
   --create-branch \
   --branch-name sdk-evolution-update \
+  --pr-base main \
   --draft-pr
 ```
+
+When `--draft-pr` is set, the agent stages `uv.lock` and the run report
+directory, commits them with `--commit-message`, pushes the branch, and opens a
+draft PR with `gh`. It never auto-merges.
 
 The command uses local Git and `gh` authentication. It never auto-merges,
 auto-publishes, or scrapes unsupported credentials.
