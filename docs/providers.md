@@ -10,6 +10,21 @@
 - package name
 - installed version when discoverable
 
+## Install Model
+
+The plain `agent-runtime-kit` package is the dependency-free core. Use
+`agent-runtime-kit[all]` when you want Claude, Codex, and Antigravity adapters
+available in one install, or use a single extra such as
+`agent-runtime-kit[codex]` when your application only needs one runtime.
+
+Provider extras are used to isolate packaging risk, not to fragment the API.
+They avoid mandatory installs of every vendor SDK, CLI binary, and compiled
+runtime wheel; keep unrelated providers working when one SDK changes or is not
+available on a platform; and let runtime availability diagnostics point users
+to the exact missing extra.
+
+## Runtime Notes
+
 Claude uses the `claude-agent-sdk` package and maps working directory,
 permissions, MCP servers, sessions, structured output, tool allow/deny lists,
 runtime environment, and budget where supported by the installed SDK. It

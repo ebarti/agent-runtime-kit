@@ -15,5 +15,8 @@ htmlcov/
 # Local generated reports
 reports/sdk-evolution/
 
+# Local review artifacts
+CODE-REVIEW.md
+
 # Virtual environments
 .venv
