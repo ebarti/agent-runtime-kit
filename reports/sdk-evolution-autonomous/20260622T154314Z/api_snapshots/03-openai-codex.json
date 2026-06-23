@@ -1,0 +1,261 @@
+{
+  "import_error": null,
+  "members": [
+    {
+      "kind": "class",
+      "module": "openai_codex._approval_mode",
+      "name": "ApprovalMode",
+      "signature": "(value, names=None, *, module=None, qualname=None, type=None, start=1)"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex._login",
+      "name": "AsyncChatgptLoginHandle",
+      "signature": "(_codex: '_AsyncLoginOwner', login_id: 'str', auth_url: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.api",
+      "name": "AsyncCodex",
+      "signature": "(config: 'CodexConfig | None' = None) -> 'None'"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex._login",
+      "name": "AsyncDeviceCodeLoginHandle",
+      "signature": "(_codex: '_AsyncLoginOwner', login_id: 'str', verification_url: 'str', user_code: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.api",
+      "name": "AsyncThread",
+      "signature": "(_codex: 'AsyncCodex', id: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.api",
+      "name": "AsyncTurnHandle",
+      "signature": "(_codex: 'AsyncCodex', thread_id: 'str', id: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex._login",
+      "name": "ChatgptLoginHandle",
+      "signature": "(_client: 'CodexClient', login_id: 'str', auth_url: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.api",
+      "name": "Codex",
+      "signature": "(config: 'CodexConfig | None' = None) -> 'None'"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.client",
+      "name": "CodexConfig",
+      "signature": "(codex_bin: str | None = None, launch_args_override: tuple[str, ...] | None = None, config_overrides: tuple[str, ...] = (), cwd: str | None = None, env: dict[str, str] | None = None, client_name: str = 'codex_python_sdk', client_title: str = 'Codex Python SDK', client_version: str = '0.1.0b3', experimental_api: bool = True) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.errors",
+      "name": "CodexError",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.errors",
+      "name": "CodexRpcError",
+      "signature": "(code: 'int', message: 'str', data: 'Any' = None)"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex._login",
+      "name": "DeviceCodeLoginHandle",
+      "signature": "(_client: 'CodexClient', login_id: 'str', verification_url: 'str', user_code: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex._inputs",
+      "name": "ImageInput",
+      "signature": "(url: 'str') -> None"
+    },
+    {
+      "kind": "UnionType",
+      "module": "types",
+      "name": "Input",
+      "signature": ""
+    },
+    {
+      "kind": "UnionType",
+      "module": "types",
+      "name": "InputItem",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.errors",
+      "name": "InternalRpcError",
+      "signature": "(code: 'int', message: 'str', data: 'Any' = None)"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.errors",
+      "name": "InvalidParamsError",
+      "signature": "(code: 'int', message: 'str', data: 'Any' = None)"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.errors",
+      "name": "InvalidRequestError",
+      "signature": "(code: 'int', message: 'str', data: 'Any' = None)"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.errors",
+      "name": "JsonRpcError",
+      "signature": "(code: 'int', message: 'str', data: 'Any' = None)"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex._inputs",
+      "name": "LocalImageInput",
+      "signature": "(path: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex._inputs",
+      "name": "MentionInput",
+      "signature": "(name: 'str', path: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.errors",
+      "name": "MethodNotFoundError",
+      "signature": "(code: 'int', message: 'str', data: 'Any' = None)"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.errors",
+      "name": "ParseError",
+      "signature": "(code: 'int', message: 'str', data: 'Any' = None)"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.errors",
+      "name": "RetryLimitExceededError",
+      "signature": "(code: 'int', message: 'str', data: 'Any' = None)"
+    },
+    {
+      "kind": "UnionType",
+      "module": "types",
+      "name": "RunInput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex._sandbox",
+      "name": "Sandbox",
+      "signature": "(value, names=None, *, module=None, qualname=None, type=None, start=1)"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.errors",
+      "name": "ServerBusyError",
+      "signature": "(code: 'int', message: 'str', data: 'Any' = None)"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex._inputs",
+      "name": "SkillInput",
+      "signature": "(name: 'str', path: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex._inputs",
+      "name": "TextInput",
+      "signature": "(text: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.api",
+      "name": "Thread",
+      "signature": "(_client: 'CodexClient', id: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.errors",
+      "name": "TransportClosedError",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex.api",
+      "name": "TurnHandle",
+      "signature": "(_client: 'CodexClient', thread_id: 'str', id: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "openai_codex._run",
+      "name": "TurnResult",
+      "signature": "(id: 'str', status: 'TurnStatus', error: 'TurnError | None', started_at: 'int | None', completed_at: 'int | None', duration_ms: 'int | None', final_response: 'str | None', items: 'list[ThreadItem]', usage: 'ThreadTokenUsage | None') -> None"
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "api",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "async_client",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "client",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "errors",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "generated",
+      "signature": ""
+    },
+    {
+      "kind": "function",
+      "module": "openai_codex.errors",
+      "name": "is_retryable_error",
+      "signature": "(exc: 'BaseException') -> 'bool'"
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "models",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "retry",
+      "signature": ""
+    },
+    {
+      "kind": "function",
+      "module": "openai_codex.retry",
+      "name": "retry_on_overload",
+      "signature": "(op: 'Callable[[], T]', *, max_attempts: 'int' = 3, initial_delay_s: 'float' = 0.25, max_delay_s: 'float' = 2.0, jitter_ratio: 'float' = 0.2) -> 'T'"
+    }
+  ],
+  "module": "openai_codex",
+  "package": "openai-codex",
+  "source": "current-environment",
+  "version": "0.1.0b3"
+}
