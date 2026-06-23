@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 - 2026-06-23
+
+### Added
+
+- Added the local SDK evolution agent example, including runtime-backed
+  direction analysis, architecture decision, reviewer stages, report generation,
+  and optional draft PR creation.
+- Added release-note collection, candidate API snapshots/diffs, behavior probes,
+  current-state promotion manifests, and deterministic implementation gates for
+  SDK update runs.
+- Added documentation for running the SDK evolution agent locally with supported
+  vendor credentials and reviewing generated evidence.
+
+### Changed
+
+- Updated the lockfile to the resolver-selected current Claude and Antigravity
+  SDK versions after the evolution agent validated adapter-contract behavior:
+  `claude-agent-sdk` 0.2.106 and `google-antigravity` 0.1.4.
+- SDK evolution current-state manifests now record repo-relative checked-in
+  artifact paths rather than machine-local absolute paths.
+
 ## 0.1.1 - 2026-06-11
 
 ### Fixed
