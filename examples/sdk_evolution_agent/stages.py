@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,6 @@ from examples.sdk_evolution_agent.models import (
 from examples.sdk_evolution_agent.schemas import (
     ARCHITECTURE_DECISION_SCHEMA,
     DIRECTION_ANALYSIS_SCHEMA,
-    IMPLEMENTATION_SUMMARY_SCHEMA,
     REVIEWER_OUTPUT_SCHEMA,
     JsonSchema,
     SchemaValidationError,
@@ -44,6 +44,8 @@ class StageExecutionError(RuntimeError):
 
 
 SDK_EVOLUTION_CODEX_HOME = Path("~/.codex_agent_runtime_sdk").expanduser()
+SDK_EVOLUTION_CODEX_MODEL = "gpt-5.5"
+SDK_EVOLUTION_CODEX_REASONING_EFFORT = "xhigh"
 
 
 class FixtureEvolutionRuntime:
@@ -105,6 +107,7 @@ def _codex_evolution_runtime(**kwargs: Any) -> CodexAgentRuntime:
     SDK_EVOLUTION_CODEX_HOME.chmod(0o700)
     env = dict(kwargs.pop("env", {}) or {})
     env.setdefault("CODEX_HOME", str(SDK_EVOLUTION_CODEX_HOME))
+    kwargs.setdefault("default_model", SDK_EVOLUTION_CODEX_MODEL)
     return CodexAgentRuntime(env=env, **kwargs)
 
 
@@ -137,12 +140,12 @@ async def run_stage(
     permissions = _stage_permissions(runtime, write_enabled=write_enabled)
     task = AgentTask(
         goal=json.dumps(payload, sort_keys=True, default=str),
-        system=_stage_system_prompt(stage),
+        system=_stage_system_prompt(stage, schema),
         working_directory=context.workspace,
         permissions=permissions,
         event_sink=context.event_sink,
         output_schema=schema,
-        metadata={"stage": stage, "run_id": context.run_id},
+        metadata=_stage_metadata(runtime, stage=stage, context=context),
     )
     try:
         result = await runtime.run(task)
@@ -165,11 +168,18 @@ async def run_analysis_pipeline(
     *,
     evidence: Mapping[str, Any],
     api_diffs: Sequence[Mapping[str, Any]],
+    release_notes: Sequence[Mapping[str, Any]],
+    behavior: Mapping[str, Any],
     context: RunContext,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Run direction, architecture, and reviewer stages."""
 
-    stage_payload = {"evidence": evidence, "api_diffs": list(api_diffs)}
+    stage_payload = {
+        "evidence": evidence,
+        "api_diffs": list(api_diffs),
+        "release_notes": list(release_notes),
+        "behavior": behavior,
+    }
     direction = await run_stage(
         runtime,
         stage="direction-analysis",
@@ -177,24 +187,34 @@ async def run_analysis_pipeline(
         schema=DIRECTION_ANALYSIS_SCHEMA,
         context=context,
     )
+    direction = _compact_stage_output(direction)
     architecture = await run_stage(
         runtime,
         stage="architecture-decision",
         payload={
             "evidence": evidence,
             "api_diffs": list(api_diffs),
+            "release_notes": list(release_notes),
+            "behavior": behavior,
             "direction_analysis": direction,
         },
         schema=ARCHITECTURE_DECISION_SCHEMA,
         context=context,
     )
     architecture = with_recursive_impact(architecture, api_diffs)
+    architecture = with_candidate_api_diff_guard(architecture, evidence, api_diffs)
+    architecture = with_release_note_guard(architecture, release_notes)
+    architecture = with_behavior_probe_guard(architecture, behavior)
+    architecture = with_manual_design_gate(architecture)
+    architecture = _compact_stage_output(architecture)
     review = await run_stage(
         runtime,
         stage="review",
         payload={
             "evidence": evidence,
             "api_diffs": list(api_diffs),
+            "release_notes": list(release_notes),
+            "behavior": behavior,
             "direction_analysis": direction,
             "architecture_decision": architecture,
         },
@@ -223,23 +243,20 @@ async def maybe_run_implementation(
     if not gate.allowed:
         return {
             "applied": False,
+            "allowed": False,
             "changes": [],
             "verification_results": [],
             "blocked_reason": gate.reason,
         }
-    return await run_stage(
-        runtime,
-        stage="implementation",
-        payload={
-            "evidence": evidence,
-            "direction_analysis": direction,
-            "architecture_decision": architecture,
-            "review": review,
-        },
-        schema=IMPLEMENTATION_SUMMARY_SCHEMA,
-        context=context,
-        write_enabled=True,
-    )
+    del runtime, evidence, direction, review
+    return {
+        "applied": False,
+        "allowed": True,
+        "changes": [],
+        "verification_results": [],
+        "blocked_reason": "",
+        "planned_changes": list(architecture.get("self_adaptation_plan") or []),
+    }
 
 
 def evaluate_implementation_gate(
@@ -258,11 +275,16 @@ def evaluate_implementation_gate(
         "self_adaptation_plan"
     ):
         return GateResult(False, "recursive self-adaptation requires a migration plan")
-    if str(review.get("status", "")).lower() != "pass":
+    if not _review_passed(review):
         return GateResult(False, "reviewer did not pass the proposal")
     if not architecture.get("safe_to_implement"):
         return GateResult(False, "architecture decision is not safe to implement")
     return GateResult(True, "implementation enabled and gates passed")
+
+
+def _review_passed(review: Mapping[str, Any]) -> bool:
+    status = str(review.get("status", "")).strip().lower()
+    return status in {"pass", "passed", "approve", "approved", "accepted"}
 
 
 def detects_recursive_impact(api_diffs: Sequence[Mapping[str, Any] | ApiDiff]) -> bool:
@@ -313,14 +335,197 @@ def with_recursive_impact(
     return result
 
 
-def _stage_system_prompt(stage: str) -> str:
-    return (
+def with_candidate_api_diff_guard(
+    architecture: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    api_diffs: Sequence[Mapping[str, Any] | ApiDiff],
+) -> dict[str, Any]:
+    """Block SDK update implementation when candidate API evidence is missing."""
+
+    update_packages = _refresh_update_packages(evidence)
+    if not update_packages:
+        return dict(architecture)
+    diff_packages = {
+        diff.package if isinstance(diff, ApiDiff) else str(diff.get("package") or "")
+        for diff in api_diffs
+    }
+    missing = tuple(sorted(package for package in update_packages if package not in diff_packages))
+    if not missing:
+        return dict(architecture)
+
+    result = dict(architecture)
+    result["safe_to_implement"] = False
+    result["manual_design_required"] = True
+    findings = list(result.get("findings") or [])
+    findings.append(
+        {
+            "classification": "manual-design-required",
+            "summary": (
+                "SDK update candidates require candidate-version API snapshot diffs "
+                "before implementation can be considered safe."
+            ),
+            "evidence": [f"missing api_diffs for {package}" for package in missing],
+        }
+    )
+    result["findings"] = findings
+    uncertainty = list(result.get("uncertainty") or [])
+    uncertainty.append(
+        "Candidate API diffs were not available for update candidate(s): "
+        + ", ".join(missing)
+    )
+    result["uncertainty"] = uncertainty
+    plan = list(result.get("self_adaptation_plan") or [])
+    plan.append(
+        "Rerun with candidate API inspection and review the generated api_diffs before "
+        "changing adapters or dependency locks."
+    )
+    result["self_adaptation_plan"] = plan
+    return result
+
+
+def with_release_note_guard(
+    architecture: Mapping[str, Any],
+    release_notes: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Block implementation when release-note collection itself failed."""
+
+    failed = [
+        str(item.get("package"))
+        for item in release_notes
+        if item.get("to_version") and item.get("status") == "unavailable"
+    ]
+    if not failed:
+        return dict(architecture)
+    result = dict(architecture)
+    result["safe_to_implement"] = False
+    result["manual_design_required"] = True
+    findings = list(result.get("findings") or [])
+    findings.append(
+        {
+            "classification": "manual-design-required",
+            "summary": "Release-note evidence could not be collected for update candidates.",
+            "evidence": [f"release notes unavailable for {package}" for package in failed],
+        }
+    )
+    result["findings"] = findings
+    uncertainty = list(result.get("uncertainty") or [])
+    uncertainty.append("Missing release-note evidence for: " + ", ".join(sorted(failed)))
+    result["uncertainty"] = uncertainty
+    return result
+
+
+def with_behavior_probe_guard(
+    architecture: Mapping[str, Any],
+    behavior: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Block implementation when candidate behavior probes fail."""
+
+    diffs = behavior.get("diffs")
+    if not isinstance(diffs, list):
+        return dict(architecture)
+    breaking = [
+        diff
+        for diff in diffs
+        if isinstance(diff, Mapping) and str(diff.get("severity")) == "breaking"
+    ]
+    if not breaking:
+        return dict(architecture)
+    result = dict(architecture)
+    result["safe_to_implement"] = False
+    result["manual_design_required"] = True
+    findings = list(result.get("findings") or [])
+    findings.append(
+        {
+            "classification": "manual-design-required",
+            "summary": "Candidate SDK behavior probes detected breaking adapter-contract drift.",
+            "evidence": [
+                f"{diff.get('package')}:{diff.get('probe')} {diff.get('summary')}"
+                for diff in breaking
+            ],
+        }
+    )
+    result["findings"] = findings
+    uncertainty = list(result.get("uncertainty") or [])
+    uncertainty.append("Breaking behavior probes require manual adapter design review.")
+    result["uncertainty"] = uncertainty
+    return result
+
+
+def with_manual_design_gate(architecture: Mapping[str, Any]) -> dict[str, Any]:
+    """Make manual design decisions block implementation unambiguously."""
+
+    result = dict(architecture)
+    if result.get("manual_design_required"):
+        result["safe_to_implement"] = False
+    return result
+
+
+def _refresh_update_packages(evidence: Mapping[str, Any]) -> tuple[str, ...]:
+    preview = evidence.get("refresh_preview")
+    if not isinstance(preview, Mapping):
+        return ()
+    text = f"{preview.get('stdout') or ''}\n{preview.get('stderr') or ''}"
+    return tuple(
+        sorted(set(re.findall(r"Update\s+([A-Za-z0-9_.-]+)\s+v\S+\s+->\s+v\S+", text)))
+    )
+
+
+def _compact_stage_output(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: _compact_stage_value(item) for key, item in value.items()}
+
+
+def _compact_stage_value(value: Any, *, string_limit: int = 800, list_limit: int = 8) -> Any:
+    if isinstance(value, str):
+        if len(value) <= string_limit:
+            return value
+        return value[: string_limit - 16].rstrip() + " [truncated]"
+    if isinstance(value, list):
+        return [
+            _compact_stage_value(item, string_limit=string_limit, list_limit=list_limit)
+            for item in value[:list_limit]
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _compact_stage_value(item, string_limit=string_limit, list_limit=list_limit)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
+    prompt = (
         "You are running inside the local SDK evolution agent. "
         "Use only the provided evidence. Preserve vendor-specific behavior, "
         "state uncertainty explicitly, and never claim implementation occurred "
         "unless it is reflected in the provided artifacts. "
-        f"Current stage: {stage}."
+        "Return only one JSON object that validates against the provided schema. "
+        "Do not include Markdown, code fences, file links, or prose outside JSON. "
+        "Do not call shell, command, file, or workspace tools; the deterministic "
+        "evidence bundle already contains the inspected data. "
+        "Keep each array to at most five high-signal items and each string concise. "
+        f"Current stage: {stage}. "
+        f"Output schema: {json.dumps(schema, sort_keys=True)}"
     )
+    if stage in {"architecture-decision", "review"}:
+        prompt += (
+            " Deterministic gate policy: candidate API diffs prove API shape drift, "
+            "while behavior_diffs prove whether the adapter contract still holds. "
+            "For adapter-contract probes, severity none means the required adapter "
+            "contract is compatible even when probe details or public API snapshots "
+            "show optional field churn. "
+            "Do not mark manual_design_required, unsafe, or review rejection solely "
+            "because public top-level symbols were added or removed when behavior "
+            "probes pass before and after and there is no adapter-source evidence "
+            "that the removed symbols are used. Breaking behavior_diffs, missing "
+            "candidate API diffs, unavailable required release-note evidence, "
+            "reviewer-identified unsupported vendor behavior, or recursive "
+            "runtime-contract impact remain hard blockers. Release-note status found "
+            "is collected evidence, not unavailable evidence, even when the summary "
+            "states that no package-version-specific entry was found."
+        )
+    if stage == "review":
+        prompt += " The review status must be exactly pass or reject."
+    return prompt
 
 
 def _stage_permissions(runtime: AgentRuntime, *, write_enabled: bool) -> PermissionProfile:
@@ -337,6 +542,19 @@ def _stage_permissions(runtime: AgentRuntime, *, write_enabled: bool) -> Permiss
         filesystem=permissions.filesystem,
         allowed_tools=("finish",),
     )
+
+
+def _stage_metadata(
+    runtime: AgentRuntime,
+    *,
+    stage: str,
+    context: RunContext,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"stage": stage, "run_id": context.run_id}
+    if runtime.kind is AgentRuntimeKind.CODEX_AGENT_SDK:
+        metadata["model"] = SDK_EVOLUTION_CODEX_MODEL
+        metadata["reasoning_effort"] = SDK_EVOLUTION_CODEX_REASONING_EFFORT
+    return metadata
 
 
 def _fixture_payload(stage: str, task: AgentTask) -> dict[str, Any]:

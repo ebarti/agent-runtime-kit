@@ -268,6 +268,29 @@ def run_refresh_preview(
     )
 
 
+def run_lock_update(
+    root: Path,
+    packages: Sequence[str],
+    *,
+    command_runner: CommandRunner | None = None,
+) -> CommandResult:
+    """Apply a targeted uv lock update with freshness cutoffs removed."""
+
+    command_runner = command_runner or run_command
+    env, removed = cutoff_free_env()
+    command = ["uv", "lock"]
+    for package in packages:
+        command.extend(("-P", package))
+    result = command_runner(tuple(command), cwd=root, env=env)
+    return CommandResult(
+        command=result.command,
+        returncode=result.returncode,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        removed_env=removed,
+    )
+
+
 def run_verification_commands(
     root: Path,
     commands: Sequence[str],

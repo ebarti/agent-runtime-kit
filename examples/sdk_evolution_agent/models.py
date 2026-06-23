@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +98,47 @@ class ApiDiff:
 
 
 @dataclass(frozen=True)
+class ReleaseNoteEvidence:
+    """Release-note evidence collected for one package interval."""
+
+    package: str
+    from_version: str | None
+    to_version: str | None
+    status: str
+    sources: tuple[SourceRef, ...] = ()
+    summaries: tuple[str, ...] = ()
+    checked_urls: tuple[str, ...] = ()
+    unavailable_reason: str = ""
+
+
+@dataclass(frozen=True)
+class BehaviorProbeResult:
+    """One deterministic behavior/contract probe result."""
+
+    package: str
+    version: str | None
+    scope: str
+    probe: str
+    status: str
+    summary: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class BehaviorDiff:
+    """Observed behavior difference between current and candidate probes."""
+
+    package: str
+    from_version: str | None
+    to_version: str | None
+    probe: str
+    severity: str
+    summary: str
+    before_status: str
+    after_status: str
+
+
+@dataclass(frozen=True)
 class RunOptions:
     """Configuration for one local agent run."""
 
@@ -107,10 +148,12 @@ class RunOptions:
     report_dir: Path = Path("reports/sdk-evolution")
     implementation_enabled: bool = False
     refresh_preview: bool = False
-    inspect_candidates: bool = False
+    inspect_candidates: bool = True
     create_branch: bool = False
     branch_name: str | None = None
     draft_pr: bool = False
+    pr_base: str | None = None
+    commit_message: str = "Run SDK evolution update"
     pr_title: str = "Adapt agent-runtime-kit to upstream SDK evolution"
 
 
