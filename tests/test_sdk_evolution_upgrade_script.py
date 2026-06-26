@@ -26,9 +26,11 @@ def test_upgrade_script_builds_all_package_report_command(tmp_path: Path) -> Non
 
     assert "--implementation-enabled" not in command
     assert "--create-branch" not in command
-    assert command[:7] == (
+    assert command[:9] == (
         "uv",
         "run",
+        "--extra",
+        "codex",
         "python",
         "-m",
         "examples.sdk_evolution_agent",
@@ -88,9 +90,7 @@ def test_upgrade_script_creates_unique_outer_worktree_and_runs_all_phases(
     assert calls[1][0][:4] == ("git", "worktree", "add", "-b")
     assert calls[1][0][4] == run.branch_name
     assert calls[1][0][5] == str(run.worktree_path)
-    assert ("uv", "run", "--extra", "codex", "python") in {
-        call[0][:5] for call in calls
-    }
+    assert ("uv", "run", "--extra", "codex", "python") in {call[0][:5] for call in calls}
     implementation_commands = [
         command for command, _cwd, _env in calls if "--implementation-enabled" in command
     ]

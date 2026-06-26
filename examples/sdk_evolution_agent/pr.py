@@ -42,12 +42,14 @@ def stage_paths(
     root: Path,
     paths: tuple[str, ...],
     *,
+    force: bool = False,
     command_runner: CommandRunner | None = None,
 ) -> CommandResult:
     """Stage paths for an autonomous SDK update PR."""
 
     command_runner = command_runner or run_command
-    return command_runner(("git", "add", *paths), cwd=root)
+    command = ("git", "add", "-f", *paths) if force else ("git", "add", *paths)
+    return command_runner(command, cwd=root)
 
 
 def commit_staged(

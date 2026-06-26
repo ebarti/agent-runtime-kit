@@ -228,16 +228,19 @@ def build_agent_command(
 ) -> tuple[str, ...]:
     """Build the SDK evolution agent command for all tracked packages."""
 
-    command = [
-        "uv",
-        "run",
-        "python",
-        "-m",
-        "examples.sdk_evolution_agent",
-        "--runtime",
-        config.runtime,
-        "--refresh-preview",
-    ]
+    command = ["uv", "run"]
+    if config.runtime == "codex-agent-sdk":
+        command.extend(("--extra", "codex"))
+    command.extend(
+        (
+            "python",
+            "-m",
+            "examples.sdk_evolution_agent",
+            "--runtime",
+            config.runtime,
+            "--refresh-preview",
+        )
+    )
     if implementation_enabled:
         command.extend(
             [
