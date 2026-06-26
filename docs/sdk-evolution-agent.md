@@ -32,9 +32,23 @@ When `--runtime codex-agent-sdk` is selected, the agent injects
 `CODEX_HOME=~/.codex_agent_runtime_sdk` into the Codex SDK subprocess. This keeps
 the dogfooded SDK evolution agent's Codex state separate from a user's normal
 Codex home while still using supported Codex authentication mechanisms. The
-directory is created with private permissions before the Codex runtime starts;
-authenticate that Codex home through supported Codex login/API-key/access-token
-flows before using it for real Codex-backed runs.
+directory is created with private permissions before the Codex runtime starts.
+Run the auth preflight before real Codex-backed SDK evolution runs:
+
+```bash
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+  uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+```
+
+The helper checks `codex login status` against the dedicated home and can refresh
+that home from `CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` when either supported
+credential is present. If no supported non-interactive credential is available,
+authenticate the dedicated home with the Codex CLI device flow:
+
+```bash
+env CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
+  uv run --extra codex codex login --device-auth
+```
 
 Codex-backed SDK evolution runs explicitly choose `gpt-5.5` with
 `reasoning_effort=xhigh` for the AI stages that analyze direction, decide the

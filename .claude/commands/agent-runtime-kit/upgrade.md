@@ -85,32 +85,34 @@ If unspecified, inspect all packages:
    - Antigravity: `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or Google Application
      Default Credentials with project/location environment variables.
 
-7. If the selected runtime is `codex-agent-sdk`, fail fast unless the dedicated
-   SDK Codex home is authenticated:
+7. If the selected runtime is `codex-agent-sdk`, prepare and verify fresh auth
+   for the dedicated SDK Codex home before running the evolution agent:
 
    ```bash
    env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-     CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
-     uv run --extra codex codex login status
+     uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
    ```
 
-   If this prints `Not logged in` or exits non-zero, STOP before running
-   `examples.sdk_evolution_agent`. Ask the user to authenticate the dedicated
-   SDK home through one supported path:
+   The helper creates `~/.codex_agent_runtime_sdk`, removes uv freshness cutoff
+   variables, checks `codex login status` against that exact home, and refreshes
+   through `CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` when either supported
+   credential is present. If it exits non-zero, STOP before running
+   `examples.sdk_evolution_agent` and use one supported recovery path:
 
    ```bash
    env CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
      uv run --extra codex codex login --device-auth
    ```
 
-   API-key and access-token paths are also supported:
+   Non-interactive API-key and access-token paths are also supported by rerunning
+   the helper with one of these environment variables set:
 
    ```bash
-   printenv OPENAI_API_KEY | env CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
-     uv run --extra codex codex login --with-api-key
+   env CODEX_ACCESS_TOKEN="$CODEX_ACCESS_TOKEN" \
+     uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
 
-   printenv CODEX_ACCESS_TOKEN | env CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
-     uv run --extra codex codex login --with-access-token
+   env OPENAI_API_KEY="$OPENAI_API_KEY" \
+     uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
    ```
 
 ## Report-Only Evidence Pass
