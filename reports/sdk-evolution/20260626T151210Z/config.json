@@ -1,0 +1,22 @@
+{
+  "branch_name": "sdk-evolution-module-proof-20260626-151158",
+  "commit_message": "Run SDK evolution update",
+  "create_branch": true,
+  "draft_pr": true,
+  "event_log_path": "/private/tmp/sdk-evolution-module-proof-20260626-151158/reports/sdk-evolution/20260626T151210Z/events.jsonl",
+  "implementation_enabled": true,
+  "inspect_candidates": true,
+  "packages": [
+    "claude-agent-sdk",
+    "openai-codex",
+    "openai-codex-cli-bin",
+    "google-antigravity"
+  ],
+  "pr_base": "sdk-evolution-upgrade-script-20260626",
+  "pr_title": "Run SDK evolution update across vendor packages",
+  "refresh_preview": true,
+  "report_dir": "reports/sdk-evolution",
+  "run_id": "20260626T151210Z",
+  "runtime": "codex-agent-sdk",
+  "workspace": "/private/tmp/sdk-evolution-module-proof-20260626-151158"
+}

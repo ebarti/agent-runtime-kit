@@ -1,0 +1,22 @@
+[
+  {
+    "after_status": "pass",
+    "before_status": "fail",
+    "from_version": "0.2.106",
+    "package": "claude-agent-sdk",
+    "probe": "adapter-contract",
+    "severity": "changed",
+    "summary": "Probe status changed from fail to pass.",
+    "to_version": "0.2.110"
+  },
+  {
+    "after_status": "pass",
+    "before_status": "fail",
+    "from_version": "0.1.4",
+    "package": "google-antigravity",
+    "probe": "adapter-contract",
+    "severity": "changed",
+    "summary": "Probe status changed from fail to pass.",
+    "to_version": "0.1.5"
+  }
+]

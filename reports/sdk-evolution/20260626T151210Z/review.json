@@ -1,0 +1,11 @@
+{
+  "reasons": [
+    "Candidate API diffs are present for the selected Claude and Antigravity updates.",
+    "Claude 0.2.110 exposes all required adapter fields and shows no public API symbol drift.",
+    "Antigravity 0.1.5 changes config classes, but the candidate contract probe shows all required LocalAgentConfig fields present.",
+    "No behavior diff is marked breaking; current-environment failures are missing-module availability signals, not contract regressions.",
+    "Release-note evidence is found for selected updates; Codex packages have no resolver-selected update."
+  ],
+  "required_changes": [],
+  "status": "pass"
+}

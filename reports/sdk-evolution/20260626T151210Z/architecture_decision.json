@@ -1,0 +1,64 @@
+{
+  "findings": [
+    {
+      "classification": "compatible-update",
+      "evidence": [
+        "API diff reports no added, changed, or removed symbols.",
+        "Candidate adapter-contract probe passes with all required ClaudeAgentOptions fields present.",
+        "Release-note evidence status is found.",
+        "Dry-run resolver selects 0.2.110 successfully."
+      ],
+      "summary": "Claude can advance from 0.2.106 to 0.2.110 without adapter design changes indicated."
+    },
+    {
+      "classification": "compatible-update-with-watch",
+      "evidence": [
+        "API diff marks AgentConfig and LocalAgentConfig as changed.",
+        "Candidate adapter-contract probe passes with all required LocalAgentConfig fields present.",
+        "Release-note evidence status is found.",
+        "Dry-run resolver selects 0.1.5 successfully."
+      ],
+      "summary": "Antigravity can advance from 0.1.4 to 0.1.5, with config-class changes worth watching but not blocking."
+    },
+    {
+      "classification": "no-action",
+      "evidence": [
+        "Installed, locked, and latest versions are all 0.1.0b3.",
+        "Current-environment adapter-contract probe passes for required thread start and run parameters.",
+        "Release notes are not needed because no resolver-selected update exists."
+      ],
+      "summary": "OpenAI Codex SDK remains at 0.1.0b3 with its adapter contract intact."
+    },
+    {
+      "classification": "no-action-policy-dependent",
+      "evidence": [
+        "Installed and locked version is 0.137.0a4.",
+        "Binary-distribution probe passes with metadata available.",
+        "Resolver dry run does not select a CLI binary change.",
+        "Reported latest metadata is 0.136.0 while recent versions include 0.137.0a4."
+      ],
+      "summary": "Codex CLI binary remains at 0.137.0a4 unless project policy rejects prerelease binary locks."
+    }
+  ],
+  "manual_design_required": false,
+  "recursive_self_adaptation_impact": false,
+  "safe_to_implement": true,
+  "self_adaptation_plan": [
+    "Update lock state for claude-agent-sdk to 0.2.110.",
+    "Update lock state for google-antigravity to 0.1.5.",
+    "Do not change adapter source based on the provided evidence.",
+    "Keep Codex packages unchanged.",
+    "Track Antigravity config-class semantics in verification because only required-field presence was proven."
+  ],
+  "uncertainty": [
+    "Antigravity LocalAgentConfig semantic changes are not described beyond required-field presence.",
+    "Candidate probes do not prove live task execution, authentication, streaming, or vendor runtime behavior.",
+    "Claude and Antigravity were not importable in the current environment before candidate probing.",
+    "Codex CLI prerelease lock policy is not specified."
+  ],
+  "verification_commands": [
+    "uv lock -P claude-agent-sdk -P google-antigravity",
+    "uv lock --dry-run -P claude-agent-sdk -P openai-codex -P openai-codex-cli-bin -P google-antigravity",
+    "uv run pytest"
+  ]
+}

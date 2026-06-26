@@ -1,0 +1,89 @@
+{
+  "allowed": true,
+  "applied": true,
+  "blocked_reason": "",
+  "changes": [
+    "Updated uv.lock for resolver-selected SDK packages: claude-agent-sdk, google-antigravity"
+  ],
+  "planned_changes": [
+    "Update lock state for claude-agent-sdk to 0.2.110.",
+    "Update lock state for google-antigravity to 0.1.5.",
+    "Do not change adapter source based on the provided evidence.",
+    "Keep Codex packages unchanged.",
+    "Track Antigravity config-class semantics in verification because only required-field presence was proven."
+  ],
+  "verification_results": [
+    {
+      "command": [
+        "git",
+        "switch",
+        "-c",
+        "sdk-evolution-module-proof-20260626-151158"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "Switched to a new branch 'sdk-evolution-module-proof-20260626-151158'\n",
+      "stdout": ""
+    },
+    {
+      "command": [
+        "uv",
+        "lock",
+        "-P",
+        "claude-agent-sdk",
+        "-P",
+        "google-antigravity"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "Resolved 69 packages in 97ms\nUpdated claude-agent-sdk v0.2.106 -> v0.2.110\nUpdated google-antigravity v0.1.4 -> v0.1.5\n",
+      "stdout": ""
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "ruff",
+        "check",
+        "."
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "All checks passed!\n"
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "mypy"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Success: no issues found in 14 source files\n"
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "pytest"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "============================= test session starts ==============================\nplatform darwin -- Python 3.10.13, pytest-9.0.3, pluggy-1.6.0\nrootdir: /private/tmp/sdk-evolution-module-proof-20260626-151158\nconfigfile: pyproject.toml\nplugins: asyncio-1.4.0\nasyncio: mode=strict, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollected 127 items\n\ntests/test_antigravity_adapter.py ..................                     [ 14%]\ntests/test_claude_adapter.py .................                           [ 27%]\ntests/test_codex_adapter.py .......................                      [ 45%]\ntests/test_core.py ....                                                  [ 48%]\ntests/test_events.py .....                                               [ 52%]\ntests/test_live_smoke.py sss                                             [ 55%]\ntests/test_mestre_compatibility.py ..                                    [ 56%]\ntests/test_optional_dependencies.py .                                    [ 57%]\ntests/test_provider_diagnostics.py .                                     [ 58%]\ntests/test_sdk_contract.py ss....sss                                     [ 65%]\ntests/test_sdk_evolution_agent.py ...................................... [ 95%]\n.                                                                        [ 96%]\ntests/test_sdk_evolution_upgrade_script.py .....                         [100%]\n\n======================== 119 passed, 8 skipped in 0.51s ========================\n"
+    },
+    {
+      "command": [
+        "uv",
+        "lock",
+        "--check"
+      ],
+      "removed_env": [],
+      "returncode": 0,
+      "stderr": "Resolved 69 packages in 4ms\n",
+      "stdout": ""
+    }
+  ]
+}
