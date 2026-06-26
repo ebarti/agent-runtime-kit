@@ -42,7 +42,10 @@ Default runtime for this Codex skill: `codex-agent-sdk`.
      uv run python -m examples.sdk_evolution_agent --help
    ```
 
-4. Use supported provider auth only:
+4. Resolve the runtime that will run the AI-backed stages. Use
+   `codex-agent-sdk` unless the user explicitly selected another runtime.
+
+5. Use supported provider auth only:
    - Claude: Anthropic API key, Claude Code auth, or Claude Code provider
      settings such as Bedrock or Vertex. Bedrock must use the AWS SDK credential
      chain; Vertex must use Google Application Default Credentials or supported
@@ -52,6 +55,36 @@ Default runtime for this Codex skill: `codex-agent-sdk`.
      authenticate that home before live Codex-backed runs.
    - Antigravity: `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or Google Application
      Default Credentials with a project and optional location variables.
+
+6. If the selected runtime is `codex-agent-sdk`, prepare and verify fresh auth
+   for the dedicated SDK Codex home before running the evolution agent:
+
+   ```bash
+   env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+     uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+   ```
+
+   The helper creates `~/.codex_agent_runtime_sdk`, removes uv freshness cutoff
+   variables, checks `codex login status` against that exact home, and refreshes
+   through `CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` when either supported
+   credential is present. If it exits non-zero, STOP before running
+   `examples.sdk_evolution_agent` and use one supported recovery path:
+
+   ```bash
+   env CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
+     uv run --extra codex codex login --device-auth
+   ```
+
+   Non-interactive API-key and access-token paths are also supported by rerunning
+   the helper with one of these environment variables set:
+
+   ```bash
+   env CODEX_ACCESS_TOKEN="$CODEX_ACCESS_TOKEN" \
+     uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+
+   env OPENAI_API_KEY="$OPENAI_API_KEY" \
+     uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+   ```
 
 ## Report-Only First
 
@@ -138,4 +171,3 @@ If a draft PR was created, watch CI until it finishes or clearly report that it
 is still running. Final output should include the PR URL, report path, changed
 SDK versions, architecture decision, reviewer result, test results, uncertainty,
 and manual review checklist.
-

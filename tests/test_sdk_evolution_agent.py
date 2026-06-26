@@ -18,6 +18,8 @@ from agent_runtime_kit import (
     RuntimeAvailability,
 )
 from agent_runtime_kit.adapters import CodexAgentRuntime
+from examples.sdk_evolution_agent import auth as auth_module
+from examples.sdk_evolution_agent.auth import CodexAuthResult, ensure_codex_sdk_auth
 from examples.sdk_evolution_agent.behavior import (
     collect_behavior_evidence,
     diff_behavior_results,
@@ -992,6 +994,166 @@ def test_build_registry_injects_isolated_codex_home() -> None:
     assert runtime._default_model == SDK_EVOLUTION_CODEX_MODEL
     assert runtime._env is not None
     assert runtime._env["CODEX_HOME"] == str(SDK_EVOLUTION_CODEX_HOME)
+
+
+def test_codex_auth_helper_accepts_fresh_dedicated_home(tmp_path: Path) -> None:
+    calls: list[tuple[tuple[str, ...], dict[str, str], str | None]] = []
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        env: dict[str, str],
+        stdin: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del timeout
+        calls.append((command, env, stdin))
+        return CommandResult(command=command, returncode=0, stdout="Logged in using ChatGPT\n")
+
+    result = ensure_codex_sdk_auth(
+        codex_home=tmp_path / "codex-home",
+        env={
+            "UV_EXCLUDE_NEWER": "2026-01-01",
+            "UV_EXCLUDE_NEWER_PACKAGE_OPENAI_CODEX": "2026-01-01",
+        },
+        command_runner=runner,
+    )
+
+    assert result.ok is True
+    assert result.refresh_result is None
+    assert result.removed_env == (
+        "UV_EXCLUDE_NEWER",
+        "UV_EXCLUDE_NEWER_PACKAGE_OPENAI_CODEX",
+    )
+    assert calls == [
+        (
+            ("codex", "login", "status"),
+            {"CODEX_HOME": str(tmp_path / "codex-home")},
+            None,
+        )
+    ]
+    assert (tmp_path / "codex-home").is_dir()
+
+
+def test_codex_auth_helper_refreshes_with_access_token(tmp_path: Path) -> None:
+    calls: list[tuple[tuple[str, ...], str | None]] = []
+    status_calls = 0
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        env: dict[str, str],
+        stdin: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        nonlocal status_calls
+        del env, timeout
+        calls.append((command, stdin))
+        if command == ("codex", "login", "status"):
+            status_calls += 1
+            if status_calls == 1:
+                return CommandResult(command=command, returncode=1, stdout="Not logged in\n")
+            return CommandResult(command=command, returncode=0, stdout="Logged in using ChatGPT\n")
+        return CommandResult(command=command, returncode=0)
+
+    result = ensure_codex_sdk_auth(
+        codex_home=tmp_path / "codex-home",
+        env={"CODEX_ACCESS_TOKEN": "token-value", "OPENAI_API_KEY": "api-key"},
+        command_runner=runner,
+    )
+
+    assert result.ok is True
+    assert result.refresh_result is not None
+    assert calls == [
+        (("codex", "login", "status"), None),
+        (("codex", "login", "--with-access-token"), "token-value\n"),
+        (("codex", "login", "status"), None),
+    ]
+
+
+def test_codex_auth_helper_refreshes_with_api_key(tmp_path: Path) -> None:
+    calls: list[tuple[tuple[str, ...], str | None]] = []
+    status_calls = 0
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        env: dict[str, str],
+        stdin: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        nonlocal status_calls
+        del env, timeout
+        calls.append((command, stdin))
+        if command == ("codex", "login", "status"):
+            status_calls += 1
+            if status_calls == 1:
+                return CommandResult(command=command, returncode=1, stdout="Not logged in\n")
+            return CommandResult(command=command, returncode=0, stdout="Logged in using ChatGPT\n")
+        return CommandResult(command=command, returncode=0)
+
+    result = ensure_codex_sdk_auth(
+        codex_home=tmp_path / "codex-home",
+        env={"OPENAI_API_KEY": "api-key"},
+        command_runner=runner,
+    )
+
+    assert result.ok is True
+    assert calls == [
+        (("codex", "login", "status"), None),
+        (("codex", "login", "--with-api-key"), "api-key\n"),
+        (("codex", "login", "status"), None),
+    ]
+
+
+def test_codex_auth_helper_blocks_without_supported_credential(tmp_path: Path) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        env: dict[str, str],
+        stdin: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del env, stdin, timeout
+        calls.append(command)
+        return CommandResult(command=command, returncode=1, stdout="Not logged in\n")
+
+    result = ensure_codex_sdk_auth(
+        codex_home=tmp_path / "codex-home",
+        env={},
+        command_runner=runner,
+    )
+
+    assert result.ok is False
+    assert calls == [("codex", "login", "status")]
+    assert "codex login --device-auth" in result.message
+
+
+def test_codex_auth_cli_uses_codex_home_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Path] = {}
+
+    def fake_ensure(*, codex_home: Path) -> CodexAuthResult:
+        seen["codex_home"] = codex_home
+        command = ("codex", "login", "status")
+        status = CommandResult(command=command, returncode=0)
+        return CodexAuthResult(
+            ok=True,
+            codex_home=codex_home,
+            initial_status=status,
+            final_status=status,
+            message="ready",
+        )
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "from-env"))
+    monkeypatch.setattr(auth_module, "ensure_codex_sdk_auth", fake_ensure)
+
+    assert auth_module.main(["ensure-codex"]) == 0
+    assert seen["codex_home"] == tmp_path / "from-env"
 
 
 class RecordingRuntime:

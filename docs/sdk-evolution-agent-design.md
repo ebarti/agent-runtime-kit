@@ -166,6 +166,20 @@ python -m examples.sdk_evolution_agent --runtime codex-agent-sdk --refresh-previ
 python -m examples.sdk_evolution_agent --runtime antigravity-agent-sdk --refresh-preview
 ```
 
+Before a Codex-backed run, prepare the dedicated SDK evolution auth home:
+
+```bash
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+  uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+```
+
+This helper owns the operator-readiness boundary for Codex-backed runs. It
+creates `~/.codex_agent_runtime_sdk`, checks supported Codex CLI login status for
+that exact home, refreshes through `CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` when
+provided, and otherwise stops before any AI-backed stage starts. It must not
+copy credentials from the user's normal Codex home or inspect unsupported
+credential stores.
+
 When `codex-agent-sdk` is selected for SDK update work, every AI-backed stage
 should run on `gpt-5.5` with `reasoning_effort=xhigh`. This is a Codex runtime
 policy, not a portable metadata field: Claude and Antigravity runs should not
