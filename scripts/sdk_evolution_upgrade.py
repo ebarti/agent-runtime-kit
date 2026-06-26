@@ -87,7 +87,11 @@ def parse_args(argv: Sequence[str] | None = None) -> UpgradeConfig:
         default=DEFAULT_RUNTIME,
         help="agent-runtime-kit runtime used for AI-backed analysis and review.",
     )
-    parser.add_argument("--base", default=DEFAULT_BASE, help="Git base for the fresh worktree.")
+    parser.add_argument(
+        "--base",
+        default=DEFAULT_BASE,
+        help="Git base for the fresh worktree. Defaults to origin/main after fetch.",
+    )
     parser.add_argument(
         "--worktree-parent",
         type=Path,

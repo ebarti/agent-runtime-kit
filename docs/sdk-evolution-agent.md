@@ -34,7 +34,7 @@ For the real local upgrade workflow, use the checked-in script directly:
 
 ```bash
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-  uv run python scripts/sdk_evolution_upgrade.py --runtime codex-agent-sdk
+  uv run python scripts/sdk_evolution_upgrade.py
 ```
 
 The script always targets all tracked upstream SDK packages:
@@ -44,11 +44,12 @@ The script always targets all tracked upstream SDK packages:
 - `openai-codex-cli-bin`
 - `google-antigravity`
 
-It creates a collision-free branch and worktree, runs the report-only evidence
-and decision pass first, then runs the implementation and draft-PR pass unless
-`--report-only` is set. The generated worktree path and branch include a
-timestamp and random suffix, so rerunning the script does not collide with a
-previous run.
+By default it uses `codex-agent-sdk`, fetches `origin`, creates a
+collision-free branch and worktree from the updated `origin/main` baseline,
+targets every tracked upstream SDK package, runs the report-only evidence and
+decision pass first, then runs the implementation and draft-PR pass. The
+generated worktree path and branch include a timestamp and random suffix, so
+rerunning the script does not collide with a previous run.
 
 Use report-only mode when you want evidence and decisions without edits:
 

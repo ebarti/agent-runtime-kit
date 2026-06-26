@@ -169,7 +169,7 @@ python -m examples.sdk_evolution_agent --runtime antigravity-agent-sdk --refresh
 The canonical end-to-end upgrade entrypoint is the checked-in script:
 
 ```bash
-uv run python scripts/sdk_evolution_upgrade.py --runtime codex-agent-sdk
+uv run python scripts/sdk_evolution_upgrade.py
 ```
 
 The script owns operator workflow details that should not live as copied

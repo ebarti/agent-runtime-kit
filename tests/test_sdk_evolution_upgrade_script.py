@@ -8,11 +8,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from examples.sdk_evolution_agent.models import DEFAULT_PACKAGES
 from scripts.sdk_evolution_upgrade import (
+    DEFAULT_BASE,
+    DEFAULT_RUNTIME,
     UpgradeConfig,
     build_agent_command,
     cutoff_free_env,
+    parse_args,
     run_upgrade,
 )
+
+
+def test_upgrade_script_defaults_to_full_codex_upgrade_from_main() -> None:
+    config = parse_args([])
+
+    assert config.runtime == DEFAULT_RUNTIME
+    assert config.base == DEFAULT_BASE
+    assert config.report_only is False
+    assert config.draft_pr is True
+    assert config.branch_prefix == "sdk-evolution-upgrade"
 
 
 def test_upgrade_script_builds_all_package_report_command(tmp_path: Path) -> None:
