@@ -30,11 +30,11 @@ structured output.
 
 ## Upgrade Script
 
-For the real local upgrade workflow, use the checked-in script directly:
+For the real local upgrade workflow, use the named command from the repo root:
 
 ```bash
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-  uv run python scripts/sdk_evolution_upgrade.py
+  uv run sdk-evolution-upgrade
 ```
 
 The script always targets all tracked upstream SDK packages:
@@ -55,7 +55,7 @@ Use report-only mode when you want evidence and decisions without edits:
 
 ```bash
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-  uv run python scripts/sdk_evolution_upgrade.py --runtime codex-agent-sdk --report-only
+  uv run sdk-evolution-upgrade --report-only
 ```
 
 When `--runtime codex-agent-sdk` is selected, the agent injects

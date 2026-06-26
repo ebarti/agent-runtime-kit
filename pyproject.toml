@@ -40,6 +40,9 @@ Homepage = "https://github.com/ebarti/agent-runtime-kit"
 Repository = "https://github.com/ebarti/agent-runtime-kit"
 Issues = "https://github.com/ebarti/agent-runtime-kit/issues"
 
+[project.scripts]
+sdk-evolution-upgrade = "agent_runtime_kit.sdk_evolution_upgrade:main"
+
 [dependency-groups]
 dev = [
     "build>=1.2",

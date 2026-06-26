@@ -166,10 +166,10 @@ python -m examples.sdk_evolution_agent --runtime codex-agent-sdk --refresh-previ
 python -m examples.sdk_evolution_agent --runtime antigravity-agent-sdk --refresh-preview
 ```
 
-The canonical end-to-end upgrade entrypoint is the checked-in script:
+The canonical end-to-end upgrade entrypoint is the named repo-local command:
 
 ```bash
-uv run python scripts/sdk_evolution_upgrade.py
+uv run sdk-evolution-upgrade
 ```
 
 The script owns operator workflow details that should not live as copied

@@ -6,6 +6,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from agent_runtime_kit.sdk_evolution_upgrade import find_repo_root
 from examples.sdk_evolution_agent.models import DEFAULT_PACKAGES
 from scripts.sdk_evolution_upgrade import (
     DEFAULT_BASE,
@@ -16,6 +17,21 @@ from scripts.sdk_evolution_upgrade import (
     parse_args,
     run_upgrade,
 )
+
+
+def test_named_upgrade_command_is_declared() -> None:
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+
+    assert (
+        'sdk-evolution-upgrade = "agent_runtime_kit.sdk_evolution_upgrade:main"'
+        in pyproject.read_text(encoding="utf-8")
+    )
+
+
+def test_named_upgrade_entrypoint_finds_repo_root() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+
+    assert find_repo_root(repo_root / "tests") == repo_root
 
 
 def test_upgrade_script_defaults_to_full_codex_upgrade_from_main() -> None:
