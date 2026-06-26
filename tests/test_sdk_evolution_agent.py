@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import stat
 import sys
 import types
 from pathlib import Path
@@ -996,23 +998,34 @@ def test_build_registry_injects_isolated_codex_home() -> None:
     assert runtime._env["CODEX_HOME"] == str(SDK_EVOLUTION_CODEX_HOME)
 
 
-def test_codex_auth_helper_accepts_fresh_dedicated_home(tmp_path: Path) -> None:
-    calls: list[tuple[tuple[str, ...], dict[str, str], str | None]] = []
+def test_codex_auth_helper_copies_newer_primary_auth_to_dedicated_home(
+    tmp_path: Path,
+) -> None:
+    source_auth = tmp_path / ".codex" / "auth.json"
+    target_auth = tmp_path / "codex-home" / "auth.json"
+    source_auth.parent.mkdir()
+    target_auth.parent.mkdir()
+    source_auth.write_text('{"access_token":"fresh"}', encoding="utf-8")
+    target_auth.write_text('{"access_token":"stale"}', encoding="utf-8")
+    os.utime(source_auth, (200.0, 200.0))
+    os.utime(target_auth, (100.0, 100.0))
+    calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
 
     def runner(
         command: tuple[str, ...],
         *,
         env: dict[str, str],
-        stdin: str | None = None,
         timeout: int = 60,
     ) -> CommandResult:
         del timeout
-        calls.append((command, env, stdin))
+        calls.append((command, env))
         return CommandResult(command=command, returncode=0, stdout="Logged in using ChatGPT\n")
 
     result = ensure_codex_sdk_auth(
         codex_home=tmp_path / "codex-home",
+        home_dir=tmp_path,
         env={
+            "CODEX_HOME": str(tmp_path / "ambient-codex"),
             "UV_EXCLUDE_NEWER": "2026-01-01",
             "UV_EXCLUDE_NEWER_PACKAGE_OPENAI_CODEX": "2026-01-01",
         },
@@ -1020,7 +1033,7 @@ def test_codex_auth_helper_accepts_fresh_dedicated_home(tmp_path: Path) -> None:
     )
 
     assert result.ok is True
-    assert result.refresh_result is None
+    assert result.auth_copied is True
     assert result.removed_env == (
         "UV_EXCLUDE_NEWER",
         "UV_EXCLUDE_NEWER_PACKAGE_OPENAI_CODEX",
@@ -1029,99 +1042,91 @@ def test_codex_auth_helper_accepts_fresh_dedicated_home(tmp_path: Path) -> None:
         (
             ("codex", "login", "status"),
             {"CODEX_HOME": str(tmp_path / "codex-home")},
-            None,
         )
     ]
-    assert (tmp_path / "codex-home").is_dir()
+    assert target_auth.read_text(encoding="utf-8") == '{"access_token":"fresh"}'
+    assert stat.S_IMODE(target_auth.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(target_auth.stat().st_mode) == 0o600
 
 
-def test_codex_auth_helper_refreshes_with_access_token(tmp_path: Path) -> None:
-    calls: list[tuple[tuple[str, ...], str | None]] = []
-    status_calls = 0
-
-    def runner(
-        command: tuple[str, ...],
-        *,
-        env: dict[str, str],
-        stdin: str | None = None,
-        timeout: int = 60,
-    ) -> CommandResult:
-        nonlocal status_calls
-        del env, timeout
-        calls.append((command, stdin))
-        if command == ("codex", "login", "status"):
-            status_calls += 1
-            if status_calls == 1:
-                return CommandResult(command=command, returncode=1, stdout="Not logged in\n")
-            return CommandResult(command=command, returncode=0, stdout="Logged in using ChatGPT\n")
-        return CommandResult(command=command, returncode=0)
-
-    result = ensure_codex_sdk_auth(
-        codex_home=tmp_path / "codex-home",
-        env={"CODEX_ACCESS_TOKEN": "token-value", "OPENAI_API_KEY": "api-key"},
-        command_runner=runner,
-    )
-
-    assert result.ok is True
-    assert result.refresh_result is not None
-    assert calls == [
-        (("codex", "login", "status"), None),
-        (("codex", "login", "--with-access-token"), "token-value\n"),
-        (("codex", "login", "status"), None),
-    ]
-
-
-def test_codex_auth_helper_refreshes_with_api_key(tmp_path: Path) -> None:
-    calls: list[tuple[tuple[str, ...], str | None]] = []
-    status_calls = 0
+def test_codex_auth_helper_keeps_newer_dedicated_auth(tmp_path: Path) -> None:
+    source_auth = tmp_path / ".codex" / "auth.json"
+    target_auth = tmp_path / "codex-home" / "auth.json"
+    source_auth.parent.mkdir()
+    target_auth.parent.mkdir()
+    source_auth.write_text('{"access_token":"primary"}', encoding="utf-8")
+    target_auth.write_text('{"access_token":"isolated"}', encoding="utf-8")
+    target_auth.parent.chmod(0o755)
+    target_auth.chmod(0o644)
+    os.utime(source_auth, (100.0, 100.0))
+    os.utime(target_auth, (200.0, 200.0))
 
     def runner(
         command: tuple[str, ...],
         *,
         env: dict[str, str],
-        stdin: str | None = None,
         timeout: int = 60,
     ) -> CommandResult:
-        nonlocal status_calls
         del env, timeout
-        calls.append((command, stdin))
-        if command == ("codex", "login", "status"):
-            status_calls += 1
-            if status_calls == 1:
-                return CommandResult(command=command, returncode=1, stdout="Not logged in\n")
-            return CommandResult(command=command, returncode=0, stdout="Logged in using ChatGPT\n")
-        return CommandResult(command=command, returncode=0)
+        return CommandResult(command=command, returncode=0, stdout="Logged in using ChatGPT\n")
 
     result = ensure_codex_sdk_auth(
         codex_home=tmp_path / "codex-home",
-        env={"OPENAI_API_KEY": "api-key"},
+        home_dir=tmp_path,
+        env={},
         command_runner=runner,
     )
 
     assert result.ok is True
-    assert calls == [
-        (("codex", "login", "status"), None),
-        (("codex", "login", "--with-api-key"), "api-key\n"),
-        (("codex", "login", "status"), None),
-    ]
+    assert result.auth_copied is False
+    assert target_auth.read_text(encoding="utf-8") == '{"access_token":"isolated"}'
+    assert stat.S_IMODE(target_auth.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(target_auth.stat().st_mode) == 0o600
 
 
-def test_codex_auth_helper_blocks_without_supported_credential(tmp_path: Path) -> None:
+def test_codex_auth_helper_does_not_use_token_or_api_key_env(tmp_path: Path) -> None:
+    source_auth = tmp_path / ".codex" / "auth.json"
+    source_auth.parent.mkdir()
+    source_auth.write_text('{"access_token":"fresh"}', encoding="utf-8")
     calls: list[tuple[str, ...]] = []
 
     def runner(
         command: tuple[str, ...],
         *,
         env: dict[str, str],
-        stdin: str | None = None,
         timeout: int = 60,
     ) -> CommandResult:
-        del env, stdin, timeout
+        del env, timeout
+        calls.append(command)
+        return CommandResult(command=command, returncode=0, stdout="Logged in using ChatGPT\n")
+
+    result = ensure_codex_sdk_auth(
+        codex_home=tmp_path / "codex-home",
+        home_dir=tmp_path,
+        env={"CODEX_ACCESS_TOKEN": "token-value", "OPENAI_API_KEY": "api-key"},
+        command_runner=runner,
+    )
+
+    assert result.ok is True
+    assert calls == [("codex", "login", "status")]
+
+
+def test_codex_auth_helper_blocks_when_copied_cache_is_not_authenticated(tmp_path: Path) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        env: dict[str, str],
+        timeout: int = 60,
+    ) -> CommandResult:
+        del env, timeout
         calls.append(command)
         return CommandResult(command=command, returncode=1, stdout="Not logged in\n")
 
     result = ensure_codex_sdk_auth(
         codex_home=tmp_path / "codex-home",
+        home_dir=tmp_path,
         env={},
         command_runner=runner,
     )
@@ -1129,6 +1134,8 @@ def test_codex_auth_helper_blocks_without_supported_credential(tmp_path: Path) -
     assert result.ok is False
     assert calls == [("codex", "login", "status")]
     assert "codex login --device-auth" in result.message
+    assert "CODEX_ACCESS_TOKEN" not in result.message
+    assert "OPENAI_API_KEY" not in result.message
 
 
 def test_codex_auth_cli_uses_codex_home_env(

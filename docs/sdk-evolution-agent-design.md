@@ -175,10 +175,9 @@ env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
 
 This helper owns the operator-readiness boundary for Codex-backed runs. It
 creates `~/.codex_agent_runtime_sdk`, checks supported Codex CLI login status for
-that exact home, refreshes through `CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` when
-provided, and otherwise stops before any AI-backed stage starts. It must not
-copy credentials from the user's normal Codex home or inspect unsupported
-credential stores.
+that exact home, and mirrors the supported normal Codex login cache from
+`~/.codex/auth.json` when that cache is newer. It must not parse credentials,
+ask for access tokens, or inspect unsupported credential stores.
 
 When `codex-agent-sdk` is selected for SDK update work, every AI-backed stage
 should run on `gpt-5.5` with `reasoning_effort=xhigh`. This is a Codex runtime

@@ -50,9 +50,9 @@ Default runtime for this Codex skill: `codex-agent-sdk`.
      settings such as Bedrock or Vertex. Bedrock must use the AWS SDK credential
      chain; Vertex must use Google Application Default Credentials or supported
      environment variables.
-   - Codex: supported Codex login/API-key/access-token config. The runner
-     injects `CODEX_HOME=~/.codex_agent_runtime_sdk` for Codex-backed stages, so
-     authenticate that home before live Codex-backed runs.
+   - Codex: supported local Codex login cache. The runner injects
+     `CODEX_HOME=~/.codex_agent_runtime_sdk` for Codex-backed stages and mirrors
+     the normal `~/.codex/auth.json` cache into that isolated home before use.
    - Antigravity: `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or Google Application
      Default Credentials with a project and optional location variables.
 
@@ -65,24 +65,14 @@ Default runtime for this Codex skill: `codex-agent-sdk`.
    ```
 
    The helper creates `~/.codex_agent_runtime_sdk`, removes uv freshness cutoff
-   variables, checks `codex login status` against that exact home, and refreshes
-   through `CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` when either supported
-   credential is present. If it exits non-zero, STOP before running
-   `examples.sdk_evolution_agent` and use one supported recovery path:
+   variables, mirrors `~/.codex/auth.json` into that isolated home when the
+   normal cache is newer, and checks `codex login status` against that exact
+   home. If it exits non-zero, STOP before running `examples.sdk_evolution_agent`
+   and refresh the normal Codex login cache:
 
    ```bash
-   env CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
-     uv run --extra codex codex login --device-auth
-   ```
-
-   Non-interactive API-key and access-token paths are also supported by rerunning
-   the helper with one of these environment variables set:
-
-   ```bash
-   env CODEX_ACCESS_TOKEN="$CODEX_ACCESS_TOKEN" \
-     uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
-
-   env OPENAI_API_KEY="$OPENAI_API_KEY" \
+   uv run --extra codex codex login --device-auth
+   env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
      uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
    ```
 
