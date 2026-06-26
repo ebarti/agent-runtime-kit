@@ -42,7 +42,10 @@ Default runtime for this Codex skill: `codex-agent-sdk`.
      uv run python -m examples.sdk_evolution_agent --help
    ```
 
-4. Use supported provider auth only:
+4. Resolve the runtime that will run the AI-backed stages. Use
+   `codex-agent-sdk` unless the user explicitly selected another runtime.
+
+5. Use supported provider auth only:
    - Claude: Anthropic API key, Claude Code auth, or Claude Code provider
      settings such as Bedrock or Vertex. Bedrock must use the AWS SDK credential
      chain; Vertex must use Google Application Default Credentials or supported
@@ -52,6 +55,34 @@ Default runtime for this Codex skill: `codex-agent-sdk`.
      authenticate that home before live Codex-backed runs.
    - Antigravity: `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or Google Application
      Default Credentials with a project and optional location variables.
+
+6. If the selected runtime is `codex-agent-sdk`, fail fast unless the dedicated
+   SDK Codex home is authenticated:
+
+   ```bash
+   env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+     CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
+     uv run --extra codex codex login status
+   ```
+
+   If this prints `Not logged in` or exits non-zero, STOP before running
+   `examples.sdk_evolution_agent`. Ask the user to authenticate the dedicated
+   SDK home through one supported path:
+
+   ```bash
+   env CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
+     uv run --extra codex codex login --device-auth
+   ```
+
+   API-key and access-token paths are also supported:
+
+   ```bash
+   printenv OPENAI_API_KEY | env CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
+     uv run --extra codex codex login --with-api-key
+
+   printenv CODEX_ACCESS_TOKEN | env CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
+     uv run --extra codex codex login --with-access-token
+   ```
 
 ## Report-Only First
 
@@ -138,4 +169,3 @@ If a draft PR was created, watch CI until it finishes or clearly report that it
 is still running. Final output should include the PR URL, report path, changed
 SDK versions, architecture decision, reviewer result, test results, uncertainty,
 and manual review checklist.
-
