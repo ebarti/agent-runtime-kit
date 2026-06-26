@@ -23,6 +23,7 @@ from agent_runtime_kit import (
 from agent_runtime_kit.adapters import CodexAgentRuntime, register_adapters
 from agent_runtime_kit.events import safe_emit, task_completed_event, task_started_event
 from agent_runtime_kit.registry import create_default_registry
+from examples.sdk_evolution_agent.auth import prepare_isolated_codex_home
 from examples.sdk_evolution_agent.models import (
     RUNTIME_CONTRACT_SYMBOLS,
     ApiDiff,
@@ -103,10 +104,9 @@ def build_registry() -> RuntimeRegistry:
 
 
 def _codex_evolution_runtime(**kwargs: Any) -> CodexAgentRuntime:
-    SDK_EVOLUTION_CODEX_HOME.mkdir(mode=0o700, parents=True, exist_ok=True)
-    SDK_EVOLUTION_CODEX_HOME.chmod(0o700)
+    codex_home = prepare_isolated_codex_home(codex_home=SDK_EVOLUTION_CODEX_HOME)
     env = dict(kwargs.pop("env", {}) or {})
-    env.setdefault("CODEX_HOME", str(SDK_EVOLUTION_CODEX_HOME))
+    env.setdefault("CODEX_HOME", str(codex_home))
     kwargs.setdefault("default_model", SDK_EVOLUTION_CODEX_MODEL)
     return CodexAgentRuntime(env=env, **kwargs)
 

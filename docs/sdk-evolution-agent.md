@@ -41,13 +41,14 @@ env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
 ```
 
 The helper checks `codex login status` against the dedicated home and can refresh
-that home from `CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` when either supported
-credential is present. If no supported non-interactive credential is available,
-authenticate the dedicated home with the Codex CLI device flow:
+that home by copying the normal `~/.codex/auth.json` cache when it is newer. If
+the helper reports that the isolated home is not authenticated, refresh the
+normal Codex login cache and rerun the helper:
 
 ```bash
-env CODEX_HOME="$HOME/.codex_agent_runtime_sdk" \
-  uv run --extra codex codex login --device-auth
+uv run --extra codex codex login --device-auth
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+  uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
 ```
 
 Codex-backed SDK evolution runs explicitly choose `gpt-5.5` with

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -14,6 +15,7 @@ from examples.sdk_evolution_agent.collectors import cutoff_free_env
 from examples.sdk_evolution_agent.models import CommandResult
 
 DEFAULT_CODEX_HOME = Path("~/.codex_agent_runtime_sdk").expanduser()
+USER_CODEX_HOME_DIRNAME = ".codex"
 CodexCommandRunner = Callable[..., CommandResult]
 
 
@@ -25,7 +27,7 @@ class CodexAuthResult:
     codex_home: Path
     initial_status: CommandResult
     final_status: CommandResult
-    refresh_result: CommandResult | None = None
+    auth_copied: bool = False
     removed_env: tuple[str, ...] = ()
     message: str = ""
 
@@ -33,71 +35,43 @@ class CodexAuthResult:
 def ensure_codex_sdk_auth(
     *,
     codex_home: Path = DEFAULT_CODEX_HOME,
+    home_dir: Path | None = None,
     env: Mapping[str, str] | None = None,
     command_runner: CodexCommandRunner | None = None,
 ) -> CodexAuthResult:
     """Ensure the dedicated SDK evolution Codex home has fresh supported auth."""
 
     command_runner = command_runner or run_codex_command
+    home = Path.home() if home_dir is None else Path(home_dir).expanduser()
     codex_home = codex_home.expanduser()
-    codex_home.mkdir(mode=0o700, parents=True, exist_ok=True)
-    codex_home.chmod(0o700)
+    source_auth = home / USER_CODEX_HOME_DIRNAME / "auth.json"
+    target_auth = codex_home / "auth.json"
+    auth_copied = _copy_newer_file(source_auth, target_auth, mode=0o600)
 
     clean_env, removed = cutoff_free_env(env)
     clean_env["CODEX_HOME"] = str(codex_home)
 
-    initial_status = command_runner(("codex", "login", "status"), env=clean_env, timeout=30)
-    if initial_status.returncode == 0:
+    status = command_runner(("codex", "login", "status"), env=clean_env, timeout=30)
+    if status.returncode == 0:
+        verb = "refreshed" if auth_copied else "ready"
         return CodexAuthResult(
             ok=True,
             codex_home=codex_home,
-            initial_status=initial_status,
-            final_status=initial_status,
+            initial_status=status,
+            final_status=status,
+            auth_copied=auth_copied,
             removed_env=removed,
-            message=f"Codex auth ready for CODEX_HOME={codex_home}",
+            message=f"Codex auth {verb} for CODEX_HOME={codex_home}",
         )
-
-    refresh_result: CommandResult | None = None
-    token = clean_env.get("CODEX_ACCESS_TOKEN")
-    api_key = clean_env.get("OPENAI_API_KEY")
-    if token:
-        refresh_result = command_runner(
-            ("codex", "login", "--with-access-token"),
-            env=clean_env,
-            stdin=_stdin_secret(token),
-            timeout=60,
-        )
-    elif api_key:
-        refresh_result = command_runner(
-            ("codex", "login", "--with-api-key"),
-            env=clean_env,
-            stdin=_stdin_secret(api_key),
-            timeout=60,
-        )
-
-    if refresh_result is not None and refresh_result.returncode == 0:
-        final_status = command_runner(("codex", "login", "status"), env=clean_env, timeout=30)
-        if final_status.returncode == 0:
-            return CodexAuthResult(
-                ok=True,
-                codex_home=codex_home,
-                initial_status=initial_status,
-                final_status=final_status,
-                refresh_result=refresh_result,
-                removed_env=removed,
-                message=f"Codex auth refreshed for CODEX_HOME={codex_home}",
-            )
-    else:
-        final_status = initial_status
 
     return CodexAuthResult(
         ok=False,
         codex_home=codex_home,
-        initial_status=initial_status,
-        final_status=final_status,
-        refresh_result=refresh_result,
+        initial_status=status,
+        final_status=status,
+        auth_copied=auth_copied,
         removed_env=removed,
-        message=codex_auth_recovery_message(codex_home),
+        message=codex_auth_recovery_message(codex_home, source_auth=source_auth),
     )
 
 
@@ -105,16 +79,14 @@ def run_codex_command(
     command: Sequence[str],
     *,
     env: Mapping[str, str],
-    stdin: str | None = None,
     timeout: int = 60,
 ) -> CommandResult:
-    """Run a Codex CLI auth command without exposing stdin secrets."""
+    """Run a Codex CLI auth command."""
 
     try:
         completed = subprocess.run(
             tuple(command),
             env=dict(env),
-            input=stdin,
             text=True,
             capture_output=True,
             timeout=timeout,
@@ -130,22 +102,41 @@ def run_codex_command(
     )
 
 
-def codex_auth_recovery_message(codex_home: Path = DEFAULT_CODEX_HOME) -> str:
+def prepare_isolated_codex_home(
+    *,
+    codex_home: Path = DEFAULT_CODEX_HOME,
+    home_dir: Path | None = None,
+) -> Path:
+    """Return the isolated SDK evolution Codex home, refreshed from user auth."""
+
+    home = Path.home() if home_dir is None else Path(home_dir).expanduser()
+    codex_home = codex_home.expanduser()
+    _copy_newer_file(
+        home / USER_CODEX_HOME_DIRNAME / "auth.json",
+        codex_home / "auth.json",
+        mode=0o600,
+    )
+    return codex_home
+
+
+def codex_auth_recovery_message(
+    codex_home: Path = DEFAULT_CODEX_HOME,
+    *,
+    source_auth: Path | None = None,
+) -> str:
     """Return supported recovery commands for an unauthenticated Codex home."""
 
     codex_home = codex_home.expanduser()
+    source_auth = source_auth or Path.home() / USER_CODEX_HOME_DIRNAME / "auth.json"
     return f"""Codex auth is not ready for CODEX_HOME={codex_home}.
-Run one supported auth path before starting the SDK evolution agent:
+The SDK evolution workflow mirrors Mestre: it refreshes isolated auth from
+{source_auth}, then runs Codex with the isolated CODEX_HOME.
 
-  env CODEX_HOME="{codex_home}" uv run --extra codex codex login --device-auth
+Run the supported Codex login flow for your normal Codex home, then rerun this
+helper before starting the SDK evolution agent:
 
-Or provide a supported non-interactive credential and rerun the auth helper:
-
-  env CODEX_HOME="{codex_home}" CODEX_ACCESS_TOKEN="$CODEX_ACCESS_TOKEN" \\
-    uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
-
-  env CODEX_HOME="{codex_home}" OPENAI_API_KEY="$OPENAI_API_KEY" \\
-    uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+  uv run --extra codex codex login --device-auth
+  uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
 """
 
 
@@ -175,8 +166,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0 if result.ok else 1
 
 
-def _stdin_secret(value: str) -> str:
-    return value if value.endswith("\n") else f"{value}\n"
+def _copy_newer_file(source: Path, target: Path, *, mode: int | None = None) -> bool:
+    """Copy source to target when source is newer or target is missing."""
+
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    target.parent.chmod(0o700)
+    if not source.exists():
+        if target.exists() and mode is not None:
+            target.chmod(mode)
+        return False
+    if target.exists() and target.stat().st_mtime >= source.stat().st_mtime:
+        if mode is not None:
+            target.chmod(mode)
+        return False
+    shutil.copy2(source, target)
+    if mode is not None:
+        target.chmod(mode)
+    return True
 
 
 if __name__ == "__main__":
