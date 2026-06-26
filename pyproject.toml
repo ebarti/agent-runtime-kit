@@ -64,7 +64,7 @@ constraint-dependencies = ["openai-codex-cli-bin>=0.134.0a1"]
 packages = ["src/agent_runtime_kit"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "docs", "examples", "README.md", "LICENSE", "pyproject.toml"]
+include = ["src", "tests", "docs", "examples", "scripts", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.ruff]
 line-length = 100

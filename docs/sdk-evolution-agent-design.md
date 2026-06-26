@@ -166,6 +166,18 @@ python -m examples.sdk_evolution_agent --runtime codex-agent-sdk --refresh-previ
 python -m examples.sdk_evolution_agent --runtime antigravity-agent-sdk --refresh-preview
 ```
 
+The canonical end-to-end upgrade entrypoint is the checked-in script:
+
+```bash
+uv run python scripts/sdk_evolution_upgrade.py --runtime codex-agent-sdk
+```
+
+The script owns operator workflow details that should not live as copied skill
+commands: unique worktree and branch creation, all-package targeting,
+freshness-cutoff bypassing, Codex auth preflight, report-only gating, and the
+implementation/draft-PR pass. It intentionally does not expose package subset
+flags because SDK evolution runs should inspect all tracked provider packages.
+
 Before a Codex-backed run, prepare the dedicated SDK evolution auth home:
 
 ```bash

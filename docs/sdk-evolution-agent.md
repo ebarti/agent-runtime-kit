@@ -28,6 +28,36 @@ from `RuntimeRegistry`. The agent does not call OpenAI, Anthropic, Google, or
 other model APIs directly for reasoning, planning, implementation, review, or
 structured output.
 
+## Upgrade Script
+
+For the real local upgrade workflow, use the checked-in script instead of copying
+commands from a skill:
+
+```bash
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+  uv run python scripts/sdk_evolution_upgrade.py --runtime codex-agent-sdk
+```
+
+The script always targets all tracked upstream SDK packages:
+
+- `claude-agent-sdk`
+- `openai-codex`
+- `openai-codex-cli-bin`
+- `google-antigravity`
+
+It creates a collision-free branch and worktree, runs the report-only evidence
+and decision pass first, then runs the implementation and draft-PR pass unless
+`--report-only` is set. The generated worktree path and branch include a
+timestamp and random suffix, so rerunning the script does not collide with a
+previous run.
+
+Use report-only mode when you want evidence and decisions without edits:
+
+```bash
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+  uv run python scripts/sdk_evolution_upgrade.py --runtime codex-agent-sdk --report-only
+```
+
 When `--runtime codex-agent-sdk` is selected, the agent injects
 `CODEX_HOME=~/.codex_agent_runtime_sdk` into the Codex SDK subprocess. This keeps
 the dogfooded SDK evolution agent's Codex state separate from a user's normal
