@@ -30,8 +30,7 @@ structured output.
 
 ## Upgrade Script
 
-For the real local upgrade workflow, use the checked-in script instead of copying
-commands from a skill:
+For the real local upgrade workflow, use the checked-in script directly:
 
 ```bash
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \

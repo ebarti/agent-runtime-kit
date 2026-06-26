@@ -172,8 +172,8 @@ The canonical end-to-end upgrade entrypoint is the checked-in script:
 uv run python scripts/sdk_evolution_upgrade.py --runtime codex-agent-sdk
 ```
 
-The script owns operator workflow details that should not live as copied skill
-commands: unique worktree and branch creation, all-package targeting,
+The script owns operator workflow details that should not live as copied
+assistant command snippets: unique worktree and branch creation, all-package targeting,
 freshness-cutoff bypassing, Codex auth preflight, report-only gating, and the
 implementation/draft-PR pass. It intentionally does not expose package subset
 flags because SDK evolution runs should inspect all tracked provider packages.
