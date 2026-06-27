@@ -1,0 +1,21 @@
+[
+  {
+    "added": [],
+    "changed": [],
+    "from_version": "0.2.106",
+    "package": "claude-agent-sdk",
+    "removed": [],
+    "to_version": "0.2.110"
+  },
+  {
+    "added": [],
+    "changed": [
+      "AgentConfig",
+      "LocalAgentConfig"
+    ],
+    "from_version": "0.1.4",
+    "package": "google-antigravity",
+    "removed": [],
+    "to_version": "0.1.5"
+  }
+]

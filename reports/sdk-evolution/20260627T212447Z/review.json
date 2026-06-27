@@ -1,0 +1,11 @@
+{
+  "reasons": [
+    "Resolver-selected updates are limited to claude-agent-sdk 0.2.106->0.2.110 and google-antigravity 0.1.4->0.1.5.",
+    "Adapter-contract behavior probes pass before and after for both selected updates with severity none and zero breaking changes.",
+    "Claude API diff shows no symbol drift; Antigravity drift is limited to AgentConfig/LocalAgentConfig while required adapter fields remain present.",
+    "Release-note evidence is found for both selected updates; Antigravity lacks package-version-specific text but is not unavailable under the gate policy.",
+    "Uncertainty remains around live vendor execution and prerelease binary ordering, but no hard blocker is shown by the provided evidence."
+  ],
+  "required_changes": [],
+  "status": "pass"
+}
