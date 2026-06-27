@@ -1,0 +1,867 @@
+{
+  "import_error": null,
+  "members": [
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "AgentDefinition",
+      "signature": "(description: str, prompt: str, tools: list[str] | None = None, disallowedTools: list[str] | None = None, model: str | None = None, skills: list[str] | None = None, memory: Optional[Literal['user', 'project', 'local']] = None, mcpServers: list[str | dict[str, typing.Any]] | None = None, initialPrompt: str | None = None, maxTurns: int | None = None, background: bool | None = None, effort: Union[Literal['low', 'medium', 'high', 'xhigh', 'max'], int, NoneType] = None, permissionMode: Optional[Literal['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto']] = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "typing",
+      "name": "Annotated",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "_SpecialForm",
+      "module": "typing",
+      "name": "Any",
+      "signature": "(*args, **kwds)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "AssistantMessage",
+      "signature": "(content: list[claude_agent_sdk.types.TextBlock | claude_agent_sdk.types.ThinkingBlock | claude_agent_sdk.types.ToolUseBlock | claude_agent_sdk.types.ToolResultBlock | claude_agent_sdk.types.ServerToolUseBlock | claude_agent_sdk.types.ServerToolResultBlock], model: str, parent_tool_use_id: str | None = None, error: Optional[Literal['authentication_failed', 'billing_error', 'rate_limit', 'invalid_request', 'server_error', 'unknown']] = None, usage: dict[str, typing.Any] | None = None, message_id: str | None = None, stop_reason: str | None = None, session_id: str | None = None, uuid: str | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "collections.abc",
+      "name": "Awaitable",
+      "signature": "()"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "BaseHookInput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk._errors",
+      "name": "CLIConnectionError",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk._errors",
+      "name": "CLIJSONDecodeError",
+      "signature": "(line: str, original_error: Exception)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk._errors",
+      "name": "CLINotFoundError",
+      "signature": "(message: str = 'Claude Code not found', cli_path: str | None = None)"
+    },
+    {
+      "kind": "class",
+      "module": "collections.abc",
+      "name": "Callable",
+      "signature": "()"
+    },
+    {
+      "kind": "class",
+      "module": "collections.abc",
+      "name": "CanUseTool",
+      "signature": "()"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ClaudeAgentOptions",
+      "signature": "(tools: list[str] | claude_agent_sdk.types.ToolsPreset | None = None, allowed_tools: list[str] = <factory>, system_prompt: str | claude_agent_sdk.types.SystemPromptPreset | claude_agent_sdk.types.SystemPromptFile | None = None, mcp_servers: dict[str, claude_agent_sdk.types.McpStdioServerConfig | claude_agent_sdk.types.McpSSEServerConfig | claude_agent_sdk.types.McpHttpServerConfig | claude_agent_sdk.types.McpSdkServerConfig] | str | pathlib.Path = <factory>, strict_mcp_config: bool = False, permission_mode: Optional[Literal['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto']] = None, continue_conversation: bool = False, resume: str | None = None, session_id: str | None = None, max_turns: int | None = None, max_budget_usd: float | None = None, disallowed_tools: list[str] = <factory>, model: str | None = None, fallback_model: str | None = None, betas: list[typing.Literal['context-1m-2025-08-07']] = <factory>, permission_prompt_tool_name: str | None = None, cwd: str | pathlib.Path | None = None, cli_path: str | pathlib.Path | None = None, settings: str | None = None, add_dirs: list[str | pathlib.Path] = <factory>, env: dict[str, str] = <factory>, extra_args: dict[str, str | None] = <factory>, max_buffer_size: int | None = None, debug_stderr: Any = <_io.TextIOWrapper name='<stderr>' mode='w' encoding='utf-8'>, stderr: collections.abc.Callable[[str], None] | None = None, can_use_tool: collections.abc.Callable[[str, dict[str, typing.Any], claude_agent_sdk.types.ToolPermissionContext], collections.abc.Awaitable[claude_agent_sdk.types.PermissionResultAllow | claude_agent_sdk.types.PermissionResultDeny]] | None = None, hooks: dict[typing.Union[typing.Literal['PreToolUse'], typing.Literal['PostToolUse'], typing.Literal['PostToolUseFailure'], typing.Literal['UserPromptSubmit'], typing.Literal['Stop'], typing.Literal['SubagentStop'], typing.Literal['PreCompact'], typing.Literal['Notification'], typing.Literal['SubagentStart'], typing.Literal['PermissionRequest']], list[claude_agent_sdk.types.HookMatcher]] | None = None, user: str | None = None, include_partial_messages: bool = False, include_hook_events: bool = False, fork_session: bool = False, agents: dict[str, claude_agent_sdk.types.AgentDefinition] | None = None, setting_sources: list[typing.Literal['user', 'project', 'local']] | None = None, skills: Union[list[str], Literal['all'], NoneType] = None, sandbox: claude_agent_sdk.types.SandboxSettings | None = None, plugins: list[claude_agent_sdk.types.SdkPluginConfig] = <factory>, max_thinking_tokens: int | None = None, thinking: claude_agent_sdk.types.ThinkingConfigAdaptive | claude_agent_sdk.types.ThinkingConfigEnabled | claude_agent_sdk.types.ThinkingConfigDisabled | None = None, effort: Optional[Literal['low', 'medium', 'high', 'xhigh', 'max']] = None, output_format: dict[str, typing.Any] | None = None, enable_file_checkpointing: bool = False, session_store: claude_agent_sdk.types.SessionStore | None = None, session_store_flush: Literal['batched', 'eager'] = 'batched', load_timeout_ms: int = 60000, task_budget: claude_agent_sdk.types.TaskBudget | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.client",
+      "name": "ClaudeSDKClient",
+      "signature": "(options: claude_agent_sdk.types.ClaudeAgentOptions | None = None, transport: claude_agent_sdk._internal.transport.Transport | None = None)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk._errors",
+      "name": "ClaudeSDKError",
+      "signature": ""
+    },
+    {
+      "kind": "UnionType",
+      "module": "types",
+      "name": "ContentBlock",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ContextUsageCategory",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ContextUsageResponse",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "DeferredToolUse",
+      "signature": "(id: str, name: str, input: dict[str, typing.Any]) -> None"
+    },
+    {
+      "kind": "_LiteralGenericAlias",
+      "module": "typing",
+      "name": "EffortLevel",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk._internal.session_mutations",
+      "name": "ForkSessionResult",
+      "signature": "(session_id: 'str') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "typing",
+      "name": "Generic",
+      "signature": "()"
+    },
+    {
+      "kind": "class",
+      "module": "collections.abc",
+      "name": "HookCallback",
+      "signature": "()"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "HookContext",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "HookEventMessage",
+      "signature": "(subtype: str, data: dict[str, typing.Any], hook_event_name: str = '', session_id: str | None = None, uuid: str | None = None) -> None"
+    },
+    {
+      "kind": "UnionType",
+      "module": "types",
+      "name": "HookInput",
+      "signature": ""
+    },
+    {
+      "kind": "UnionType",
+      "module": "types",
+      "name": "HookJSONOutput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "HookMatcher",
+      "signature": "(matcher: str | None = None, hooks: list[collections.abc.Callable[[claude_agent_sdk.types.PreToolUseHookInput | claude_agent_sdk.types.PostToolUseHookInput | claude_agent_sdk.types.PostToolUseFailureHookInput | claude_agent_sdk.types.UserPromptSubmitHookInput | claude_agent_sdk.types.StopHookInput | claude_agent_sdk.types.SubagentStopHookInput | claude_agent_sdk.types.PreCompactHookInput | claude_agent_sdk.types.NotificationHookInput | claude_agent_sdk.types.SubagentStartHookInput | claude_agent_sdk.types.PermissionRequestHookInput, str | None, claude_agent_sdk.types.HookContext], collections.abc.Awaitable[claude_agent_sdk.types.AsyncHookJSONOutput | claude_agent_sdk.types.SyncHookJSONOutput]]] = <factory>, timeout: float | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk._internal.session_store",
+      "name": "InMemorySessionStore",
+      "signature": "() -> 'None'"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "McpSdkServerConfig",
+      "signature": ""
+    },
+    {
+      "kind": "UnionType",
+      "module": "types",
+      "name": "McpServerConfig",
+      "signature": ""
+    },
+    {
+      "kind": "_LiteralGenericAlias",
+      "module": "typing",
+      "name": "McpServerConnectionStatus",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "McpServerInfo",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "McpServerStatus",
+      "signature": ""
+    },
+    {
+      "kind": "UnionType",
+      "module": "types",
+      "name": "McpServerStatusConfig",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "McpStatusResponse",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "McpToolAnnotations",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "McpToolInfo",
+      "signature": ""
+    },
+    {
+      "kind": "UnionType",
+      "module": "types",
+      "name": "Message",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "MirrorErrorMessage",
+      "signature": "(subtype: str, data: dict[str, typing.Any], key: 'SessionKey | None' = None, error: str = '') -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "NotificationHookInput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "NotificationHookSpecificOutput",
+      "signature": ""
+    },
+    {
+      "kind": "_LiteralGenericAlias",
+      "module": "typing",
+      "name": "PermissionMode",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "PermissionRequestHookInput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "PermissionRequestHookSpecificOutput",
+      "signature": ""
+    },
+    {
+      "kind": "UnionType",
+      "module": "types",
+      "name": "PermissionResult",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "PermissionResultAllow",
+      "signature": "(behavior: Literal['allow'] = 'allow', updated_input: dict[str, typing.Any] | None = None, updated_permissions: list[claude_agent_sdk.types.PermissionUpdate] | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "PermissionResultDeny",
+      "signature": "(behavior: Literal['deny'] = 'deny', message: str = '', interrupt: bool = False) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "PermissionUpdate",
+      "signature": "(type: Literal['addRules', 'replaceRules', 'removeRules', 'setMode', 'addDirectories', 'removeDirectories'], rules: list[claude_agent_sdk.types.PermissionRuleValue] | None = None, behavior: Optional[Literal['allow', 'deny', 'ask']] = None, mode: Optional[Literal['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto']] = None, directories: list[str] | None = None, destination: Optional[Literal['userSettings', 'projectSettings', 'localSettings', 'session']] = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "PostToolUseFailureHookInput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "PostToolUseFailureHookSpecificOutput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "PostToolUseHookInput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "PreCompactHookInput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "PreToolUseHookInput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk._errors",
+      "name": "ProcessError",
+      "signature": "(message: str, exit_code: int | None = None, stderr: str | None = None)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "RateLimitEvent",
+      "signature": "(rate_limit_info: claude_agent_sdk.types.RateLimitInfo, uuid: str, session_id: str) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "RateLimitInfo",
+      "signature": "(status: Literal['allowed', 'allowed_warning', 'rejected'], resets_at: int | None = None, rate_limit_type: Optional[Literal['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet', 'overage']] = None, utilization: float | None = None, overage_status: Optional[Literal['allowed', 'allowed_warning', 'rejected']] = None, overage_resets_at: int | None = None, overage_disabled_reason: str | None = None, raw: dict[str, typing.Any] = <factory>) -> None"
+    },
+    {
+      "kind": "_LiteralGenericAlias",
+      "module": "typing",
+      "name": "RateLimitStatus",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "_LiteralGenericAlias",
+      "module": "typing",
+      "name": "RateLimitType",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ResultMessage",
+      "signature": "(subtype: str, duration_ms: int, duration_api_ms: int, is_error: bool, num_turns: int, session_id: str, stop_reason: str | None = None, total_cost_usd: float | None = None, usage: dict[str, typing.Any] | None = None, result: str | None = None, structured_output: Any = None, model_usage: dict[str, typing.Any] | None = None, permission_denials: list[typing.Any] | None = None, deferred_tool_use: claude_agent_sdk.types.DeferredToolUse | None = None, errors: list[str] | None = None, api_error_status: int | None = None, uuid: str | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SDKSessionInfo",
+      "signature": "(session_id: str, summary: str, last_modified: int, file_size: int | None = None, custom_title: str | None = None, first_prompt: str | None = None, git_branch: str | None = None, cwd: str | None = None, tag: str | None = None, created_at: int | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SandboxIgnoreViolations",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SandboxNetworkConfig",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SandboxSettings",
+      "signature": ""
+    },
+    {
+      "kind": "_LiteralGenericAlias",
+      "module": "typing",
+      "name": "SdkBeta",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk",
+      "name": "SdkMcpTool",
+      "signature": "(name: str, description: str, input_schema: type[~T] | dict[str, typing.Any], handler: collections.abc.Callable[[~T], collections.abc.Awaitable[dict[str, typing.Any]]], annotations: mcp.types.ToolAnnotations | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SdkPluginConfig",
+      "signature": ""
+    },
+    {
+      "kind": "_LiteralGenericAlias",
+      "module": "typing",
+      "name": "ServerToolName",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ServerToolResultBlock",
+      "signature": "(tool_use_id: str, content: dict[str, typing.Any]) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ServerToolUseBlock",
+      "signature": "(id: str, name: Literal['advisor', 'web_search', 'web_fetch', 'code_execution', 'bash_code_execution', 'text_editor_code_execution', 'tool_search_tool_regex', 'tool_search_tool_bm25'], input: dict[str, typing.Any]) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SessionKey",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SessionListSubkeysKey",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SessionMessage",
+      "signature": "(type: Literal['user', 'assistant'], uuid: str, session_id: str, message: Any, parent_tool_use_id: None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SessionStore",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SessionStoreEntry",
+      "signature": ""
+    },
+    {
+      "kind": "_LiteralGenericAlias",
+      "module": "typing",
+      "name": "SessionStoreFlushMode",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SessionStoreListEntry",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SessionSummaryEntry",
+      "signature": ""
+    },
+    {
+      "kind": "_LiteralGenericAlias",
+      "module": "typing",
+      "name": "SettingSource",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "StopHookInput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "StreamEvent",
+      "signature": "(uuid: str, session_id: str, event: dict[str, typing.Any], parent_tool_use_id: str | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SubagentStartHookInput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SubagentStartHookSpecificOutput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SubagentStopHookInput",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "SystemMessage",
+      "signature": "(subtype: str, data: dict[str, typing.Any]) -> None"
+    },
+    {
+      "kind": "TypeVar",
+      "module": "claude_agent_sdk",
+      "name": "T",
+      "signature": ""
+    },
+    {
+      "kind": "frozenset",
+      "module": "",
+      "name": "TERMINAL_TASK_STATUSES",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "TaskBudget",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "TaskNotificationMessage",
+      "signature": "(subtype: str, data: dict[str, typing.Any], task_id: str, status: Literal['completed', 'failed', 'stopped'], output_file: str, summary: str, uuid: str, session_id: str, tool_use_id: str | None = None, usage: claude_agent_sdk.types.TaskUsage | None = None) -> None"
+    },
+    {
+      "kind": "_LiteralGenericAlias",
+      "module": "typing",
+      "name": "TaskNotificationStatus",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "TaskProgressMessage",
+      "signature": "(subtype: str, data: dict[str, typing.Any], task_id: str, description: str, usage: claude_agent_sdk.types.TaskUsage, uuid: str, session_id: str, tool_use_id: str | None = None, last_tool_name: str | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "TaskStartedMessage",
+      "signature": "(subtype: str, data: dict[str, typing.Any], task_id: str, description: str, uuid: str, session_id: str, tool_use_id: str | None = None, task_type: str | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "TaskUpdatedMessage",
+      "signature": "(subtype: str, data: dict[str, typing.Any], task_id: str, patch: dict[str, typing.Any], status: Optional[Literal['pending', 'running', 'paused', 'completed', 'failed', 'killed']] = None, session_id: str | None = None, uuid: str | None = None) -> None"
+    },
+    {
+      "kind": "_LiteralGenericAlias",
+      "module": "typing",
+      "name": "TaskUpdatedStatus",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "TaskUsage",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "TextBlock",
+      "signature": "(text: str) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ThinkingBlock",
+      "signature": "(thinking: str, signature: str) -> None"
+    },
+    {
+      "kind": "UnionType",
+      "module": "types",
+      "name": "ThinkingConfig",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ThinkingConfigAdaptive",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ThinkingConfigDisabled",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ThinkingConfigEnabled",
+      "signature": ""
+    },
+    {
+      "kind": "class",
+      "module": "mcp.types",
+      "name": "ToolAnnotations",
+      "signature": "(*, title: str | None = None, readOnlyHint: bool | None = None, destructiveHint: bool | None = None, idempotentHint: bool | None = None, openWorldHint: bool | None = None, **extra_data: Any) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ToolPermissionContext",
+      "signature": "(signal: Optional[Any] = None, suggestions: list[claude_agent_sdk.types.PermissionUpdate] = <factory>, tool_use_id: str | None = None, agent_id: str | None = None, blocked_path: str | None = None, decision_reason: str | None = None, title: str | None = None, display_name: str | None = None, description: str | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ToolResultBlock",
+      "signature": "(tool_use_id: str, content: str | list[dict[str, typing.Any]] | None = None, is_error: bool | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "ToolUseBlock",
+      "signature": "(id: str, name: str, input: dict[str, typing.Any]) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk._internal.transport",
+      "name": "Transport",
+      "signature": "()"
+    },
+    {
+      "kind": "class",
+      "module": "typing",
+      "name": "TypeVar",
+      "signature": "(name, *constraints, bound=None, covariant=False, contravariant=False)"
+    },
+    {
+      "kind": "_SpecialForm",
+      "module": "typing",
+      "name": "Union",
+      "signature": "(*args, **kwds)"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "UserMessage",
+      "signature": "(content: str | list[claude_agent_sdk.types.TextBlock | claude_agent_sdk.types.ThinkingBlock | claude_agent_sdk.types.ToolUseBlock | claude_agent_sdk.types.ToolResultBlock | claude_agent_sdk.types.ServerToolUseBlock | claude_agent_sdk.types.ServerToolResultBlock], uuid: str | None = None, parent_tool_use_id: str | None = None, tool_use_result: dict[str, typing.Any] | None = None) -> None"
+    },
+    {
+      "kind": "class",
+      "module": "claude_agent_sdk.types",
+      "name": "UserPromptSubmitHookInput",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "builtin_types",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "client",
+      "signature": ""
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk",
+      "name": "create_sdk_mcp_server",
+      "signature": "(name: str, version: str = '1.0.0', tools: list[claude_agent_sdk.SdkMcpTool[typing.Any]] | None = None) -> claude_agent_sdk.types.McpSdkServerConfig"
+    },
+    {
+      "kind": "function",
+      "module": "dataclasses",
+      "name": "dataclass",
+      "signature": "(cls=None, /, *, init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=False, match_args=True, kw_only=False, slots=False)"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.session_mutations",
+      "name": "delete_session",
+      "signature": "(session_id: 'str', directory: 'str | None' = None) -> 'None'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.session_mutations",
+      "name": "delete_session_via_store",
+      "signature": "(session_store: 'SessionStore', session_id: 'str', directory: 'str | None' = None) -> 'None'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.session_summary",
+      "name": "fold_session_summary",
+      "signature": "(prev: 'SessionSummaryEntry | None', key: 'SessionKey', entries: 'list[SessionStoreEntry]') -> 'SessionSummaryEntry'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.session_mutations",
+      "name": "fork_session",
+      "signature": "(session_id: 'str', directory: 'str | None' = None, up_to_message_id: 'str | None' = None, title: 'str | None' = None) -> 'ForkSessionResult'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.session_mutations",
+      "name": "fork_session_via_store",
+      "signature": "(session_store: 'SessionStore', session_id: 'str', directory: 'str | None' = None, up_to_message_id: 'str | None' = None, title: 'str | None' = None) -> 'ForkSessionResult'"
+    },
+    {
+      "kind": "function",
+      "module": "typing",
+      "name": "get_args",
+      "signature": "(tp)"
+    },
+    {
+      "kind": "function",
+      "module": "typing",
+      "name": "get_origin",
+      "signature": "(tp)"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.sessions",
+      "name": "get_session_info",
+      "signature": "(session_id: 'str', directory: 'str | None' = None) -> 'SDKSessionInfo | None'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.sessions",
+      "name": "get_session_info_from_store",
+      "signature": "(session_store: 'SessionStore', session_id: 'str', directory: 'str | None' = None) -> 'SDKSessionInfo | None'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.sessions",
+      "name": "get_session_messages",
+      "signature": "(session_id: 'str', directory: 'str | None' = None, limit: 'int | None' = None, offset: 'int' = 0) -> 'list[SessionMessage]'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.sessions",
+      "name": "get_session_messages_from_store",
+      "signature": "(session_store: 'SessionStore', session_id: 'str', directory: 'str | None' = None, limit: 'int | None' = None, offset: 'int' = 0) -> 'list[SessionMessage]'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.sessions",
+      "name": "get_subagent_messages",
+      "signature": "(session_id: 'str', agent_id: 'str', directory: 'str | None' = None, limit: 'int | None' = None, offset: 'int' = 0) -> 'list[SessionMessage]'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.sessions",
+      "name": "get_subagent_messages_from_store",
+      "signature": "(session_store: 'SessionStore', session_id: 'str', agent_id: 'str', directory: 'str | None' = None, limit: 'int | None' = None, offset: 'int' = 0) -> 'list[SessionMessage]'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.session_import",
+      "name": "import_session_to_store",
+      "signature": "(session_id: 'str', store: 'SessionStore', *, directory: 'str | None' = None, include_subagents: 'bool' = True, batch_size: 'int' = 500) -> 'None'"
+    },
+    {
+      "kind": "function",
+      "module": "typing_extensions",
+      "name": "is_typeddict",
+      "signature": "(tp)"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.sessions",
+      "name": "list_sessions",
+      "signature": "(directory: 'str | None' = None, limit: 'int | None' = None, offset: 'int' = 0, include_worktrees: 'bool' = True) -> 'list[SDKSessionInfo]'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.sessions",
+      "name": "list_sessions_from_store",
+      "signature": "(session_store: 'SessionStore', directory: 'str | None' = None, limit: 'int | None' = None, offset: 'int' = 0) -> 'list[SDKSessionInfo]'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.sessions",
+      "name": "list_subagents",
+      "signature": "(session_id: 'str', directory: 'str | None' = None) -> 'list[str]'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.sessions",
+      "name": "list_subagents_from_store",
+      "signature": "(session_store: 'SessionStore', session_id: 'str', directory: 'str | None' = None) -> 'list[str]'"
+    },
+    {
+      "kind": "Logger",
+      "module": "logging",
+      "name": "logger",
+      "signature": ""
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "logging",
+      "signature": ""
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.sessions",
+      "name": "project_key_for_directory",
+      "signature": "(directory: 'str | Path | None' = None) -> 'str'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk.query",
+      "name": "query",
+      "signature": "(*, prompt: str | collections.abc.AsyncIterable[dict[str, typing.Any]], options: claude_agent_sdk.types.ClaudeAgentOptions | None = None, transport: claude_agent_sdk._internal.transport.Transport | None = None) -> collections.abc.AsyncIterator[claude_agent_sdk.types.UserMessage | claude_agent_sdk.types.AssistantMessage | claude_agent_sdk.types.SystemMessage | claude_agent_sdk.types.ResultMessage | claude_agent_sdk.types.StreamEvent | claude_agent_sdk.types.RateLimitEvent]"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.session_mutations",
+      "name": "rename_session",
+      "signature": "(session_id: 'str', title: 'str', directory: 'str | None' = None) -> 'None'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.session_mutations",
+      "name": "rename_session_via_store",
+      "signature": "(session_store: 'SessionStore', session_id: 'str', title: 'str', directory: 'str | None' = None) -> 'None'"
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "sys",
+      "signature": ""
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.session_mutations",
+      "name": "tag_session",
+      "signature": "(session_id: 'str', tag: 'str | None', directory: 'str | None' = None) -> 'None'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk._internal.session_mutations",
+      "name": "tag_session_via_store",
+      "signature": "(session_store: 'SessionStore', session_id: 'str', tag: 'str | None', directory: 'str | None' = None) -> 'None'"
+    },
+    {
+      "kind": "function",
+      "module": "claude_agent_sdk",
+      "name": "tool",
+      "signature": "(name: str, description: str, input_schema: type | dict[str, typing.Any], annotations: mcp.types.ToolAnnotations | None = None) -> collections.abc.Callable[[collections.abc.Callable[[typing.Any], collections.abc.Awaitable[dict[str, typing.Any]]]], claude_agent_sdk.SdkMcpTool[typing.Any]]"
+    },
+    {
+      "kind": "module",
+      "module": "",
+      "name": "types",
+      "signature": ""
+    }
+  ],
+  "module": "claude_agent_sdk",
+  "package": "claude-agent-sdk",
+  "source": "current-state-artifact",
+  "version": "0.2.106"
+}

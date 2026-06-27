@@ -1,0 +1,198 @@
+{
+  "adapter_sources": [
+    {
+      "available": true,
+      "kind": "adapter-source",
+      "label": "agent-runtime-kit adapter source claude.py",
+      "note": "",
+      "path": "/private/tmp/sdk-evolution-behavior-proof-20260627-232223-59ee6236/src/agent_runtime_kit/adapters/claude.py",
+      "url": null,
+      "version": null
+    },
+    {
+      "available": true,
+      "kind": "adapter-source",
+      "label": "agent-runtime-kit adapter source codex.py",
+      "note": "",
+      "path": "/private/tmp/sdk-evolution-behavior-proof-20260627-232223-59ee6236/src/agent_runtime_kit/adapters/codex.py",
+      "url": null,
+      "version": null
+    },
+    {
+      "available": true,
+      "kind": "adapter-source",
+      "label": "agent-runtime-kit adapter source antigravity.py",
+      "note": "",
+      "path": "/private/tmp/sdk-evolution-behavior-proof-20260627-232223-59ee6236/src/agent_runtime_kit/adapters/antigravity.py",
+      "url": null,
+      "version": null
+    },
+    {
+      "available": true,
+      "kind": "adapter-source",
+      "label": "agent-runtime-kit adapter source __init__.py",
+      "note": "",
+      "path": "/private/tmp/sdk-evolution-behavior-proof-20260627-232223-59ee6236/src/agent_runtime_kit/adapters/__init__.py",
+      "url": null,
+      "version": null
+    }
+  ],
+  "facts": [
+    "pyproject.toml dependency declarations are lower bounds or constraints.",
+    "uv.lock is the tested local dependency state."
+  ],
+  "packages": [
+    {
+      "installed_version": null,
+      "latest_version": "0.2.110",
+      "locked_version": "0.2.106",
+      "name": "claude-agent-sdk",
+      "pyproject_spec": "claude-agent-sdk>=0.2.87",
+      "recent_versions": [
+        "0.2.110",
+        "0.2.109",
+        "0.2.108"
+      ],
+      "sources": [
+        {
+          "available": true,
+          "kind": "docs",
+          "label": "Claude Agent SDK docs",
+          "note": "",
+          "path": null,
+          "url": "https://docs.anthropic.com/en/docs/claude-code/sdk",
+          "version": null
+        },
+        {
+          "available": true,
+          "kind": "package-metadata",
+          "label": "PyPI metadata for claude-agent-sdk",
+          "note": "",
+          "path": null,
+          "url": "https://pypi.org/project/claude-agent-sdk/",
+          "version": "0.2.110"
+        }
+      ],
+      "unavailable_reason": ""
+    },
+    {
+      "installed_version": "0.1.0b3",
+      "latest_version": "0.1.0b3",
+      "locked_version": "0.1.0b3",
+      "name": "openai-codex",
+      "pyproject_spec": "openai-codex>=0.1.0b3",
+      "recent_versions": [
+        "0.1.0b3",
+        "0.1.0b2",
+        "0.1.0b1"
+      ],
+      "sources": [
+        {
+          "available": true,
+          "kind": "docs",
+          "label": "OpenAI Codex SDK docs",
+          "note": "",
+          "path": null,
+          "url": "https://developers.openai.com/codex/sdk",
+          "version": null
+        },
+        {
+          "available": true,
+          "kind": "package-metadata",
+          "label": "PyPI metadata for openai-codex",
+          "note": "",
+          "path": null,
+          "url": "https://pypi.org/project/openai-codex/",
+          "version": "0.1.0b3"
+        }
+      ],
+      "unavailable_reason": ""
+    },
+    {
+      "installed_version": "0.137.0a4",
+      "latest_version": "0.136.0",
+      "locked_version": "0.137.0a4",
+      "name": "openai-codex-cli-bin",
+      "pyproject_spec": "openai-codex-cli-bin ships per-platform binary wheels; require the platforms we\n# develop and run CI on so resolution never locks a version missing one of them.\nrequired-environments = [\n    ",
+      "recent_versions": [
+        "0.137.0a4",
+        "0.136.0a2",
+        "0.136.0"
+      ],
+      "sources": [
+        {
+          "available": true,
+          "kind": "package",
+          "label": "Codex CLI binary runtime package",
+          "note": "",
+          "path": null,
+          "url": "https://pypi.org/project/openai-codex-cli-bin/",
+          "version": null
+        },
+        {
+          "available": true,
+          "kind": "package-metadata",
+          "label": "PyPI metadata for openai-codex-cli-bin",
+          "note": "",
+          "path": null,
+          "url": "https://pypi.org/project/openai-codex-cli-bin/",
+          "version": "0.136.0"
+        }
+      ],
+      "unavailable_reason": ""
+    },
+    {
+      "installed_version": null,
+      "latest_version": "0.1.5",
+      "locked_version": "0.1.4",
+      "name": "google-antigravity",
+      "pyproject_spec": "google-antigravity>=0.1.2",
+      "recent_versions": [
+        "0.1.5",
+        "0.1.4",
+        "0.1.3"
+      ],
+      "sources": [
+        {
+          "available": true,
+          "kind": "repository",
+          "label": "Google Antigravity SDK repository",
+          "note": "",
+          "path": null,
+          "url": "https://github.com/google-antigravity/antigravity-sdk-python",
+          "version": null
+        },
+        {
+          "available": true,
+          "kind": "package-metadata",
+          "label": "PyPI metadata for google-antigravity",
+          "note": "",
+          "path": null,
+          "url": "https://pypi.org/project/google-antigravity/",
+          "version": "0.1.5"
+        }
+      ],
+      "unavailable_reason": ""
+    }
+  ],
+  "refresh_preview": {
+    "command": [
+      "uv",
+      "lock",
+      "--dry-run",
+      "-P",
+      "claude-agent-sdk",
+      "-P",
+      "openai-codex",
+      "-P",
+      "openai-codex-cli-bin",
+      "-P",
+      "google-antigravity"
+    ],
+    "removed_env": [],
+    "returncode": 0,
+    "stderr": "Resolved 69 packages in 161ms\nUpdate claude-agent-sdk v0.2.106 -> v0.2.110\nUpdate google-antigravity v0.1.4 -> v0.1.5\n",
+    "stdout": ""
+  },
+  "workspace": "/private/tmp/sdk-evolution-behavior-proof-20260627-232223-59ee6236"
+}

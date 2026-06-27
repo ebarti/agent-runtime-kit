@@ -368,7 +368,7 @@ wheels = [
 
 [[package]]
 name = "claude-agent-sdk"
-version = "0.2.106"
+version = "0.2.110"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -376,13 +376,13 @@ dependencies = [
     { name = "sniffio" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/73/f5edec88b9548c3757e429dbfc62b16e46cac1300c9463cbb83ed5281266/claude_agent_sdk-0.2.106.tar.gz", hash = "sha256:26c20cf75db1ed609aae6217cb6dd40844365c66acf3a7abf4e877671695228e", size = 255630, upload-time = "2026-06-20T21:11:46.995Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/98/8fdab35ed9e1a36bc7afab4d390cc5002094a4950996c079da9aa4541cc4/claude_agent_sdk-0.2.110.tar.gz", hash = "sha256:538b548bac07a22f65686abab063a902ac76ba35989d0f073c942f96248e9fa3", size = 255632, upload-time = "2026-06-24T22:11:52.342Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e7/ec/190cc7304f1a439a2d87a4e4ac9543eb6aed5dd97aab9ce549f83bf7f7ed/claude_agent_sdk-0.2.106-py3-none-macosx_11_0_arm64.whl", hash = "sha256:86506d6a701759a8215083283644513bce56c968b1b95f67108a3114a177eaaf", size = 64468649, upload-time = "2026-06-20T21:11:50.182Z" },
-    { url = "https://files.pythonhosted.org/packages/cf/10/bf6cafd2523c3dd9c961ef496485e0540f3fab71a9b1ce125bccfdd3d448/claude_agent_sdk-0.2.106-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:9894cb7bdb276b46085b0ced1e6d867454b56c86fc703ba8e6fdd2a89eec4144", size = 67808581, upload-time = "2026-06-20T21:11:53.335Z" },
-    { url = "https://files.pythonhosted.org/packages/35/e0/42b6c608d3add29c2f5057fd9d31c23c18a853cd24c1a51d5962699feab0/claude_agent_sdk-0.2.106-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:d158f15ba7c4990f72b84d88362dea71d2fa315b1f29772989e22f29c130bdec", size = 73046395, upload-time = "2026-06-20T21:11:56.82Z" },
-    { url = "https://files.pythonhosted.org/packages/68/09/0d0b41145e49e5b29087e541791ea74e1c0178f6afa259210ec35f27cc51/claude_agent_sdk-0.2.106-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:778eb7e6aa07363c8b6d669bcb778e889011430a245bddc624380344ac8cc00b", size = 74000856, upload-time = "2026-06-20T21:12:00.652Z" },
-    { url = "https://files.pythonhosted.org/packages/61/39/c97cd496d3bb7be4e2903b0a44ee85265cd9a8d1198d2bd0ea8b355d72c8/claude_agent_sdk-0.2.106-py3-none-win_amd64.whl", hash = "sha256:a9b60131f064dd1a260c55308ed1f26a53db0a942cdf859843ff606c81006400", size = 73741662, upload-time = "2026-06-20T21:12:04.414Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/93/29d4fdaa13e69034faf8d3503df915b07c820e2c08e3d6a7515149cde5bb/claude_agent_sdk-0.2.110-py3-none-macosx_11_0_arm64.whl", hash = "sha256:fed0e0f4804d9f9cff80ab7d1b44142ebd1046cdd29ca74caef4c92c35fff8d8", size = 64924533, upload-time = "2026-06-24T22:11:55.612Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/03/b40bb673cd93cdc3928262c1be75fde34a7bed4bf2c2c20e04218e2005ea/claude_agent_sdk-0.2.110-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:62b23869d46cef6f6ff1d00ceaa5e846e2f1d297478421c835efb8fe99369d4f", size = 69704449, upload-time = "2026-06-24T22:11:59.149Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/18/ab67cb5ce641333385bed55ed8e9665c00f7d30d1f6ab12f8463ddb7695f/claude_agent_sdk-0.2.110-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:324e49553c6303d6b267217dc2912652b97af2bc96503efd12095ae915b46b83", size = 74879555, upload-time = "2026-06-24T22:12:03.25Z" },
+    { url = "https://files.pythonhosted.org/packages/91/88/3627d7d14310cfec66977551263e219365244a906fc7ca1209fb0c3a6cec/claude_agent_sdk-0.2.110-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:56371dd7a2c66c0bd497dc0b3cab4193a228b196f600676393d69c0ecee37cfb", size = 75924237, upload-time = "2026-06-24T22:12:07.183Z" },
+    { url = "https://files.pythonhosted.org/packages/49/79/c9066c5c387d42c19a4b675ec1ff5219f8920cfda8ff8b527119fd69b774/claude_agent_sdk-0.2.110-py3-none-win_amd64.whl", hash = "sha256:4235d4de6d685a189c12612095ab192b759280ede1f3aed0c3e784d52c3555f9", size = 75448209, upload-time = "2026-06-24T22:12:11.283Z" },
 ]
 
 [[package]]
@@ -489,7 +489,7 @@ wheels = [
 
 [[package]]
 name = "google-antigravity"
-version = "0.1.4"
+version = "0.1.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
@@ -501,11 +501,11 @@ dependencies = [
     { name = "websockets" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/e2/1c6f9d4ffb4d97088cac763fa0dd3604504283f4b8d3ea0c07ca33d9f1ee/google_antigravity-0.1.4-py3-none-macosx_11_0_arm64.whl", hash = "sha256:cb83022853d1021abffb103dec248cdff92fe0c6d0121f0229616f5524624d01", size = 30702577, upload-time = "2026-06-18T18:15:52.589Z" },
-    { url = "https://files.pythonhosted.org/packages/f7/06/6d853664783e2b17ef2e95a6202add07a331e1dd55430341db257200c251/google_antigravity-0.1.4-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:4276600a2480cb24bf74f3334f082df2059019236766ea23b5af9f9e0e2a4ae0", size = 33270837, upload-time = "2026-06-18T18:15:55.187Z" },
-    { url = "https://files.pythonhosted.org/packages/5f/72/6efc89b3aa36f85f583afa9b8214f3b758ec6cd056be5798c80f58861826/google_antigravity-0.1.4-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:cbc35edfff18a6795f46c096f8daf2a87653b1739ef4c63b01a04ba795223f95", size = 36411235, upload-time = "2026-06-18T18:15:57.888Z" },
-    { url = "https://files.pythonhosted.org/packages/7b/9e/175fcbc9c9f4b5139cf42feed0d58553ec8384c8d21fb5084407cd57c8ce/google_antigravity-0.1.4-py3-none-win_amd64.whl", hash = "sha256:ab2f1cca42ff6c90bd3b2a56f6df8d90958535ff8c23704bc96b939ca273922d", size = 35416341, upload-time = "2026-06-18T18:16:00.805Z" },
-    { url = "https://files.pythonhosted.org/packages/c5/9a/838bb2bdb162694452287b032da9ad99661661c58e02446bd620de560621/google_antigravity-0.1.4-py3-none-win_arm64.whl", hash = "sha256:0748cec67c864769501ef5ca7886075fa8c235d750486ef3b805c903f14ce50b", size = 32000969, upload-time = "2026-06-18T18:16:03.691Z" },
+    { url = "https://files.pythonhosted.org/packages/15/7c/8d6151f12e4544229754575c6f8a2b57b615aab312440f2db64580af42e0/google_antigravity-0.1.5-py3-none-macosx_11_0_arm64.whl", hash = "sha256:0a12e30836fb6641bc63beaa3e65d3bcbfc39c01a1eb07c7ca7edba317537660", size = 31404545, upload-time = "2026-06-25T14:53:52.586Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/e8/4a85ba4a7be1c35acb18c4f070e5049df6f185547b0c9d6794acbc06a452/google_antigravity-0.1.5-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:a74892f9251e4c2cd9962d8631680aa8266d2e216527dd68cf8ac8de1137c996", size = 33945922, upload-time = "2026-06-25T14:53:55.825Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/18/d89abb1dafe906451c2bd13f0c32917e1d35ba95d2436a06907045a69cfd/google_antigravity-0.1.5-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:ec1ebe4044b92e41f6f1632cfac98bb29f03ef0be52446cb5a67576147148363", size = 37161595, upload-time = "2026-06-25T14:53:58.841Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/5e/c9b6a06f21aeb3547c8194aec11f5fbeffedc0d7973effbace96beca84b2/google_antigravity-0.1.5-py3-none-win_amd64.whl", hash = "sha256:e8707b7fc64c887edf27176b1e8aa52e6cfe50e51dc2d04ef4f57f7ad26f65ee", size = 36188777, upload-time = "2026-06-25T14:54:02.034Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/de/e231b4fec58f9415490fb6223556a6dd0e3278876dd508f5396864e25cb3/google_antigravity-0.1.5-py3-none-win_arm64.whl", hash = "sha256:2830e90139552ef3de7d8775ef0ea8d1a1ec2c0f523a8d1db30132b942deb4a0", size = 32694572, upload-time = "2026-06-25T14:54:05.439Z" },
 ]
 
 [[package]]

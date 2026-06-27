@@ -1,0 +1,150 @@
+{
+  "artifacts": {
+    "api_diffs.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/api_diffs.json",
+      "sha256": "b248ad899896894b33c88525a5e14b80d429d777f5ec67a8e4ff012ab21f9e20"
+    },
+    "api_snapshots/01-claude-agent-sdk.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/api_snapshots/01-claude-agent-sdk.json",
+      "sha256": "85f3ea30bc026017a9afe4af2be42a3b0d30bcc435bbb9009f40daf3848117d8"
+    },
+    "api_snapshots/02-claude-agent-sdk.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/api_snapshots/02-claude-agent-sdk.json",
+      "sha256": "964cf982d1449e56278d5fc092b2ad66d42cba6ac786e9b9b1aee63d393316e4"
+    },
+    "api_snapshots/03-openai-codex.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/api_snapshots/03-openai-codex.json",
+      "sha256": "07ef9c9c2671f478ae48d281ca2a96fd551fb41561a7d7110c6c2548db845288"
+    },
+    "api_snapshots/04-openai-codex-cli-bin.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/api_snapshots/04-openai-codex-cli-bin.json",
+      "sha256": "7f2301fb097b08216e4138e048823619532f03f289634d8917bc18aae9b9fd3f"
+    },
+    "api_snapshots/05-google-antigravity.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/api_snapshots/05-google-antigravity.json",
+      "sha256": "ab0a869b9156daf192ab8bea50ff8af9f97b13f655d8ebb33caa23c40740de95"
+    },
+    "api_snapshots/06-google-antigravity.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/api_snapshots/06-google-antigravity.json",
+      "sha256": "0be25ca1c219f4de8e78207161c42459d639ce7f183e98c3b33c10346617337d"
+    },
+    "architecture_decision.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/architecture_decision.json",
+      "sha256": "bcb4a9f7fe2eac595ccf00242ff97ebcf7f92cb3247146a39c2d05c38e6b8da1"
+    },
+    "behavior_diffs.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/behavior_diffs.json",
+      "sha256": "7715edae0123938d49bc7ed0fff977a1ce30fac535f6971cd261d5819719b56b"
+    },
+    "behavior_probes.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/behavior_probes.json",
+      "sha256": "6d768edc26da398a655a4943c7753975d4f17fbf053fcfeea4dc76ac0838ecae"
+    },
+    "direction_analysis.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/direction_analysis.json",
+      "sha256": "33c7f4b8b5c9d16a1084fc8111298b767de37f220f7839b5c191f9dbf17e2b85"
+    },
+    "evidence.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/evidence.json",
+      "sha256": "d4fdeaa34ec0f24990156269184052b831ac90508c8e97508f350da4377ef24f"
+    },
+    "implementation_summary.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/implementation_summary.json",
+      "sha256": "e23c40c5d9329e89acbae2ace824a7dbb5e12c52f9779dbbe3a9ac461b7be778"
+    },
+    "release_notes.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/release_notes.json",
+      "sha256": "95e4c190cddbba98d8e179d7ca8a181f31076fd4d89fdb4f9d76dc9f1c6067e0"
+    },
+    "report.md": {
+      "path": "reports/sdk-evolution/20260627T212447Z/report.md",
+      "sha256": "0bdf2ab4946933e3f6547d9d7a83bac55f4823ace30521609f6bc5d58139fd23"
+    },
+    "review.json": {
+      "path": "reports/sdk-evolution/20260627T212447Z/review.json",
+      "sha256": "5aee1045a9a18588a8a19bac4f7cfd1b102d709a1855d7c6e9e4cf88d86fa082"
+    }
+  },
+  "commit": "7b5ff6032a1e8e7c2cde8d93b485d7762c2dfc05",
+  "dirty_worktree": true,
+  "generated_at_run_id": "20260627T212447Z",
+  "lockfile_hash": "274f0553580a27bc242cd69d2ed0fd84296cb5ef4806f6bed1dd110c393b6fc6",
+  "packages": {
+    "absl-py": "2.4.0",
+    "agent-runtime-kit": "0.2.0",
+    "annotated-types": "0.7.0",
+    "anyio": "4.13.0",
+    "ast-serialize": "0.5.0",
+    "attrs": "26.1.0",
+    "backports-asyncio-runner": "1.2.0",
+    "build": "1.5.0",
+    "certifi": "2026.5.20",
+    "cffi": "2.0.0",
+    "charset-normalizer": "3.4.7",
+    "claude-agent-sdk": "0.2.110",
+    "click": "8.4.1",
+    "colorama": "0.4.6",
+    "cryptography": "48.0.0",
+    "distro": "1.9.0",
+    "exceptiongroup": "1.3.1",
+    "google-antigravity": "0.1.5",
+    "google-auth": "2.53.0",
+    "google-genai": "2.7.0",
+    "h11": "0.16.0",
+    "httpcore": "1.0.9",
+    "httpx": "0.28.1",
+    "httpx-sse": "0.4.3",
+    "idna": "3.18",
+    "importlib-metadata": "9.0.0",
+    "iniconfig": "2.3.0",
+    "jsonschema": "4.26.0",
+    "jsonschema-specifications": "2025.9.1",
+    "librt": "0.11.0",
+    "mcp": "1.27.2",
+    "mypy": "2.1.0",
+    "mypy-extensions": "1.1.0",
+    "openai-codex": "0.1.0b3",
+    "openai-codex-cli-bin": "0.137.0a4",
+    "packaging": "26.2",
+    "pathspec": "1.1.1",
+    "pluggy": "1.6.0",
+    "protobuf": "7.35.0",
+    "pyasn1": "0.6.3",
+    "pyasn1-modules": "0.4.2",
+    "pycparser": "3.0",
+    "pydantic": "2.13.4",
+    "pydantic-core": "2.46.4",
+    "pydantic-settings": "2.14.1",
+    "pygments": "2.20.0",
+    "pyjwt": "2.13.0",
+    "pyproject-hooks": "1.2.0",
+    "pytest": "9.0.3",
+    "pytest-asyncio": "1.4.0",
+    "python-dotenv": "1.2.2",
+    "python-multipart": "0.0.30",
+    "pywin32": "311",
+    "referencing": "0.37.0",
+    "requests": "2.34.2",
+    "rpds-py": "2026.5.1",
+    "ruff": "0.15.15",
+    "sniffio": "1.3.1",
+    "sse-starlette": "3.4.4",
+    "starlette": "1.2.1",
+    "tenacity": "9.1.4",
+    "tomli": "2.4.1",
+    "typing-extensions": "4.15.0",
+    "typing-inspection": "0.4.2",
+    "urllib3": "2.7.0",
+    "uvicorn": "0.48.0",
+    "websockets": "16.0",
+    "zipp": "4.1.0"
+  },
+  "promotion": {
+    "blocked_reason": "",
+    "implementation_applied": true,
+    "promoted": true,
+    "status": "promoted"
+  },
+  "schema_version": "1",
+  "source_run_id": "20260627T212447Z"
+}
