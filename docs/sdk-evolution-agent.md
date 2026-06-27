@@ -155,10 +155,13 @@ architecture decision is marked `manual_design_required`. An empty added /
 removed / changed diff is valid; a missing diff object is not.
 
 Behavior probes intentionally separate observed SDK surface churn from adapter
-contract breakage. `behavior_probes.json` records fields and parameters seen in
-current and candidate packages, while `behavior_diffs.json` compares the
-required adapter contract. Optional field changes remain visible in the report
-and API diffs, but only breaking adapter-contract diffs block implementation.
+contract breakage. When `uv.lock` contains a provider SDK version, the locked
+package is probed as the current baseline in a temporary isolated virtualenv; the
+ambient Python environment is not accepted as current-state evidence for that
+package. `behavior_probes.json` records fields and parameters seen in baseline
+and candidate packages, while `behavior_diffs.json` compares the required
+adapter contract. Optional field changes remain visible in the report and API
+diffs, but only breaking adapter-contract diffs block implementation.
 
 ## Implementation Gates
 

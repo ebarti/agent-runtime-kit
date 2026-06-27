@@ -244,7 +244,6 @@ def test_behavior_diffs_track_candidate_contract_changes() -> None:
         [
             {
                 "name": "fake-sdk",
-                "locked_version": "1.0.0",
                 "installed_version": "1.0.0",
             }
         ],
@@ -302,7 +301,15 @@ def test_behavior_evidence_uses_locked_baseline_when_environment_drifted(
 
     def isolated(package: str, version: str, *, scope: str = "candidate"):
         calls.append((package, version, scope))
-        return (_probe(package, version, scope, "pass", {"scope": scope}),)
+        return (
+            _probe(
+                package,
+                version,
+                scope,
+                "pass",
+                {"missing": [], "required_fields": ["required"]},
+            ),
+        )
 
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.behavior.probe_candidate_in_venv",
@@ -324,7 +331,82 @@ def test_behavior_evidence_uses_locked_baseline_when_environment_drifted(
         ("claude-agent-sdk", "0.2.96", "current-baseline"),
         ("claude-agent-sdk", "0.2.106", "candidate"),
     ]
-    assert behavior["diffs"][0].severity == "changed"
+    assert behavior["diffs"][0].severity == "none"
+
+
+def test_behavior_evidence_uses_locked_baseline_when_sdk_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def isolated(package: str, version: str, *, scope: str = "candidate"):
+        calls.append((package, version, scope))
+        return (
+            _probe(
+                package,
+                version,
+                scope,
+                "pass",
+                {"missing": [], "required_fields": ["required"]},
+            ),
+        )
+
+    def current(package: str, *, version: str | None = None):
+        raise AssertionError(f"ambient current probe should not run for {package} {version}")
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_candidate_in_venv",
+        isolated,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_current_package",
+        current,
+    )
+
+    behavior = collect_behavior_evidence(
+        [
+            {
+                "name": "claude-agent-sdk",
+                "locked_version": "0.2.106",
+                "installed_version": None,
+            }
+        ],
+        {"claude-agent-sdk": "0.2.110"},
+    )
+
+    assert calls == [
+        ("claude-agent-sdk", "0.2.106", "current-baseline"),
+        ("claude-agent-sdk", "0.2.110", "candidate"),
+    ]
+    assert behavior["diffs"][0].severity == "none"
+
+
+def test_behavior_evidence_uses_locked_baseline_even_when_sdk_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def isolated(package: str, version: str, *, scope: str = "candidate"):
+        calls.append((package, version, scope))
+        return (_probe(package, version, scope, "pass", {"scope": scope}),)
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_candidate_in_venv",
+        isolated,
+    )
+
+    collect_behavior_evidence(
+        [
+            {
+                "name": "openai-codex",
+                "locked_version": "0.1.0b3",
+                "installed_version": "0.1.0b3",
+            }
+        ],
+        {},
+    )
+
+    assert calls == [("openai-codex", "0.1.0b3", "current-baseline")]
 
 
 def test_behavior_probe_guard_blocks_breaking_candidate_diff() -> None:
