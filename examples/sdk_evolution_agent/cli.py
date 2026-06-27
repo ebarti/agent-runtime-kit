@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -22,6 +23,8 @@ from examples.sdk_evolution_agent.current_state import build_current_state
 from examples.sdk_evolution_agent.events import JsonlEventSink
 from examples.sdk_evolution_agent.models import (
     DEFAULT_PACKAGES,
+    ApiMember,
+    ApiSnapshot,
     RunContext,
     RunOptions,
     to_jsonable,
@@ -182,7 +185,7 @@ async def run_agent(
         command_runner=command_runner,
     )
     update_versions = _refresh_update_versions(evidence)
-    snapshots = _collect_snapshots(evidence)
+    snapshots = _collect_snapshots(evidence, workspace=options.workspace)
     api_diffs = [to_jsonable(diff) for diff in diff_snapshot_groups(snapshots)]
     release_notes = [
         to_jsonable(item)
@@ -396,7 +399,7 @@ def _create_autonomous_pr(
     relative_report = _relative_path(root, report_path.parent)
     paths = ("uv.lock", relative_report)
     results = [
-        to_jsonable(stage_paths(root, paths, command_runner=command_runner)),
+        to_jsonable(stage_paths(root, paths, force=True, command_runner=command_runner)),
         to_jsonable(
             commit_staged(
                 root,
@@ -434,7 +437,7 @@ def _commit_final_autonomous_pr_report(
     branch_name = options.branch_name or _current_branch(root, command_runner=command_runner)
     relative_report = _relative_path(root, report_path.parent)
     results = [
-        stage_paths(root, (relative_report,), command_runner=command_runner),
+        stage_paths(root, (relative_report,), force=True, command_runner=command_runner),
         commit_staged(
             root,
             message="Finalize SDK evolution report",
@@ -466,11 +469,17 @@ def _relative_path(root: Path, path: Path) -> str:
         return str(path)
 
 
-def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = True) -> list[Any]:
+def _collect_snapshots(
+    evidence: dict[str, Any],
+    *,
+    inspect_candidates: bool = True,
+    workspace: Path | None = None,
+) -> list[Any]:
     del inspect_candidates  # Candidate inspection is mandatory for update candidates.
     snapshots = []
     update_versions = _refresh_update_versions(evidence)
     refresh_preview_seen = evidence.get("refresh_preview") is not None
+    baseline_artifacts = _load_promoted_baseline_snapshots(workspace) if workspace else {}
     for package in evidence.get("packages", []):
         if not isinstance(package, dict):
             continue
@@ -481,7 +490,10 @@ def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = T
         if locked and installed and locked != installed:
             snapshots.append(snapshot_candidate_in_venv(name, str(locked)))
         else:
-            snapshots.append(snapshot_current_api(name, version=baseline))
+            current_snapshot = snapshot_current_api(name, version=baseline)
+            if current_snapshot.import_error and baseline:
+                current_snapshot = baseline_artifacts.get((name, str(baseline)), current_snapshot)
+            snapshots.append(current_snapshot)
         candidate = update_versions.get(name)
         if candidate is None and not refresh_preview_seen:
             latest = package.get("latest_version")
@@ -490,6 +502,72 @@ def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = T
         if candidate:
             snapshots.append(snapshot_candidate_in_venv(name, candidate))
     return snapshots
+
+
+def _load_promoted_baseline_snapshots(workspace: Path | None) -> dict[tuple[str, str], ApiSnapshot]:
+    if workspace is None:
+        return {}
+    manifests = _promoted_current_state_manifests(workspace)
+    snapshots: dict[tuple[str, str], ApiSnapshot] = {}
+    for manifest in manifests:
+        artifacts = manifest.get("artifacts")
+        if not isinstance(artifacts, dict):
+            continue
+        for name, ref in sorted(artifacts.items()):
+            if not name.startswith("api_snapshots/") or not isinstance(ref, dict):
+                continue
+            path_value = ref.get("path")
+            if not isinstance(path_value, str) or not path_value:
+                continue
+            path = Path(path_value)
+            if not path.is_absolute():
+                path = workspace / path
+            snapshot = _load_api_snapshot(path)
+            if snapshot is None or snapshot.import_error or not snapshot.version:
+                continue
+            snapshots[(snapshot.package, str(snapshot.version))] = snapshot
+    return snapshots
+
+
+def _promoted_current_state_manifests(workspace: Path) -> list[dict[str, Any]]:
+    manifests: list[dict[str, Any]] = []
+    for path in sorted((workspace / "reports").glob("sdk-evolution*/**/current_state.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        promotion = data.get("promotion")
+        if isinstance(promotion, dict) and promotion.get("promoted") is True:
+            manifests.append(data)
+    manifests.sort(key=lambda item: str(item.get("generated_at_run_id") or ""))
+    return manifests
+
+
+def _load_api_snapshot(path: Path) -> ApiSnapshot | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    members = tuple(
+        ApiMember(
+            name=str(item.get("name") or ""),
+            kind=str(item.get("kind") or ""),
+            signature=str(item.get("signature") or ""),
+            module=str(item.get("module") or ""),
+        )
+        for item in data.get("members", ())
+        if isinstance(item, dict) and item.get("name")
+    )
+    return ApiSnapshot(
+        package=str(data.get("package") or ""),
+        version=str(data.get("version")) if data.get("version") is not None else None,
+        module=str(data.get("module") or ""),
+        members=members,
+        import_error=data.get("import_error"),
+        source="current-state-artifact",
+    )
 
 
 def _refresh_update_versions(evidence: dict[str, Any]) -> dict[str, str]:

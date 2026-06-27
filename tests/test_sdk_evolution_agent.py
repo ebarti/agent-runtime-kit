@@ -35,8 +35,8 @@ from examples.sdk_evolution_agent.collectors import (
     run_refresh_preview,
 )
 from examples.sdk_evolution_agent.current_state import build_current_state
-from examples.sdk_evolution_agent.models import ApiSnapshot, CommandResult, RunContext
-from examples.sdk_evolution_agent.pr import build_draft_pr_body
+from examples.sdk_evolution_agent.models import ApiMember, ApiSnapshot, CommandResult, RunContext
+from examples.sdk_evolution_agent.pr import build_draft_pr_body, stage_paths
 from examples.sdk_evolution_agent.release_notes import collect_release_notes
 from examples.sdk_evolution_agent.schemas import (
     DIRECTION_ANALYSIS_SCHEMA,
@@ -244,7 +244,6 @@ def test_behavior_diffs_track_candidate_contract_changes() -> None:
         [
             {
                 "name": "fake-sdk",
-                "locked_version": "1.0.0",
                 "installed_version": "1.0.0",
             }
         ],
@@ -302,7 +301,15 @@ def test_behavior_evidence_uses_locked_baseline_when_environment_drifted(
 
     def isolated(package: str, version: str, *, scope: str = "candidate"):
         calls.append((package, version, scope))
-        return (_probe(package, version, scope, "pass", {"scope": scope}),)
+        return (
+            _probe(
+                package,
+                version,
+                scope,
+                "pass",
+                {"missing": [], "required_fields": ["required"]},
+            ),
+        )
 
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.behavior.probe_candidate_in_venv",
@@ -324,7 +331,82 @@ def test_behavior_evidence_uses_locked_baseline_when_environment_drifted(
         ("claude-agent-sdk", "0.2.96", "current-baseline"),
         ("claude-agent-sdk", "0.2.106", "candidate"),
     ]
-    assert behavior["diffs"][0].severity == "changed"
+    assert behavior["diffs"][0].severity == "none"
+
+
+def test_behavior_evidence_uses_locked_baseline_when_sdk_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def isolated(package: str, version: str, *, scope: str = "candidate"):
+        calls.append((package, version, scope))
+        return (
+            _probe(
+                package,
+                version,
+                scope,
+                "pass",
+                {"missing": [], "required_fields": ["required"]},
+            ),
+        )
+
+    def current(package: str, *, version: str | None = None):
+        raise AssertionError(f"ambient current probe should not run for {package} {version}")
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_candidate_in_venv",
+        isolated,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_current_package",
+        current,
+    )
+
+    behavior = collect_behavior_evidence(
+        [
+            {
+                "name": "claude-agent-sdk",
+                "locked_version": "0.2.106",
+                "installed_version": None,
+            }
+        ],
+        {"claude-agent-sdk": "0.2.110"},
+    )
+
+    assert calls == [
+        ("claude-agent-sdk", "0.2.106", "current-baseline"),
+        ("claude-agent-sdk", "0.2.110", "candidate"),
+    ]
+    assert behavior["diffs"][0].severity == "none"
+
+
+def test_behavior_evidence_uses_locked_baseline_even_when_sdk_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def isolated(package: str, version: str, *, scope: str = "candidate"):
+        calls.append((package, version, scope))
+        return (_probe(package, version, scope, "pass", {"scope": scope}),)
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_candidate_in_venv",
+        isolated,
+    )
+
+    collect_behavior_evidence(
+        [
+            {
+                "name": "openai-codex",
+                "locked_version": "0.1.0b3",
+                "installed_version": "0.1.0b3",
+            }
+        ],
+        {},
+    )
+
+    assert calls == [("openai-codex", "0.1.0b3", "current-baseline")]
 
 
 def test_behavior_probe_guard_blocks_breaking_candidate_diff() -> None:
@@ -566,6 +648,92 @@ def test_collect_snapshots_uses_locked_baseline_when_environment_drifted(
         ("isolated", "claude-agent-sdk", "0.2.96"),
         ("isolated", "claude-agent-sdk", "0.2.106"),
     ]
+
+
+def test_collect_snapshots_loads_promoted_baseline_when_current_sdk_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline_root = tmp_path / "reports" / "sdk-evolution-autonomous" / "run-1"
+    snapshots_dir = baseline_root / "api_snapshots"
+    snapshots_dir.mkdir(parents=True)
+    baseline_snapshot = snapshots_dir / "01-claude-agent-sdk.json"
+    baseline_snapshot.write_text(
+        """
+{
+  "package": "claude-agent-sdk",
+  "version": "0.2.106",
+  "module": "claude_agent_sdk",
+  "members": [
+    {"name": "ClaudeAgentOptions", "kind": "class", "signature": "", "module": "claude_agent_sdk"}
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+    (baseline_root / "current_state.json").write_text(
+        """
+{
+  "generated_at_run_id": "run-1",
+  "artifacts": {
+    "api_snapshots/01-claude-agent-sdk.json": {
+      "path": "reports/sdk-evolution-autonomous/run-1/api_snapshots/01-claude-agent-sdk.json",
+      "sha256": "unused"
+    }
+  },
+  "promotion": {"promoted": true}
+}
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        lambda package, *, version=None: ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+            import_error="No module named provider_sdk",
+        ),
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        lambda package, version: ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+            members=(
+                ApiMember("ClaudeAgentOptions", "class"),
+                ApiMember("TaskUpdatedMessage", "class"),
+            ),
+            source="isolated-venv",
+        ),
+    )
+
+    snapshots = _collect_snapshots(
+        {
+            "packages": [
+                {
+                    "name": "claude-agent-sdk",
+                    "locked_version": "0.2.106",
+                    "installed_version": None,
+                    "latest_version": "0.2.110",
+                }
+            ],
+            "refresh_preview": {
+                "stdout": "",
+                "stderr": "Update claude-agent-sdk v0.2.106 -> v0.2.110\n",
+            },
+        },
+        workspace=tmp_path,
+    )
+
+    assert [snapshot.source for snapshot in snapshots] == [
+        "current-state-artifact",
+        "isolated-venv",
+    ]
+    assert snapshots[0].import_error is None
+    assert snapshots[0].version == "0.2.106"
 
 
 def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
@@ -957,6 +1125,18 @@ version = "0.2.1"
     assert report_path.exists()
     assert ("git", "switch", "-c", "sdk-update-test") in commands
     assert ("uv", "lock", "-P", "claude-agent-sdk") in commands
+    assert any(
+        command[:4] == ("git", "add", "-f", "uv.lock")
+        and len(command) == 5
+        and command[4].startswith("reports/")
+        for command in commands
+    )
+    assert any(
+        command[:3] == ("git", "add", "-f")
+        and len(command) == 4
+        and command[3].startswith("reports/")
+        for command in commands
+    )
     assert any(command[:3] == ("git", "commit", "-m") for command in commands)
     assert any(command[:4] == ("gh", "pr", "create", "--draft") for command in commands)
     assert ("git", "commit", "-m", "Finalize SDK evolution report") in commands
@@ -987,6 +1167,30 @@ def test_parse_args_and_pr_body() -> None:
     assert options.implementation_enabled is True
     assert options.draft_pr is True
     assert "No auto-merge" in body
+
+
+def test_stage_paths_can_force_ignored_report_artifacts(tmp_path: Path) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandResult:
+        del cwd, env
+        commands.append(command)
+        return CommandResult(command=command, returncode=0)
+
+    result = stage_paths(
+        tmp_path,
+        ("uv.lock", "reports/sdk-evolution/run-1"),
+        force=True,
+        command_runner=runner,
+    )
+
+    assert result.returncode == 0
+    assert commands == [("git", "add", "-f", "uv.lock", "reports/sdk-evolution/run-1")]
 
 
 def test_build_registry_injects_isolated_codex_home() -> None:

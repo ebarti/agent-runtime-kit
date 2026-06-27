@@ -91,9 +91,10 @@ Step responsibilities:
   changelogs, release pages, docs changelogs, repository releases, and package
   metadata links. This step records what changed according to the vendor and
   explicitly marks missing or incomplete release-note coverage.
-- **Run adapter behavior probes**: Execute deterministic unit probes, installed
-  SDK contract probes, and optional live probes. This step answers whether the
-  adapter behavior still holds, including permissions, sandbox/workspace
+- **Run adapter behavior probes**: Execute deterministic unit probes, locked
+  SDK baseline probes in isolated environments, candidate SDK contract probes,
+  and optional live probes. This step answers whether the adapter behavior still
+  holds, including permissions, sandbox/workspace
   handling, streaming, structured output, MCP/tool support, auth discovery, and
   session/resume behavior.
 - **Build evidence bundle**: Normalize package facts, resolver facts, API
@@ -165,6 +166,18 @@ python -m examples.sdk_evolution_agent --runtime claude-agent-sdk --refresh-prev
 python -m examples.sdk_evolution_agent --runtime codex-agent-sdk --refresh-preview
 python -m examples.sdk_evolution_agent --runtime antigravity-agent-sdk --refresh-preview
 ```
+
+The canonical end-to-end upgrade entrypoint is the named repo-local command:
+
+```bash
+uv run sdk-evolution-upgrade
+```
+
+The script owns operator workflow details that should not live as copied
+assistant command snippets: unique worktree and branch creation, all-package targeting,
+freshness-cutoff bypassing, Codex auth preflight, report-only gating, and the
+implementation/draft-PR pass. It intentionally does not expose package subset
+flags because SDK evolution runs should inspect all tracked provider packages.
 
 Before a Codex-backed run, prepare the dedicated SDK evolution auth home:
 
@@ -354,9 +367,11 @@ Each probe result should include:
 - stdout/stderr summary,
 - skipped reason when optional credentials are missing.
 
-`behavior_diffs.json` compares current-environment probes against
-candidate-version probes for resolver-selected updates. Breaking candidate probe
-changes block implementation deterministically before any local lock update.
+`behavior_diffs.json` compares locked-baseline probes against candidate-version
+probes for resolver-selected updates. If a package has a locked version, an
+ambient current-environment import failure is not valid current-state evidence.
+Breaking candidate probe changes block implementation deterministically before
+any local lock update.
 
 `behavior_probes.json` may include observed SDK fields or parameters that are
 not part of the adapter contract. `behavior_diffs.json` compares the required

@@ -28,6 +28,36 @@ from `RuntimeRegistry`. The agent does not call OpenAI, Anthropic, Google, or
 other model APIs directly for reasoning, planning, implementation, review, or
 structured output.
 
+## Upgrade Script
+
+For the real local upgrade workflow, use the named command from the repo root:
+
+```bash
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+  uv run sdk-evolution-upgrade
+```
+
+The script always targets all tracked upstream SDK packages:
+
+- `claude-agent-sdk`
+- `openai-codex`
+- `openai-codex-cli-bin`
+- `google-antigravity`
+
+By default it uses `codex-agent-sdk`, fetches `origin`, creates a
+collision-free branch and worktree from the updated `origin/main` baseline,
+targets every tracked upstream SDK package, runs the report-only evidence and
+decision pass first, then runs the implementation and draft-PR pass. The
+generated worktree path and branch include a timestamp and random suffix, so
+rerunning the script does not collide with a previous run.
+
+Use report-only mode when you want evidence and decisions without edits:
+
+```bash
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+  uv run sdk-evolution-upgrade --report-only
+```
+
 When `--runtime codex-agent-sdk` is selected, the agent injects
 `CODEX_HOME=~/.codex_agent_runtime_sdk` into the Codex SDK subprocess. This keeps
 the dogfooded SDK evolution agent's Codex state separate from a user's normal
@@ -125,10 +155,13 @@ architecture decision is marked `manual_design_required`. An empty added /
 removed / changed diff is valid; a missing diff object is not.
 
 Behavior probes intentionally separate observed SDK surface churn from adapter
-contract breakage. `behavior_probes.json` records fields and parameters seen in
-current and candidate packages, while `behavior_diffs.json` compares the
-required adapter contract. Optional field changes remain visible in the report
-and API diffs, but only breaking adapter-contract diffs block implementation.
+contract breakage. When `uv.lock` contains a provider SDK version, the locked
+package is probed as the current baseline in a temporary isolated virtualenv; the
+ambient Python environment is not accepted as current-state evidence for that
+package. `behavior_probes.json` records fields and parameters seen in baseline
+and candidate packages, while `behavior_diffs.json` compares the required
+adapter contract. Optional field changes remain visible in the report and API
+diffs, but only breaking adapter-contract diffs block implementation.
 
 ## Implementation Gates
 
