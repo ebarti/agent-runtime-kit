@@ -5,6 +5,22 @@ applications one typed async API for dispatching an agentic task through Claude
 Agent SDK, OpenAI Codex SDK, or Google Antigravity SDK while keeping provider
 capabilities visible.
 
+**Tags:** `agent-sdk` `agent-runtime` `coding-agents` `claude-code`
+`openai-codex` `google-antigravity` `mcp` `typed-python` `async-python`
+`developer-tools`
+
+## About
+
+`agent-runtime-kit` is for Python developers who want to run coding-agent tasks
+through vendor runtimes without rewriting their application around each SDK. It
+normalizes the runtime boundary: task inputs, capability checks, event streams,
+tool audits, availability diagnostics, and typed results.
+
+The library keeps vendor differences visible. Claude, Codex, and Antigravity
+still expose different capabilities, permission models, setup requirements, and
+unsupported fields. `agent-runtime-kit` gives those differences a consistent
+shape instead of hiding them behind a lowest-common-denominator wrapper.
+
 The package is intentionally not a router, benchmark harness, queue, hosted
 service, or full agent framework. It is the reusable layer underneath those
 systems: task models, runtime capabilities, event sinks, availability
@@ -12,20 +28,33 @@ diagnostics, and adapters.
 
 ## Install
 
-Core only:
+If you want all first-party runtimes available, install the `all` extra:
+
+```bash
+pip install "agent-runtime-kit[all]"
+```
+
+Install the dependency-free core when you only need the public models, fake
+runtime, registry, diagnostics types, or you plan to add provider SDKs later:
 
 ```bash
 pip install agent-runtime-kit
 ```
 
-Provider extras:
+Install a single provider extra when your application only dispatches through
+one vendor runtime:
 
 ```bash
 pip install "agent-runtime-kit[claude]"
 pip install "agent-runtime-kit[codex]"
 pip install "agent-runtime-kit[antigravity]"
-pip install "agent-runtime-kit[all]"
 ```
+
+Provider extras are a packaging boundary, not a separate API. They keep the
+core importable without vendor SDKs, avoid forcing every user to install every
+CLI binary or compiled runtime wheel, and contain dependency drift when one
+fast-moving vendor SDK changes independently of the others. Missing adapters
+raise typed setup errors that point to the matching extra.
 
 ```python
 import asyncio
@@ -84,5 +113,4 @@ cost, session id, artifacts, tool-call audits, and provider metadata.
 - [Capability matrix](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/capability-matrix.md)
 - [Live smoke tests](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/live-smoke.md)
 - [Mestre migration notes](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/mestre-migration.md)
-- [Publish checklist](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/publish-checklist.md)
 - [SDK evolution agent](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/sdk-evolution-agent.md)
