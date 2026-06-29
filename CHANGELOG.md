@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README and package metadata now include clearer About copy and searchable
   tags for agent runtime, coding-agent, Claude Code, Codex, Antigravity, MCP,
   typed Python, and async Python use cases.
+- Python 3.14 is now included in package classifiers and CI support gates.
 - The source distribution now allowlists individual public docs instead of the
   whole `docs/` directory.
 
