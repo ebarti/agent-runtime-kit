@@ -526,6 +526,56 @@ def test_antigravity_data_dir_is_private(tmp_path: Path) -> None:
     assert mode == 0o700
 
 
+def test_antigravity_runtime_dir_survives_chmod_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+    import os
+
+    def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError("not owner")
+
+    monkeypatch.setattr(os, "chmod", boom)
+    runtime = make_runtime(data_dir=tmp_path)
+
+    # A chmod we cannot perform (e.g. a shared, non-owned data dir) must not crash.
+    with caplog.at_level(logging.WARNING):
+        path = runtime._runtime_dir("antigravity-sessions")
+
+    assert path.exists()
+    assert "could not enforce" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_antigravity_logs_when_close_fails_after_enter_failure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    class ExplodingAgent(FakeAgent):
+        async def __aenter__(self) -> FakeAgent:
+            raise RuntimeError("enter failed")
+
+        async def __aexit__(self, *args: object) -> None:
+            raise RuntimeError("close failed too")
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=ExplodingAgent,
+        config_cls=FakeConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+        reuse_process=True,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(RuntimeError, match="enter failed"):
+            await runtime.run(AgentTask(goal="x", session_id="conv"))
+
+    assert "after startup failure" in caplog.text
+
+
 def test_antigravity_availability_uses_injected_sdk(tmp_path: Path) -> None:
     runtime = make_runtime(data_dir=tmp_path)
 

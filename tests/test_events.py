@@ -13,6 +13,29 @@ from agent_runtime_kit.testing import (
 )
 
 
+class ExplodingEventSink:
+    """Event sink whose emit always raises, to prove safe_emit never aborts a run."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def emit(self, event: object) -> None:
+        self.calls += 1
+        raise RuntimeError("sink is down")
+
+
+@pytest.mark.asyncio
+async def test_safe_emit_failures_do_not_abort_run() -> None:
+    sink = ExplodingEventSink()
+    runtime = FakeAgentRuntime(output="hello")
+
+    # A sink that raises on every event must not propagate or fail the run.
+    result = await runtime.run(AgentTask(goal="resilient", event_sink=sink))
+
+    assert result.output == "hello"
+    assert sink.calls > 0
+
+
 @pytest.mark.asyncio
 async def test_fake_runtime_emits_normalized_events() -> None:
     sink = RecordingEventSink()
