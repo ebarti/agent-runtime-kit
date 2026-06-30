@@ -40,6 +40,44 @@ class FakeClaudeOptions:
 RECORDED: dict[str, Any] = {}
 
 
+class FakeClaudeClient:
+    messages: list[Any] = []
+    query_errors: list[BaseException | None] = []
+    instances: list[FakeClaudeClient] = []
+
+    def __init__(self, options: Any) -> None:
+        self.options = options
+        self.connected = False
+        self.closed = False
+        self.queries: list[tuple[str, str]] = []
+        FakeClaudeClient.instances.append(self)
+
+    async def connect(self) -> None:
+        self.connected = True
+
+    async def disconnect(self) -> None:
+        self.closed = True
+
+    async def query(self, prompt: str, *, session_id: str = "default") -> None:
+        self.queries.append((prompt, session_id))
+        if FakeClaudeClient.query_errors:
+            error = FakeClaudeClient.query_errors.pop(0)
+            if error is not None:
+                raise error
+
+    async def receive_response(self):
+        for message in FakeClaudeClient.messages:
+            yield message
+
+
+@pytest.fixture(autouse=True)
+def reset_fakes() -> None:
+    RECORDED.clear()
+    FakeClaudeClient.messages = []
+    FakeClaudeClient.query_errors = []
+    FakeClaudeClient.instances.clear()
+
+
 def make_query(messages: list[Any]) -> Any:
     async def fake_query(*, prompt: str, options: Any):
         RECORDED["options"] = options
@@ -94,6 +132,91 @@ async def test_claude_runtime_runs_with_injected_sdk() -> None:
     assert result.tool_calls[0].tool_name == "Read"
     assert result.cost_usd == 0.01
     assert sink.events[-1]["name"] == "agent.task.completed"
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_can_reuse_process_until_closed() -> None:
+    FakeClaudeClient.messages = [assistant("ok"), result_message()]
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([]),
+        options_cls=FakeClaudeOptions,
+        client_cls=FakeClaudeClient,
+        reuse_process=True,
+    )
+
+    first = await runtime.run(AgentTask(goal="first", task_id="task-first"))
+    second = await runtime.run(AgentTask(goal="second", task_id="task-second"))
+
+    assert len(FakeClaudeClient.instances) == 1
+    assert FakeClaudeClient.instances[0].connected is True
+    assert FakeClaudeClient.instances[0].closed is False
+    assert FakeClaudeClient.instances[0].queries == [
+        ("first", "task-first"),
+        ("second", "task-second"),
+    ]
+    assert first.metadata["sdk_process_reuse_enabled"] is True
+    assert first.metadata["sdk_process_reused"] is False
+    assert first.metadata["sdk_process_start_count"] == 1
+    assert second.metadata["sdk_process_reused"] is True
+    assert second.metadata["sdk_process_start_count"] == 1
+    assert second.metadata["sdk_process_reuse_count"] == 1
+
+    await runtime.aclose()
+
+    assert FakeClaudeClient.instances[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_restarts_reused_process_on_option_change(tmp_path: Path) -> None:
+    FakeClaudeClient.messages = [assistant("ok"), result_message()]
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([]),
+        options_cls=FakeClaudeOptions,
+        client_cls=FakeClaudeClient,
+        reuse_process=True,
+    )
+
+    first = await runtime.run(AgentTask(goal="first"))
+    second = await runtime.run(AgentTask(goal="second", working_directory=tmp_path))
+
+    assert first.metadata["sdk_process_reused"] is False
+    assert second.metadata["sdk_process_reused"] is False
+    assert second.metadata["sdk_process_start_count"] == 2
+    assert len(FakeClaudeClient.instances) == 2
+    assert FakeClaudeClient.instances[0].closed is True
+    assert FakeClaudeClient.instances[1].closed is False
+
+    await runtime.aclose()
+
+    assert FakeClaudeClient.instances[1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_evicts_reused_process_after_sdk_exception() -> None:
+    FakeClaudeClient.messages = [assistant("ok"), result_message()]
+    FakeClaudeClient.query_errors = [RuntimeError("boom"), None]
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([]),
+        options_cls=FakeClaudeOptions,
+        client_cls=FakeClaudeClient,
+        reuse_process=True,
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await runtime.run(AgentTask(goal="fail"))
+
+    recovered = await runtime.run(AgentTask(goal="recover"))
+
+    assert recovered.output == "ok"
+    assert recovered.metadata["sdk_process_reused"] is False
+    assert recovered.metadata["sdk_process_start_count"] == 2
+    assert len(FakeClaudeClient.instances) == 2
+    assert FakeClaudeClient.instances[0].closed is True
+    assert FakeClaudeClient.instances[1].closed is False
+
+    await runtime.aclose()
+
+    assert FakeClaudeClient.instances[1].closed is True
 
 
 @pytest.mark.asyncio

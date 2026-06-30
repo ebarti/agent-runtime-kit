@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 from collections.abc import AsyncIterator, Iterable, Mapping
@@ -60,18 +61,34 @@ class ClaudeAgentRuntime:
         env: Mapping[str, str] | None = None,
         query_func: Any | None = None,
         options_cls: Any | None = None,
+        client_cls: Any | None = None,
+        reuse_process: bool = False,
     ) -> None:
         self._default_model = default_model
         self._supported_models = supported_models
         self._env = dict(env) if env is not None else None
         self._query_func = query_func
         self._options_cls = options_cls
+        self._client_cls = client_cls
+        self._reuse_process = reuse_process
+        self._client: Any | None = None
+        self._client_key: tuple[Any, ...] | None = None
+        self._sdk_process_start_count = 0
+        self._sdk_process_reuse_count = 0
+        self._client_lock = asyncio.Lock()
+        self._client_run_lock = asyncio.Lock()
+
+    async def __aenter__(self) -> ClaudeAgentRuntime:
+        return self
+
+    async def __aexit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        await self.aclose()
 
     def availability(self) -> RuntimeAvailability:
         """Report Claude Agent SDK package availability."""
 
         auth_metadata = _claude_auth_metadata(self._env)
-        if self._query_func is not None:
+        if self._query_func is not None or self._client_cls is not None:
             return RuntimeAvailability.ok(
                 self.kind,
                 package="claude-agent-sdk",
@@ -105,17 +122,33 @@ class ClaudeAgentRuntime:
                 model=model,
                 supported_models=self._supported_models,
             )
-            query_func, options_cls = self._load_sdk()
+            query_func, options_cls, client_cls = self._load_sdk()
             options, dropped = self._build_options(task, model, options_cls)
             stream = _StreamState(self, task)
-            async for message in _iter_messages(query_func(prompt=task.goal, options=options)):
-                await stream.consume(message)
+            process_reused = False
+            if self._reuse_process:
+                process_reused = await self._run_with_client(
+                    task,
+                    options=options,
+                    client_cls=client_cls,
+                    stream=stream,
+                )
+            else:
+                async for message in _iter_messages(
+                    query_func(prompt=task.goal, options=options)
+                ):
+                    await stream.consume(message)
             result = _translate_messages(
                 task,
                 stream.messages,
                 model=model,
                 dropped_options=dropped,
                 tool_results=stream.tool_results,
+                process_metadata=(
+                    self._process_reuse_metadata(process_reused)
+                    if self._reuse_process
+                    else None
+                ),
             )
         except Exception as exc:
             await safe_emit(task, task_failed_event(task, self.kind, error=str(exc)))
@@ -139,17 +172,112 @@ class ClaudeAgentRuntime:
 
         del task_id
 
-    def _load_sdk(self) -> tuple[Any, Any]:
-        if self._query_func is not None and self._options_cls is not None:
-            return self._query_func, self._options_cls
+    async def aclose(self) -> None:
+        """Close any reusable Claude SDK client process owned by this runtime."""
+
+        async with self._client_lock:
+            await self._close_client_locked()
+
+    def _load_sdk(self) -> tuple[Any, Any, Any]:
+        if (
+            self._query_func is not None
+            and self._options_cls is not None
+            and (not self._reuse_process or self._client_cls is not None)
+        ):
+            return self._query_func, self._options_cls, self._client_cls
         try:
-            from claude_agent_sdk import ClaudeAgentOptions, query
+            from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, query
         except ImportError as exc:
             raise AgentRuntimeUnavailableError(
                 self.kind,
                 "claude-agent-sdk is not installed. Install agent-runtime-kit[claude].",
             ) from exc
-        return self._query_func or query, self._options_cls or ClaudeAgentOptions
+        return (
+            self._query_func or query,
+            self._options_cls or ClaudeAgentOptions,
+            self._client_cls or ClaudeSDKClient,
+        )
+
+    async def _run_with_client(
+        self,
+        task: AgentTask,
+        *,
+        options: Any,
+        client_cls: Any,
+        stream: _StreamState,
+    ) -> bool:
+        async with self._client_run_lock:
+            key = _fingerprint_value(options)
+            try:
+                client, process_reused = await self._persistent_client(
+                    client_cls,
+                    options,
+                    key=key,
+                )
+                await client.query(task.goal, session_id=_client_session_id(task))
+                receiver = getattr(client, "receive_response", None)
+                if not callable(receiver):
+                    receiver = client.receive_messages
+                async for message in receiver():
+                    await stream.consume(message)
+            except Exception:
+                await self.aclose()
+                raise
+            return process_reused
+
+    async def _persistent_client(
+        self,
+        client_cls: Any,
+        options: Any,
+        *,
+        key: tuple[Any, ...],
+    ) -> tuple[Any, bool]:
+        async with self._client_lock:
+            if self._client is not None and self._client_key == key:
+                self._sdk_process_reuse_count += 1
+                return self._client, True
+            if self._client is not None:
+                await self._close_client_locked()
+            client = client_cls(options)
+            connect = getattr(client, "connect", None)
+            if callable(connect):
+                await connect()
+            else:
+                enter = getattr(client, "__aenter__", None)
+                if callable(enter):
+                    client = await enter()
+            self._client = client
+            self._client_key = key
+            self._sdk_process_start_count += 1
+            return client, False
+
+    async def _close_client_locked(self) -> None:
+        client = self._client
+        self._client = None
+        self._client_key = None
+        if client is None:
+            return
+        disconnect = getattr(client, "disconnect", None)
+        if callable(disconnect):
+            await disconnect()
+            return
+        exit_method = getattr(client, "__aexit__", None)
+        if callable(exit_method):
+            await exit_method(None, None, None)
+            return
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if callable(close):
+            result = close()
+            if hasattr(result, "__await__"):
+                await result
+
+    def _process_reuse_metadata(self, reused: bool) -> dict[str, Any]:
+        return {
+            "sdk_process_reuse_enabled": self._reuse_process,
+            "sdk_process_reused": reused,
+            "sdk_process_start_count": self._sdk_process_start_count,
+            "sdk_process_reuse_count": self._sdk_process_reuse_count,
+        }
 
     def _build_options(
         self, task: AgentTask, model: str, options_cls: Any
@@ -275,6 +403,7 @@ def _translate_messages(
     model: str,
     dropped_options: list[str],
     tool_results: Mapping[str, str],
+    process_metadata: Mapping[str, Any] | None = None,
 ) -> AgentResult:
     content_parts: list[str] = []
     tool_calls: list[ToolCallAudit] = []
@@ -327,7 +456,11 @@ def _translate_messages(
         cost_usd=cost_usd,
     )
     tool_calls = _apply_tool_results(tool_calls, tool_use_ids, tool_results)
-    metadata: dict[str, Any] = {"model": model, "sdk": "claude_agent_sdk"}
+    metadata: dict[str, Any] = {
+        "model": model,
+        "sdk": "claude_agent_sdk",
+        **dict(process_metadata or {}),
+    }
     if dropped_options:
         metadata["dropped_options"] = list(dropped_options)
     return AgentResult(
@@ -388,6 +521,38 @@ def _permission_mode(mode: PermissionMode) -> str:
     if mode is PermissionMode.PERMISSIVE:
         return "bypassPermissions"
     return "default"
+
+
+def _client_session_id(task: AgentTask) -> str:
+    if task.resume_from is not None:
+        return task.resume_from.session_id
+    if task.session_id:
+        return task.session_id
+    return task.task_id
+
+
+def _fingerprint_value(value: Any) -> tuple[Any, ...]:
+    return (_fingerprint_item(value),)
+
+
+def _fingerprint_item(value: Any) -> Any:
+    if value is None or isinstance(value, bool | int | float | str):
+        return value
+    if isinstance(value, os.PathLike):
+        return str(value)
+    if isinstance(value, Mapping):
+        return tuple(
+            sorted((str(key), _fingerprint_item(item)) for key, item in value.items())
+        )
+    if isinstance(value, Iterable) and not isinstance(value, bytes | str | Mapping):
+        return tuple(_fingerprint_item(item) for item in value)
+    if hasattr(value, "__dict__"):
+        return (
+            type(value).__module__,
+            type(value).__qualname__,
+            _fingerprint_item(vars(value)),
+        )
+    return (type(value).__module__, type(value).__qualname__, repr(value))
 
 
 def _message_type(message: Any) -> str:

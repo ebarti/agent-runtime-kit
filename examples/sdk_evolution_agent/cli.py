@@ -162,121 +162,82 @@ async def run_agent(
         event_sink=event_sink,
     )
     selected_runtime = runtime or resolve_runtime(options.runtime, registry=registry)
-    pre_run_results: list[dict[str, Any]] = []
-    if options.create_branch and options.branch_name:
-        branch_result = create_branch(
-            options.workspace,
-            options.branch_name,
-            command_runner=command_runner,
-        )
-        pre_run_results.append(to_jsonable(branch_result))
-        if branch_result.returncode != 0:
-            raise RuntimeError(
-                f"failed to create branch {options.branch_name}: {branch_result.stderr}"
+    close_owned_runtime = runtime is None
+    try:
+        pre_run_results: list[dict[str, Any]] = []
+        if options.create_branch and options.branch_name:
+            branch_result = create_branch(
+                options.workspace,
+                options.branch_name,
+                command_runner=command_runner,
             )
-    evidence = collect_evidence(
-        options.workspace,
-        packages=options.packages,
-        include_refresh_preview=options.refresh_preview,
-        pypi_client=pypi_client,
-        command_runner=command_runner,
-    )
-    update_versions = _refresh_update_versions(evidence)
-    snapshots = _collect_snapshots(evidence)
-    api_diffs = [to_jsonable(diff) for diff in diff_snapshot_groups(snapshots)]
-    release_notes = [
-        to_jsonable(item)
-        for item in collect_release_notes(evidence.get("packages", []), update_versions)
-    ]
-    behavior = to_jsonable(collect_behavior_evidence(evidence.get("packages", []), update_versions))
-    direction, architecture, review = await run_analysis_pipeline(
-        selected_runtime,
-        evidence=evidence,
-        api_diffs=api_diffs,
-        release_notes=release_notes,
-        behavior=behavior,
-        context=RunContext(
-            run_id=context.run_id,
-            workspace=context.workspace,
-            report_root=context.report_root,
-            runtime=context.runtime,
-            event_log_path=context.event_log_path,
-            implementation_enabled=context.implementation_enabled,
-            draft_pr=context.draft_pr,
-            event_sink=event_sink,
-        ),
-    )
-    implementation = await maybe_run_implementation(
-        selected_runtime,
-        evidence=evidence,
-        direction=direction,
-        architecture=architecture,
-        review=review,
-        context=context,
-    )
-    implementation.setdefault("verification_results", []).extend(pre_run_results)
-    config = to_jsonable(options)
-    config["run_id"] = run_id
-    config["event_log_path"] = str(context.event_log_path)
-
-    if options.implementation_enabled and implementation.get("allowed"):
-        implementation = _run_local_sdk_update(
-            options,
-            update_versions=update_versions,
-            implementation=implementation,
-            command_runner=command_runner,
-        )
-
-    promoted = bool(implementation.get("applied")) and _verification_passed(implementation)
-    current_state: dict[str, Any] = {
-        "promotion": {
-            "promoted": False,
-            "status": "pending-report-write",
-        }
-    }
-    report_path = _write_full_report(
-        context,
-        config=config,
-        evidence=evidence,
-        snapshots=[to_jsonable(snapshot) for snapshot in snapshots],
-        api_diffs=api_diffs,
-        release_notes=release_notes,
-        behavior=behavior,
-        current_state=current_state,
-        direction=direction,
-        architecture=architecture,
-        implementation=implementation,
-        review=review,
-    )
-    current_state = build_current_state(
-        context,
-        promoted=promoted,
-        status="promoted" if promoted else str(implementation.get("blocked_reason") or "skipped"),
-        implementation=implementation,
-    )
-    report_path = _write_full_report(
-        context,
-        config=config,
-        evidence=evidence,
-        snapshots=[to_jsonable(snapshot) for snapshot in snapshots],
-        api_diffs=api_diffs,
-        release_notes=release_notes,
-        behavior=behavior,
-        current_state=current_state,
-        direction=direction,
-        architecture=architecture,
-        implementation=implementation,
-        review=review,
-    )
-
-    if options.draft_pr:
-        git_results = _create_autonomous_pr(
+            pre_run_results.append(to_jsonable(branch_result))
+            if branch_result.returncode != 0:
+                raise RuntimeError(
+                    f"failed to create branch {options.branch_name}: {branch_result.stderr}"
+                )
+        evidence = collect_evidence(
             options.workspace,
-            report_path=report_path,
-            options=options,
+            packages=options.packages,
+            include_refresh_preview=options.refresh_preview,
+            pypi_client=pypi_client,
             command_runner=command_runner,
         )
-        implementation.setdefault("verification_results", []).extend(git_results)
+        update_versions = _refresh_update_versions(evidence)
+        snapshots = _collect_snapshots(evidence)
+        api_diffs = [to_jsonable(diff) for diff in diff_snapshot_groups(snapshots)]
+        release_notes = [
+            to_jsonable(item)
+            for item in collect_release_notes(evidence.get("packages", []), update_versions)
+        ]
+        behavior = to_jsonable(
+            collect_behavior_evidence(evidence.get("packages", []), update_versions)
+        )
+        direction, architecture, review = await run_analysis_pipeline(
+            selected_runtime,
+            evidence=evidence,
+            api_diffs=api_diffs,
+            release_notes=release_notes,
+            behavior=behavior,
+            context=RunContext(
+                run_id=context.run_id,
+                workspace=context.workspace,
+                report_root=context.report_root,
+                runtime=context.runtime,
+                event_log_path=context.event_log_path,
+                implementation_enabled=context.implementation_enabled,
+                draft_pr=context.draft_pr,
+                event_sink=event_sink,
+            ),
+        )
+        implementation = await maybe_run_implementation(
+            selected_runtime,
+            evidence=evidence,
+            direction=direction,
+            architecture=architecture,
+            review=review,
+            context=context,
+        )
+        implementation.setdefault("verification_results", []).extend(pre_run_results)
+        config = to_jsonable(options)
+        config["run_id"] = run_id
+        config["event_log_path"] = str(context.event_log_path)
+
+        if options.implementation_enabled and implementation.get("allowed"):
+            implementation = _run_local_sdk_update(
+                options,
+                update_versions=update_versions,
+                implementation=implementation,
+                command_runner=command_runner,
+            )
+
+        promoted = bool(implementation.get("applied")) and _verification_passed(implementation)
+        current_state: dict[str, Any] = {
+            "promotion": {
+                "promoted": False,
+                "status": "pending-report-write",
+            }
+        }
         report_path = _write_full_report(
             context,
             config=config,
@@ -291,13 +252,71 @@ async def run_agent(
             implementation=implementation,
             review=review,
         )
-        _commit_final_autonomous_pr_report(
-            options.workspace,
-            report_path=report_path,
-            options=options,
-            command_runner=command_runner,
+        current_state = build_current_state(
+            context,
+            promoted=promoted,
+            status=(
+                "promoted"
+                if promoted
+                else str(implementation.get("blocked_reason") or "skipped")
+            ),
+            implementation=implementation,
         )
-    return report_path
+        report_path = _write_full_report(
+            context,
+            config=config,
+            evidence=evidence,
+            snapshots=[to_jsonable(snapshot) for snapshot in snapshots],
+            api_diffs=api_diffs,
+            release_notes=release_notes,
+            behavior=behavior,
+            current_state=current_state,
+            direction=direction,
+            architecture=architecture,
+            implementation=implementation,
+            review=review,
+        )
+
+        if options.draft_pr:
+            git_results = _create_autonomous_pr(
+                options.workspace,
+                report_path=report_path,
+                options=options,
+                command_runner=command_runner,
+            )
+            implementation.setdefault("verification_results", []).extend(git_results)
+            report_path = _write_full_report(
+                context,
+                config=config,
+                evidence=evidence,
+                snapshots=[to_jsonable(snapshot) for snapshot in snapshots],
+                api_diffs=api_diffs,
+                release_notes=release_notes,
+                behavior=behavior,
+                current_state=current_state,
+                direction=direction,
+                architecture=architecture,
+                implementation=implementation,
+                review=review,
+            )
+            _commit_final_autonomous_pr_report(
+                options.workspace,
+                report_path=report_path,
+                options=options,
+                command_runner=command_runner,
+            )
+        return report_path
+    finally:
+        if close_owned_runtime:
+            await _close_runtime(selected_runtime)
+
+
+async def _close_runtime(runtime: AgentRuntime) -> None:
+    close = getattr(runtime, "aclose", None)
+    if callable(close):
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
 
 
 def _run_local_sdk_update(

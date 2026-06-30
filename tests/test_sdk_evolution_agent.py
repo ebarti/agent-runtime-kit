@@ -18,8 +18,13 @@ from agent_runtime_kit import (
     AgentTask,
     FilesystemAccess,
     RuntimeAvailability,
+    RuntimeRegistry,
 )
-from agent_runtime_kit.adapters import CodexAgentRuntime
+from agent_runtime_kit.adapters import (
+    AntigravityAgentRuntime,
+    ClaudeAgentRuntime,
+    CodexAgentRuntime,
+)
 from examples.sdk_evolution_agent import auth as auth_module
 from examples.sdk_evolution_agent.auth import CodexAuthResult, ensure_codex_sdk_auth
 from examples.sdk_evolution_agent.behavior import (
@@ -968,6 +973,68 @@ version = "0.2.1"
     assert finalize_index > pr_index
 
 
+@pytest.mark.asyncio
+async def test_run_agent_closes_owned_runtime_on_stage_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project.optional-dependencies]
+claude = ["claude-agent-sdk>=0.2"]
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "uv.lock").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        lambda package, *, version=None: ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+        ),
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        lambda package, version: ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+            source="isolated-venv",
+        ),
+    )
+
+    class ClosingRuntime(RecordingRuntime):
+        closed = False
+
+        async def run(self, task: AgentTask) -> AgentResult:
+            self.task = task
+            raise RuntimeError("stage boom")
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    runtime = ClosingRuntime()
+    registry = RuntimeRegistry()
+    registry.register(AgentRuntimeKind.FAKE, lambda: runtime)
+
+    with pytest.raises(StageExecutionError, match="direction-analysis failed"):
+        await run_agent(
+            RunOptions(
+                workspace=tmp_path,
+                runtime="fake",
+                packages=("claude-agent-sdk",),
+                report_dir=Path("reports"),
+                implementation_enabled=False,
+                inspect_candidates=False,
+            ),
+            pypi_client=_fake_pypi,
+            registry=registry,
+        )
+
+    assert runtime.closed is True
+
+
 def test_parse_args_and_pr_body() -> None:
     options = parse_args(
         [
@@ -989,13 +1056,23 @@ def test_parse_args_and_pr_body() -> None:
     assert "No auto-merge" in body
 
 
-def test_build_registry_injects_isolated_codex_home() -> None:
-    runtime = build_registry().resolve(AgentRuntimeKind.CODEX_AGENT_SDK)
+def test_build_registry_configures_vendor_process_reuse() -> None:
+    registry = build_registry()
+    runtime = registry.resolve(AgentRuntimeKind.CODEX_AGENT_SDK)
 
     assert isinstance(runtime, CodexAgentRuntime)
     assert runtime._default_model == SDK_EVOLUTION_CODEX_MODEL
+    assert runtime._reuse_process is True
     assert runtime._env is not None
     assert runtime._env["CODEX_HOME"] == str(SDK_EVOLUTION_CODEX_HOME)
+
+    claude = registry.resolve(AgentRuntimeKind.CLAUDE_AGENT_SDK)
+    assert isinstance(claude, ClaudeAgentRuntime)
+    assert claude._reuse_process is True
+
+    antigravity = registry.resolve(AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK)
+    assert isinstance(antigravity, AntigravityAgentRuntime)
+    assert antigravity._reuse_process is True
 
 
 def test_codex_auth_helper_copies_newer_primary_auth_to_dedicated_home(

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import importlib
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,7 @@ class AntigravityAgentRuntime:
         config_cls: Any | None = None,
         types_module: Any | None = None,
         policy_module: Any | None = None,
+        reuse_process: bool = False,
     ) -> None:
         self._default_model = default_model
         self._supported_models = supported_models
@@ -83,6 +85,20 @@ class AntigravityAgentRuntime:
         self._config_cls = config_cls
         self._types = types_module
         self._policy = policy_module
+        self._reuse_process = reuse_process
+        self._agent_context: Any | None = None
+        self._agent: Any | None = None
+        self._agent_key: tuple[Any, ...] | None = None
+        self._sdk_process_start_count = 0
+        self._sdk_process_reuse_count = 0
+        self._agent_lock = asyncio.Lock()
+        self._agent_run_lock = asyncio.Lock()
+
+    async def __aenter__(self) -> AntigravityAgentRuntime:
+        return self
+
+    async def __aexit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        await self.aclose()
 
     def availability(self) -> RuntimeAvailability:
         """Report Antigravity package and credential availability."""
@@ -158,6 +174,12 @@ class AntigravityAgentRuntime:
         """Antigravity cancellation is not exposed through this portable adapter yet."""
 
         del task_id
+
+    async def aclose(self) -> None:
+        """Close any reusable Antigravity agent process owned by this runtime."""
+
+        async with self._agent_lock:
+            await self._close_agent_locked()
 
     def _load_sdk(self) -> _AntigravitySDK:
         if (
@@ -235,20 +257,39 @@ class AntigravityAgentRuntime:
         usage_metadata: Any | None = None
         structured_output: Any | None = None
         session_id: str | None = None
+        process_reused = False
 
-        async with sdk.agent_cls(config) as agent:
-            response = await agent.chat(task.goal)
-            async for chunk in response.chunks:
-                await self._consume_chunk(
+        if self._reuse_process:
+            async with self._agent_run_lock:
+                try:
+                    agent, process_reused = await self._persistent_agent(
+                        task,
+                        sdk=sdk,
+                        config=config,
+                    )
+                    structured_output, usage_metadata, session_id = await self._chat_agent(
+                        task,
+                        agent=agent,
+                        sdk=sdk,
+                        text_parts=text_parts,
+                        tool_calls=tool_calls,
+                    )
+                except Exception:
+                    await self.aclose()
+                    raise
+        else:
+            async with sdk.agent_cls(config) as agent:
+                structured_output, usage_metadata, session_id = await self._chat_agent(
                     task,
-                    chunk=chunk,
+                    agent=agent,
                     sdk=sdk,
                     text_parts=text_parts,
                     tool_calls=tool_calls,
                 )
-            structured_output = await _maybe_await(response.structured_output())
-            usage_metadata = getattr(response, "usage_metadata", None)
-            session_id = _optional_str(getattr(agent, "conversation_id", None))
+
+        process_metadata = (
+            self._process_reuse_metadata(process_reused) if self._reuse_process else None
+        )
 
         output = "".join(text_parts).strip()
         schema = output_schema_from(task.output_schema, task.metadata)
@@ -262,7 +303,11 @@ class AntigravityAgentRuntime:
                 usage=_usage_from(usage_metadata),
                 tool_calls=tuple(tool_calls),
                 session_id=session_id,
-                metadata={"model": model, "sdk": "google_antigravity"},
+                metadata={
+                    "model": model,
+                    "sdk": "google_antigravity",
+                    **dict(process_metadata or {}),
+                },
             )
         return AgentResult(
             output=output,
@@ -271,8 +316,86 @@ class AntigravityAgentRuntime:
             tool_calls=tuple(tool_calls),
             session_id=session_id,
             rounds=1,
-            metadata={"model": model, "sdk": "google_antigravity"},
+            metadata={
+                "model": model,
+                "sdk": "google_antigravity",
+                **dict(process_metadata or {}),
+            },
         )
+
+    async def _chat_agent(
+        self,
+        task: AgentTask,
+        *,
+        agent: Any,
+        sdk: _AntigravitySDK,
+        text_parts: list[str],
+        tool_calls: list[ToolCallAudit],
+    ) -> tuple[Any | None, Any | None, str | None]:
+        response = await agent.chat(task.goal)
+        async for chunk in response.chunks:
+            await self._consume_chunk(
+                task,
+                chunk=chunk,
+                sdk=sdk,
+                text_parts=text_parts,
+                tool_calls=tool_calls,
+            )
+        structured_output = await _maybe_await(response.structured_output())
+        usage_metadata = getattr(response, "usage_metadata", None)
+        session_id = _optional_str(getattr(agent, "conversation_id", None))
+        return structured_output, usage_metadata, session_id
+
+    async def _persistent_agent(
+        self,
+        task: AgentTask,
+        *,
+        sdk: _AntigravitySDK,
+        config: Any,
+    ) -> tuple[Any, bool]:
+        key = _agent_key(task, config)
+        async with self._agent_lock:
+            if self._agent is not None and self._agent_key == key:
+                self._sdk_process_reuse_count += 1
+                return self._agent, True
+            if self._agent is not None:
+                await self._close_agent_locked()
+            context = sdk.agent_cls(config)
+            enter = getattr(context, "__aenter__", None)
+            agent = await enter() if callable(enter) else context
+            self._agent_context = context
+            self._agent = agent
+            self._agent_key = key
+            self._sdk_process_start_count += 1
+            return agent, False
+
+    async def _close_agent_locked(self) -> None:
+        context = self._agent_context
+        agent = self._agent
+        self._agent_context = None
+        self._agent = None
+        self._agent_key = None
+        if context is not None:
+            exit_method = getattr(context, "__aexit__", None)
+            if callable(exit_method):
+                await exit_method(None, None, None)
+                return
+        close = getattr(agent, "aclose", None) or getattr(agent, "close", None)
+        if callable(close):
+            result = close()
+            if hasattr(result, "__await__"):
+                await result
+
+    def _process_reuse_metadata(self, reused: bool) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "sdk_process_reuse_enabled": self._reuse_process,
+            "sdk_process_reused": reused,
+            "sdk_process_start_count": self._sdk_process_start_count,
+            "sdk_process_reuse_count": self._sdk_process_reuse_count,
+        }
+        if not _has_explicit_conversation_id_value(self._agent_key):
+            metadata["sdk_process_reuse_scope"] = "task-isolated"
+        return metadata
 
     async def _consume_chunk(
         self,
@@ -510,6 +633,44 @@ def _conversation_id(task: AgentTask) -> str | None:
     if task.resume_from is not None:
         return task.resume_from.session_id
     return task.session_id
+
+
+def _agent_key(task: AgentTask, config: Any) -> tuple[Any, ...]:
+    conversation_id = _conversation_id(task)
+    if conversation_id:
+        return ("explicit-conversation", conversation_id, _fingerprint_item(config))
+    return ("task-isolated", task.task_id, _fingerprint_item(config))
+
+
+def _has_explicit_conversation_id_value(key: tuple[Any, ...] | None) -> bool:
+    return bool(key and key[0] == "explicit-conversation")
+
+
+def _fingerprint_item(value: Any) -> Any:
+    if value is None or isinstance(value, bool | int | float | str):
+        return value
+    if isinstance(value, os.PathLike):
+        return str(value)
+    if isinstance(value, Mapping):
+        return tuple(
+            sorted((str(key), _fingerprint_item(item)) for key, item in value.items())
+        )
+    if isinstance(value, Iterable) and not isinstance(value, bytes | str | Mapping):
+        return tuple(_fingerprint_item(item) for item in value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return (
+            type(value).__module__,
+            type(value).__qualname__,
+            _fingerprint_item(model_dump(mode="python")),
+        )
+    if hasattr(value, "__dict__"):
+        return (
+            type(value).__module__,
+            type(value).__qualname__,
+            _fingerprint_item(vars(value)),
+        )
+    return (type(value).__module__, type(value).__qualname__, repr(value))
 
 
 def _default_data_dir() -> Path:

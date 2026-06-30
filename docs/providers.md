@@ -39,7 +39,14 @@ third-party provider modes through Claude Code environment/settings such as
 `ClaudeAgentRuntime(env=...)` passes those provider-specific environment values
 to the SDK subprocess without scraping credential files. Any option kwargs
 dropped because a future SDK renamed or removed them are recorded in
-`AgentResult.metadata["dropped_options"]` rather than discarded silently.
+`AgentResult.metadata["dropped_options"]` rather than discarded silently. By
+default each `run()` uses the one-shot SDK `query()` path. Long-lived callers can
+pass `ClaudeAgentRuntime(reuse_process=True)` to keep a compatible
+`ClaudeSDKClient` process open across tasks, then call `await runtime.aclose()`
+or use `async with ClaudeAgentRuntime(..., reuse_process=True) as runtime:`.
+Each task still uses an explicit stream session id, so omitted session handles do
+not silently share Claude's default stream session. The runtime restarts the SDK
+process when the option fingerprint changes and evicts it after SDK exceptions.
 
 Codex uses the `openai-codex` package and maps working directory, session
 resume, approval mode, sandbox, structured output, model, and reasoning effort.
@@ -53,10 +60,18 @@ escalate beyond the sandbox), `DEFAULT`/`PERMISSIVE` → `auto_review`
 rejected with typed errors. The constructor defaults to
 `config_overrides=("features.plugins=false",)` so headless runs are
 deterministic and do not pick up host-local Codex plugin configuration; pass a
-different tuple to opt in. Codex auth is owned by the local Codex runtime:
-ChatGPT sign-in, API-key sign-in, access-token setup, and custom providers stay
-in Codex config. For Amazon Bedrock, pass Codex config overrides such as
-`model_provider=amazon-bedrock` and provider-specific model/profile/region
+different tuple to opt in. By default each `run()` uses a fresh Codex SDK
+context. Long-lived callers that run several Codex tasks with the same runtime
+can pass `CodexAgentRuntime(reuse_process=True)` to keep the Codex app-server
+process open across compatible tasks, then call `await runtime.aclose()` or use
+`async with CodexAgentRuntime(..., reuse_process=True) as runtime:`. This reuses
+only the SDK process; each task still starts a fresh Codex thread unless the
+caller supplies an explicit `session_id` or `resume_from` handle. The runtime
+restarts the SDK process when cwd/model/env/config/permission fingerprints
+change, and evicts it after SDK exceptions. Codex auth is owned by the local
+Codex runtime: ChatGPT sign-in, API-key sign-in, access-token setup, and custom
+providers stay in Codex config. For Amazon Bedrock, pass Codex config overrides
+such as `model_provider=amazon-bedrock` and provider-specific model/profile/region
 settings, and pass AWS environment values with `CodexAgentRuntime(env=...)` when
 they should be scoped to the SDK subprocess.
 
@@ -85,4 +100,11 @@ not accept per-server env values. The default tool posture with no
 
 Session and app-data directories are written under
 `$XDG_CACHE_HOME/agent-runtime-kit` (default `~/.cache/agent-runtime-kit`,
-`0o700`), overridable via `AntigravityAgentRuntime(data_dir=...)`.
+`0o700`), overridable via `AntigravityAgentRuntime(data_dir=...)`. By default
+each `run()` uses a fresh `Agent` context. Long-lived callers can pass
+`AntigravityAgentRuntime(reuse_process=True)` and close it with
+`await runtime.aclose()` or an async context manager. The Antigravity SDK ties
+the local agent process to a conversation, so the adapter reuses the process
+only for tasks that provide an explicit `session_id` or `resume_from` handle.
+Tasks without an explicit conversation id remain task-isolated and restart the
+agent even when process reuse is enabled.
