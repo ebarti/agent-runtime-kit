@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import inspect
 import json
-from collections.abc import Mapping
+import os
+from collections.abc import Iterable, Mapping
 from importlib import metadata, util
 from typing import Any
 
@@ -171,6 +172,105 @@ def filter_supported_kwargs(
         else:
             dropped.append(key)
     return supported, dropped
+
+
+def field_value(value: Any, name: str, default: Any = None) -> Any:
+    """Read ``name`` from a Mapping key or an object attribute, with a default.
+
+    Vendor SDKs hand back both dict-like payloads and typed objects; this reads
+    either shape uniformly.
+    """
+
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def optional_int(value: Any) -> int:
+    """Coerce a vendor-reported value to ``int``, treating ``None``/junk as 0."""
+
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def optional_str(value: Any) -> str | None:
+    """Return ``str(value)`` for truthy values, else ``None``."""
+
+    return str(value) if value else None
+
+
+def fingerprint_value(value: Any) -> tuple[Any, ...]:
+    """Wrap :func:`fingerprint_item` so callers always get a hashable tuple key."""
+
+    return (fingerprint_item(value),)
+
+
+def fingerprint_item(value: Any) -> Any:
+    """Produce a stable, hashable fingerprint of an arbitrary vendor options object.
+
+    Used to detect when a reusable SDK client must be restarted because its
+    construction inputs changed. Handles scalars, paths, mappings, iterables,
+    pydantic models (via ``model_dump``), and plain objects (via ``__dict__``),
+    falling back to ``repr`` for anything opaque.
+    """
+
+    if value is None or isinstance(value, bool | int | float | str):
+        return value
+    if isinstance(value, os.PathLike):
+        return str(value)
+    if isinstance(value, Mapping):
+        return tuple(sorted((str(key), fingerprint_item(item)) for key, item in value.items()))
+    if isinstance(value, Iterable) and not isinstance(value, bytes | str | Mapping):
+        return tuple(fingerprint_item(item) for item in value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return (
+            type(value).__module__,
+            type(value).__qualname__,
+            fingerprint_item(model_dump(mode="python")),
+        )
+    if hasattr(value, "__dict__"):
+        return (
+            type(value).__module__,
+            type(value).__qualname__,
+            fingerprint_item(vars(value)),
+        )
+    return (type(value).__module__, type(value).__qualname__, repr(value))
+
+
+async def close_vendor_resource(
+    primary: Any | None,
+    *,
+    fallback: Any | None = None,
+    try_disconnect: bool = False,
+) -> None:
+    """Close a vendor SDK resource via whatever teardown protocol it exposes.
+
+    Tries, in order: ``disconnect()`` on ``primary`` (only when ``try_disconnect``
+    is set), then ``primary.__aexit__``, then ``aclose()``/``close()`` on
+    ``fallback`` (or ``primary`` when no fallback is given). Awaits any awaitable a
+    close call returns. Centralizing the ladder keeps cleanup from drifting between
+    adapters.
+    """
+
+    if try_disconnect and primary is not None:
+        disconnect = getattr(primary, "disconnect", None)
+        if callable(disconnect):
+            await disconnect()
+            return
+    if primary is not None:
+        exit_method = getattr(primary, "__aexit__", None)
+        if callable(exit_method):
+            await exit_method(None, None, None)
+            return
+    close_target = fallback if fallback is not None else primary
+    close = getattr(close_target, "aclose", None) or getattr(close_target, "close", None)
+    if callable(close):
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
 
 
 def _extra_name(kind: AgentRuntimeKind) -> str:

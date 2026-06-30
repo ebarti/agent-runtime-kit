@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import os
 from collections.abc import AsyncIterator, Iterable, Mapping
-from contextlib import suppress
 from typing import Any
 
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError
@@ -21,9 +21,13 @@ from agent_runtime_kit._types import (
     Usage,
 )
 from agent_runtime_kit.adapters._common import (
+    close_vendor_resource,
     ensure_supported_model,
+    field_value,
     filter_supported_kwargs,
+    fingerprint_value,
     metadata_str,
+    optional_str,
     output_schema_from,
     package_availability,
     parse_json_output,
@@ -38,6 +42,8 @@ from agent_runtime_kit.events import (
     tool_completed_event,
     tool_requested_event,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeAgentRuntime:
@@ -186,14 +192,14 @@ class ClaudeAgentRuntime:
             and (not self._reuse_process or self._client_cls is not None)
         ):
             return self._query_func, self._options_cls, self._client_cls
-        try:
+        try:  # pragma: no cover - real SDK import, exercised via injected fakes in tests
             from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, query
-        except ImportError as exc:
+        except ImportError as exc:  # pragma: no cover
             raise AgentRuntimeUnavailableError(
                 self.kind,
                 "claude-agent-sdk is not installed. Install agent-runtime-kit[claude].",
             ) from exc
-        return (
+        return (  # pragma: no cover
             self._query_func or query,
             self._options_cls or ClaudeAgentOptions,
             self._client_cls or ClaudeSDKClient,
@@ -208,7 +214,10 @@ class ClaudeAgentRuntime:
         stream: _StreamState,
     ) -> bool:
         async with self._client_run_lock:
-            key = _fingerprint_value(options)
+            # Scope reuse by conversation identity so two tasks with identical
+            # options but different sessions never share one client; no-session
+            # tasks (conversation id None) may still share, as before.
+            key = (fingerprint_value(options), _conversation_id(task))
             try:
                 client, process_reused = await self._persistent_client(
                     client_cls,
@@ -249,8 +258,12 @@ class ClaudeAgentRuntime:
                     if callable(enter):
                         client = await enter()
             except BaseException:
-                with suppress(Exception):
-                    await _close_client(client)
+                try:
+                    await close_vendor_resource(client, try_disconnect=True)
+                except Exception as close_exc:
+                    logger.warning(
+                        "failed to close Claude client after startup failure: %s", close_exc
+                    )
                 raise
             self._client = client
             self._client_key = key
@@ -263,14 +276,16 @@ class ClaudeAgentRuntime:
         self._client_key = None
         if client is None:
             return
-        await _close_client(client)
+        await close_vendor_resource(client, try_disconnect=True)
 
     def _process_reuse_metadata(self, reused: bool) -> dict[str, Any]:
+        scope = "conversation" if _has_conversation_id(self._client_key) else "shared"
         return {
             "sdk_process_reuse_enabled": self._reuse_process,
             "sdk_process_reused": reused,
             "sdk_process_start_count": self._sdk_process_start_count,
             "sdk_process_reuse_count": self._sdk_process_reuse_count,
+            "sdk_process_reuse_scope": scope,
         }
 
     def _build_options(
@@ -318,22 +333,6 @@ class ClaudeAgentRuntime:
         return metadata_str(task.metadata, "model") or self._default_model
 
 
-async def _close_client(client: Any) -> None:
-    disconnect = getattr(client, "disconnect", None)
-    if callable(disconnect):
-        await disconnect()
-        return
-    exit_method = getattr(client, "__aexit__", None)
-    if callable(exit_method):
-        await exit_method(None, None, None)
-        return
-    close = getattr(client, "aclose", None) or getattr(client, "close", None)
-    if callable(close):
-        result = close()
-        if hasattr(result, "__await__"):
-            await result
-
-
 class _StreamState:
     """Incremental consumer that emits events as Claude messages arrive."""
 
@@ -355,16 +354,16 @@ class _StreamState:
             for block in _iter_blocks(message):
                 block_type = _message_type(block)
                 if block_type in {"TextBlock", "text"}:
-                    text = str(_field(block, "text", ""))
+                    text = str(field_value(block, "text", ""))
                     if text:
                         self.emitted_delta = True
                         await safe_emit(task, output_delta_event(task, kind, text=text))
                 elif block_type in {"ToolUseBlock", "tool_use"}:
-                    name = str(_field(block, "name", "tool"))
-                    block_id = _optional_str(_field(block, "id"))
+                    name = str(field_value(block, "name", "tool"))
+                    block_id = optional_str(field_value(block, "id"))
                     if block_id is not None:
                         self._tool_names[block_id] = name
-                    raw_input = _field(block, "input", {})
+                    raw_input = field_value(block, "input", {})
                     arguments = raw_input if isinstance(raw_input, Mapping) else {}
                     await safe_emit(
                         task,
@@ -374,13 +373,13 @@ class _StreamState:
             for block in _iter_blocks(message):
                 if _message_type(block) not in {"ToolResultBlock", "tool_result"}:
                     continue
-                tool_use_id = _optional_str(_field(block, "tool_use_id"))
-                status = "error" if _field(block, "is_error", False) else "ok"
+                tool_use_id = optional_str(field_value(block, "tool_use_id"))
+                status = "error" if field_value(block, "is_error", False) else "ok"
                 if tool_use_id is not None:
                     self.tool_results[tool_use_id] = status
                 audit = ToolCallAudit(
                     tool_name=self._tool_names.get(tool_use_id or "", "tool"),
-                    result_preview=str(_field(block, "content", ""))[:256],
+                    result_preview=str(field_value(block, "content", ""))[:256],
                     status=status,
                 )
                 await safe_emit(task, tool_completed_event(task, kind, audit))
@@ -433,22 +432,22 @@ def _translate_messages(
             content_parts.extend(text)
             tool_calls.extend(tools)
             tool_use_ids.extend(ids)
-            session_id = _optional_str(_field(message, "session_id")) or session_id
-            usage = _usage_from(_field(message, "usage"), current=usage)
-            message_error = _field(message, "error")
+            session_id = optional_str(field_value(message, "session_id")) or session_id
+            usage = _usage_from(field_value(message, "usage"), current=usage)
+            message_error = field_value(message, "error")
             if message_error:
                 error = str(message_error)
                 finish_reason = "failed"
         elif message_type in {"ResultMessage", "result"}:
-            result_text = _field(message, "result")
+            result_text = field_value(message, "result")
             if result_text and not content_parts:
                 content_parts.append(str(result_text))
-            structured_output = _field(message, "structured_output", structured_output)
-            cost_usd = float(_field(message, "total_cost_usd", cost_usd) or cost_usd)
-            usage = _usage_from(_field(message, "usage"), current=usage)
-            rounds = int(_field(message, "num_turns", rounds) or rounds)
-            session_id = _optional_str(_field(message, "session_id")) or session_id
-            if _field(message, "is_error", False):
+            structured_output = field_value(message, "structured_output", structured_output)
+            cost_usd = float(field_value(message, "total_cost_usd", cost_usd) or cost_usd)
+            usage = _usage_from(field_value(message, "usage"), current=usage)
+            rounds = int(field_value(message, "num_turns", rounds) or rounds)
+            session_id = optional_str(field_value(message, "session_id")) or session_id
+            if field_value(message, "is_error", False):
                 finish_reason, error = _result_failure(message, result_text)
 
     output = "\n".join(part for part in content_parts if part).strip()
@@ -487,9 +486,9 @@ def _translate_messages(
 
 
 def _result_failure(message: Any, result_text: Any) -> tuple[str, str]:
-    subtype = str(_field(message, "subtype", "") or "")
+    subtype = str(field_value(message, "subtype", "") or "")
     finish_reason = "max_turns" if subtype == "error_max_turns" else "failed"
-    errors = _field(message, "errors", ()) or ()
+    errors = field_value(message, "errors", ()) or ()
     joined = "; ".join(str(item) for item in errors)
     if joined:
         return finish_reason, joined
@@ -541,28 +540,16 @@ def _client_session_id(task: AgentTask) -> str:
     return task.task_id
 
 
-def _fingerprint_value(value: Any) -> tuple[Any, ...]:
-    return (_fingerprint_item(value),)
+def _conversation_id(task: AgentTask) -> str | None:
+    """Explicit conversation identity for reuse keying (no task_id fallback)."""
+
+    if task.resume_from is not None:
+        return task.resume_from.session_id
+    return task.session_id
 
 
-def _fingerprint_item(value: Any) -> Any:
-    if value is None or isinstance(value, bool | int | float | str):
-        return value
-    if isinstance(value, os.PathLike):
-        return str(value)
-    if isinstance(value, Mapping):
-        return tuple(
-            sorted((str(key), _fingerprint_item(item)) for key, item in value.items())
-        )
-    if isinstance(value, Iterable) and not isinstance(value, bytes | str | Mapping):
-        return tuple(_fingerprint_item(item) for item in value)
-    if hasattr(value, "__dict__"):
-        return (
-            type(value).__module__,
-            type(value).__qualname__,
-            _fingerprint_item(vars(value)),
-        )
-    return (type(value).__module__, type(value).__qualname__, repr(value))
+def _has_conversation_id(key: tuple[Any, ...] | None) -> bool:
+    return bool(key and len(key) > 1 and key[1])
 
 
 def _message_type(message: Any) -> str:
@@ -572,7 +559,7 @@ def _message_type(message: Any) -> str:
 
 
 def _iter_blocks(message: Any) -> Iterable[Any]:
-    content = _field(message, "content", ())
+    content = field_value(message, "content", ())
     if isinstance(content, str) or not isinstance(content, Iterable):
         return ()
     return content
@@ -581,7 +568,7 @@ def _iter_blocks(message: Any) -> Iterable[Any]:
 def _assistant_content(
     message: Any,
 ) -> tuple[list[str], list[ToolCallAudit], list[str | None]]:
-    content = _field(message, "content", ())
+    content = field_value(message, "content", ())
     if isinstance(content, str):
         return [content], [], []
     if not isinstance(content, Iterable):
@@ -592,20 +579,14 @@ def _assistant_content(
     for block in content:
         block_type = _message_type(block)
         if block_type in {"TextBlock", "text"}:
-            text_parts.append(str(_field(block, "text", "")))
+            text_parts.append(str(field_value(block, "text", "")))
         elif block_type in {"ToolUseBlock", "tool_use"}:
-            name = str(_field(block, "name", "tool"))
-            raw_input = _field(block, "input", {})
+            name = str(field_value(block, "name", "tool"))
+            raw_input = field_value(block, "input", {})
             arguments = raw_input if isinstance(raw_input, Mapping) else {}
             tool_calls.append(ToolCallAudit(tool_name=name, arguments=arguments))
-            tool_use_ids.append(_optional_str(_field(block, "id")))
+            tool_use_ids.append(optional_str(field_value(block, "id")))
     return text_parts, tool_calls, tool_use_ids
-
-
-def _field(value: Any, name: str, default: Any = None) -> Any:
-    if isinstance(value, Mapping):
-        return value.get(name, default)
-    return getattr(value, name, default)
 
 
 def _usage_from(value: Any, *, current: Usage) -> Usage:
@@ -673,7 +654,3 @@ def _env_first(env: Mapping[str, str], *names: str) -> str | None:
         if value:
             return value
     return None
-
-
-def _optional_str(value: Any) -> str | None:
-    return str(value) if value else None

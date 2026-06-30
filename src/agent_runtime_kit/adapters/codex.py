@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import Mapping
-from contextlib import suppress
 from typing import Any
 
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError, UnsupportedTaskInputError
@@ -21,8 +21,11 @@ from agent_runtime_kit._types import (
     Usage,
 )
 from agent_runtime_kit.adapters._common import (
+    close_vendor_resource,
     ensure_supported_model,
+    field_value,
     metadata_str,
+    optional_int,
     output_schema_from,
     package_availability,
     parse_json_output,
@@ -43,6 +46,8 @@ _DYNAMIC_ITEM = "dynamicToolCall"
 _WEB_SEARCH_ITEM = "webSearch"
 # Vendor status values (camelCase) that mean the invocation did not succeed.
 _TOOL_ERROR_STATUSES = frozenset({"failed", "declined"})
+
+logger = logging.getLogger(__name__)
 
 
 class CodexAgentRuntime:
@@ -184,19 +189,19 @@ class CodexAgentRuntime:
                 self._sandbox_cls,
                 self._approval_mode_cls,
             )
-        try:
+        try:  # pragma: no cover - real SDK import, exercised via injected fakes in tests
             from openai_codex import (
                 ApprovalMode,
                 AsyncCodex,
                 CodexConfig,
                 Sandbox,
             )
-        except ImportError as exc:
+        except ImportError as exc:  # pragma: no cover
             raise AgentRuntimeUnavailableError(
                 self.kind,
                 "openai-codex is not installed. Install agent-runtime-kit[codex].",
             ) from exc
-        return (
+        return (  # pragma: no cover
             self._codex_cls or AsyncCodex,
             self._config_cls or CodexConfig,
             self._sandbox_cls or Sandbox,
@@ -322,8 +327,12 @@ class CodexAgentRuntime:
             try:
                 client = await enter() if callable(enter) else context
             except BaseException:
-                with suppress(Exception):
-                    await _close_codex_context(context)
+                try:
+                    await close_vendor_resource(context)
+                except Exception as close_exc:
+                    logger.warning(
+                        "failed to close Codex app-server after startup failure: %s", close_exc
+                    )
                 raise
             self._codex_context = context
             self._codex_client = client
@@ -337,7 +346,7 @@ class CodexAgentRuntime:
         self._codex_context = None
         self._codex_client = None
         self._codex_client_key = None
-        await _close_codex_context(context, client=client)
+        await close_vendor_resource(context, fallback=client)
 
     def _process_reuse_metadata(self, reused: bool) -> dict[str, Any]:
         return {
@@ -373,20 +382,6 @@ class CodexAgentRuntime:
         return metadata_str(task.metadata, "model") or self._default_model
 
 
-async def _close_codex_context(context: Any | None, *, client: Any | None = None) -> None:
-    if context is not None:
-        exit_method = getattr(context, "__aexit__", None)
-        if callable(exit_method):
-            await exit_method(None, None, None)
-            return
-    close_target = client if client is not None else context
-    close = getattr(close_target, "aclose", None) or getattr(close_target, "close", None)
-    if callable(close):
-        result = close()
-        if hasattr(result, "__await__"):
-            await result
-
-
 def _translate_run_result(
     task: AgentTask,
     raw_result: Any,
@@ -395,11 +390,11 @@ def _translate_run_result(
     session_id: str | None,
     process_metadata: Mapping[str, Any] | None = None,
 ) -> AgentResult:
-    output = str(_field(raw_result, "final_response", "") or "")
-    usage = _codex_usage(_field(raw_result, "usage"))
-    tool_calls = tuple(_tool_audits(_field(raw_result, "items", ()) or ()))
+    output = str(field_value(raw_result, "final_response", "") or "")
+    usage = _codex_usage(field_value(raw_result, "usage"))
+    tool_calls = tuple(_tool_audits(field_value(raw_result, "items", ()) or ()))
     metadata = {"model": model, "sdk": "openai_codex", **dict(process_metadata or {})}
-    status = _status_value(_field(raw_result, "status"))
+    status = _status_value(field_value(raw_result, "status"))
 
     if status == "failed":
         return AgentResult(
@@ -467,10 +462,10 @@ def _status_value(status: Any) -> str | None:
 
 
 def _turn_error(raw_result: Any) -> str | None:
-    error = _field(raw_result, "error")
+    error = field_value(raw_result, "error")
     if error is None:
         return None
-    message = _field(error, "message")
+    message = field_value(error, "message")
     return str(message) if message else None
 
 
@@ -492,41 +487,41 @@ def _tool_audits(items: Any) -> list[ToolCallAudit]:
 def _tool_audit(item: Any) -> ToolCallAudit | None:
     # TurnResult.items holds ThreadItem RootModel wrappers whose discriminated value
     # lives on ``.root``; unwrap it so duck-typed field access reaches the real item.
-    if not isinstance(item, Mapping) and _field(item, "type") is None:
+    if not isinstance(item, Mapping) and field_value(item, "type") is None:
         root = getattr(item, "root", None)
         if root is not None:
             item = root
-    item_type = str(_field(item, "type", "") or "")
+    item_type = str(field_value(item, "type", "") or "")
     if item_type == _COMMAND_ITEM:
         return ToolCallAudit(
             tool_name="command",
-            arguments={"command": str(_field(item, "command", ""))},
-            result_preview=str(_field(item, "aggregated_output", "") or "")[:256],
+            arguments={"command": str(field_value(item, "command", ""))},
+            result_preview=str(field_value(item, "aggregated_output", "") or "")[:256],
             status=_tool_status(item),
-            duration_ms=_optional_int(_field(item, "duration_ms")),
+            duration_ms=optional_int(field_value(item, "duration_ms")),
         )
     if item_type in {_MCP_ITEM, _DYNAMIC_ITEM}:
         return ToolCallAudit(
-            tool_name=str(_field(item, "tool", "tool") or "tool"),
-            arguments=_tool_arguments(_field(item, "arguments")),
-            result_preview=str(_field(item, "result", "") or "")[:256],
+            tool_name=str(field_value(item, "tool", "tool") or "tool"),
+            arguments=_tool_arguments(field_value(item, "arguments")),
+            result_preview=str(field_value(item, "result", "") or "")[:256],
             status=_tool_status(item),
-            duration_ms=_optional_int(_field(item, "duration_ms")),
+            duration_ms=optional_int(field_value(item, "duration_ms")),
         )
     if item_type == _WEB_SEARCH_ITEM:
         return ToolCallAudit(
             tool_name="web_search",
-            arguments={"query": str(_field(item, "query", ""))},
+            arguments={"query": str(field_value(item, "query", ""))},
             status="ok",
         )
     return None
 
 
 def _tool_status(item: Any) -> str:
-    status = _status_value(_field(item, "status"))
+    status = _status_value(field_value(item, "status"))
     if status in _TOOL_ERROR_STATUSES:
         return "error"
-    if _field(item, "error") is not None:
+    if field_value(item, "error") is not None:
         return "error"
     return "ok"
 
@@ -536,13 +531,13 @@ def _tool_arguments(value: Any) -> Mapping[str, Any]:
 
 
 def _codex_usage(value: Any) -> Usage:
-    total = _field(value, "total")
+    total = field_value(value, "total")
     if total is None and isinstance(value, Mapping):
         total = value.get("total", value)
-    input_tokens = _optional_int(_field(total, "input_tokens"))
-    output_tokens = _optional_int(_field(total, "output_tokens"))
-    cached = _optional_int(_field(total, "cached_input_tokens"))
-    total_tokens = _optional_int(_field(total, "total_tokens"))
+    input_tokens = optional_int(field_value(total, "input_tokens"))
+    output_tokens = optional_int(field_value(total, "output_tokens"))
+    cached = optional_int(field_value(total, "cached_input_tokens"))
+    total_tokens = optional_int(field_value(total, "total_tokens"))
     # OpenAI reports cached input inside input_tokens, so never add cached on top.
     return Usage(
         input_tokens=input_tokens,
@@ -646,15 +641,3 @@ def _uses_bedrock_provider(config_overrides: tuple[str, ...]) -> bool:
             return True
     return False
 
-
-def _field(value: Any, name: str, default: Any = None) -> Any:
-    if isinstance(value, Mapping):
-        return value.get(name, default)
-    return getattr(value, name, default)
-
-
-def _optional_int(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0

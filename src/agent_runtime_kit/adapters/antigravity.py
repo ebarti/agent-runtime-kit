@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import enum
 import importlib
+import logging
 import os
-from collections.abc import Iterable, Mapping
-from contextlib import suppress
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,8 +26,12 @@ from agent_runtime_kit._types import (
     Usage,
 )
 from agent_runtime_kit.adapters._common import (
+    close_vendor_resource,
     ensure_supported_model,
+    fingerprint_item,
     metadata_str,
+    optional_int,
+    optional_str,
     output_schema_from,
     package_availability,
     parse_json_output,
@@ -43,6 +47,8 @@ from agent_runtime_kit.events import (
     tool_requested_event,
     vendor_turn_event,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AntigravityAgentRuntime:
@@ -190,19 +196,19 @@ class AntigravityAgentRuntime:
             and self._policy is not None
         ):
             return _AntigravitySDK(self._agent_cls, self._config_cls, self._types, self._policy)
-        try:
+        try:  # pragma: no cover - real SDK import, exercised via injected fakes in tests
             from google.antigravity import types
             from google.antigravity.agent import Agent
             from google.antigravity.connections.local.local_connection_config import (
                 LocalAgentConfig,
             )
             from google.antigravity.hooks import policy
-        except ImportError as exc:
+        except ImportError as exc:  # pragma: no cover
             raise AgentRuntimeUnavailableError(
                 self.kind,
                 "google-antigravity is not installed. Install agent-runtime-kit[antigravity].",
             ) from exc
-        return _AntigravitySDK(Agent, LocalAgentConfig, types, policy)
+        return _AntigravitySDK(Agent, LocalAgentConfig, types, policy)  # pragma: no cover
 
     def _build_config(
         self,
@@ -344,7 +350,7 @@ class AntigravityAgentRuntime:
             )
         structured_output = await _maybe_await(response.structured_output())
         usage_metadata = getattr(response, "usage_metadata", None)
-        session_id = _optional_str(getattr(agent, "conversation_id", None))
+        session_id = optional_str(getattr(agent, "conversation_id", None))
         return structured_output, usage_metadata, session_id
 
     async def _persistent_agent(
@@ -366,8 +372,12 @@ class AntigravityAgentRuntime:
             try:
                 agent = await enter() if callable(enter) else context
             except BaseException:
-                with suppress(Exception):
-                    await _close_agent_context(context)
+                try:
+                    await close_vendor_resource(context)
+                except Exception as close_exc:
+                    logger.warning(
+                        "failed to close Antigravity agent after startup failure: %s", close_exc
+                    )
                 raise
             self._agent_context = context
             self._agent = agent
@@ -381,7 +391,7 @@ class AntigravityAgentRuntime:
         self._agent_context = None
         self._agent = None
         self._agent_key = None
-        await _close_agent_context(context, agent=agent)
+        await close_vendor_resource(context, fallback=agent)
 
     def _process_reuse_metadata(self, reused: bool) -> dict[str, Any]:
         metadata: dict[str, Any] = {
@@ -481,8 +491,15 @@ class AntigravityAgentRuntime:
         path = base / name
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
         # mkdir does not chmod a pre-existing directory, so enforce the mode on the
-        # leaf so session transcripts are not left world-readable.
-        os.chmod(path, 0o700)
+        # leaf so session transcripts are not left world-readable. Only chmod dirs we
+        # own: a caller may point data_dir at a shared/pre-existing tree we cannot
+        # chmod, and a failed run is worse than a dir we did not tighten.
+        if hasattr(os, "getuid"):
+            try:
+                if path.stat().st_uid == os.getuid():
+                    os.chmod(path, 0o700)
+            except OSError as exc:
+                logger.warning("could not enforce 0o700 on %s: %s", path, exc)
         return path
 
 
@@ -492,20 +509,6 @@ class _AntigravitySDK:
         self.config_cls = config_cls
         self.types = types
         self.policy = policy
-
-
-async def _close_agent_context(context: Any | None, *, agent: Any | None = None) -> None:
-    if context is not None:
-        exit_method = getattr(context, "__aexit__", None)
-        if callable(exit_method):
-            await exit_method(None, None, None)
-            return
-    close_target = agent if agent is not None else context
-    close = getattr(close_target, "aclose", None) or getattr(close_target, "close", None)
-    if callable(close):
-        result = close()
-        if hasattr(result, "__await__"):
-            await result
 
 
 @dataclass(frozen=True)
@@ -649,39 +652,12 @@ def _conversation_id(task: AgentTask) -> str | None:
 def _agent_key(task: AgentTask, config: Any) -> tuple[Any, ...]:
     conversation_id = _conversation_id(task)
     if conversation_id:
-        return ("explicit-conversation", conversation_id, _fingerprint_item(config))
-    return ("task-isolated", task.task_id, _fingerprint_item(config))
+        return ("explicit-conversation", conversation_id, fingerprint_item(config))
+    return ("task-isolated", task.task_id, fingerprint_item(config))
 
 
 def _has_explicit_conversation_id_value(key: tuple[Any, ...] | None) -> bool:
     return bool(key and key[0] == "explicit-conversation")
-
-
-def _fingerprint_item(value: Any) -> Any:
-    if value is None or isinstance(value, bool | int | float | str):
-        return value
-    if isinstance(value, os.PathLike):
-        return str(value)
-    if isinstance(value, Mapping):
-        return tuple(
-            sorted((str(key), _fingerprint_item(item)) for key, item in value.items())
-        )
-    if isinstance(value, Iterable) and not isinstance(value, bytes | str | Mapping):
-        return tuple(_fingerprint_item(item) for item in value)
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        return (
-            type(value).__module__,
-            type(value).__qualname__,
-            _fingerprint_item(model_dump(mode="python")),
-        )
-    if hasattr(value, "__dict__"):
-        return (
-            type(value).__module__,
-            type(value).__qualname__,
-            _fingerprint_item(vars(value)),
-        )
-    return (type(value).__module__, type(value).__qualname__, repr(value))
 
 
 def _default_data_dir() -> Path:
@@ -691,11 +667,11 @@ def _default_data_dir() -> Path:
 
 
 def _usage_from(value: Any) -> Usage:
-    prompt_tokens = _optional_int(getattr(value, "prompt_token_count", None))
-    output_tokens = _optional_int(getattr(value, "candidates_token_count", None))
-    thoughts = _optional_int(getattr(value, "thoughts_token_count", None))
-    cache_read = _optional_int(getattr(value, "cached_content_token_count", None))
-    total = _optional_int(getattr(value, "total_token_count", None))
+    prompt_tokens = optional_int(getattr(value, "prompt_token_count", None))
+    output_tokens = optional_int(getattr(value, "candidates_token_count", None))
+    thoughts = optional_int(getattr(value, "thoughts_token_count", None))
+    cache_read = optional_int(getattr(value, "cached_content_token_count", None))
+    total = optional_int(getattr(value, "total_token_count", None))
     return Usage(
         input_tokens=max(prompt_tokens - cache_read, 0),
         output_tokens=output_tokens + thoughts,
@@ -717,14 +693,3 @@ async def _maybe_await(value: Any) -> Any:
     if hasattr(value, "__await__"):
         return await value
     return value
-
-
-def _optional_str(value: Any) -> str | None:
-    return str(value) if value else None
-
-
-def _optional_int(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
