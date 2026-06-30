@@ -7,6 +7,7 @@ import enum
 import importlib
 import os
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -362,7 +363,12 @@ class AntigravityAgentRuntime:
                 await self._close_agent_locked()
             context = sdk.agent_cls(config)
             enter = getattr(context, "__aenter__", None)
-            agent = await enter() if callable(enter) else context
+            try:
+                agent = await enter() if callable(enter) else context
+            except BaseException:
+                with suppress(Exception):
+                    await _close_agent_context(context)
+                raise
             self._agent_context = context
             self._agent = agent
             self._agent_key = key
@@ -375,16 +381,7 @@ class AntigravityAgentRuntime:
         self._agent_context = None
         self._agent = None
         self._agent_key = None
-        if context is not None:
-            exit_method = getattr(context, "__aexit__", None)
-            if callable(exit_method):
-                await exit_method(None, None, None)
-                return
-        close = getattr(agent, "aclose", None) or getattr(agent, "close", None)
-        if callable(close):
-            result = close()
-            if hasattr(result, "__await__"):
-                await result
+        await _close_agent_context(context, agent=agent)
 
     def _process_reuse_metadata(self, reused: bool) -> dict[str, Any]:
         metadata: dict[str, Any] = {
@@ -495,6 +492,20 @@ class _AntigravitySDK:
         self.config_cls = config_cls
         self.types = types
         self.policy = policy
+
+
+async def _close_agent_context(context: Any | None, *, agent: Any | None = None) -> None:
+    if context is not None:
+        exit_method = getattr(context, "__aexit__", None)
+        if callable(exit_method):
+            await exit_method(None, None, None)
+            return
+    close_target = agent if agent is not None else context
+    close = getattr(close_target, "aclose", None) or getattr(close_target, "close", None)
+    if callable(close):
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
 
 
 @dataclass(frozen=True)

@@ -42,6 +42,7 @@ RECORDED: dict[str, Any] = {}
 
 class FakeClaudeClient:
     messages: list[Any] = []
+    connect_errors: list[BaseException | None] = []
     query_errors: list[BaseException | None] = []
     instances: list[FakeClaudeClient] = []
 
@@ -54,6 +55,10 @@ class FakeClaudeClient:
 
     async def connect(self) -> None:
         self.connected = True
+        if FakeClaudeClient.connect_errors:
+            error = FakeClaudeClient.connect_errors.pop(0)
+            if error is not None:
+                raise error
 
     async def disconnect(self) -> None:
         self.closed = True
@@ -74,6 +79,7 @@ class FakeClaudeClient:
 def reset_fakes() -> None:
     RECORDED.clear()
     FakeClaudeClient.messages = []
+    FakeClaudeClient.connect_errors = []
     FakeClaudeClient.query_errors = []
     FakeClaudeClient.instances.clear()
 
@@ -210,6 +216,34 @@ async def test_claude_runtime_evicts_reused_process_after_sdk_exception() -> Non
     assert recovered.output == "ok"
     assert recovered.metadata["sdk_process_reused"] is False
     assert recovered.metadata["sdk_process_start_count"] == 2
+    assert len(FakeClaudeClient.instances) == 2
+    assert FakeClaudeClient.instances[0].closed is True
+    assert FakeClaudeClient.instances[1].closed is False
+
+    await runtime.aclose()
+
+    assert FakeClaudeClient.instances[1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_closes_client_after_connect_failure() -> None:
+    FakeClaudeClient.messages = [assistant("ok"), result_message()]
+    FakeClaudeClient.connect_errors = [RuntimeError("connect failed"), None]
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([]),
+        options_cls=FakeClaudeOptions,
+        client_cls=FakeClaudeClient,
+        reuse_process=True,
+    )
+
+    with pytest.raises(RuntimeError, match="connect failed"):
+        await runtime.run(AgentTask(goal="fail"))
+
+    recovered = await runtime.run(AgentTask(goal="recover"))
+
+    assert recovered.output == "ok"
+    assert recovered.metadata["sdk_process_reused"] is False
+    assert recovered.metadata["sdk_process_start_count"] == 1
     assert len(FakeClaudeClient.instances) == 2
     assert FakeClaudeClient.instances[0].closed is True
     assert FakeClaudeClient.instances[1].closed is False

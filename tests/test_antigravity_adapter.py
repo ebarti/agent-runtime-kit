@@ -118,6 +118,7 @@ class FakeAgent:
     last_config: FakeConfig | None = None
     chunks_factory: Any = None
     instances: list[FakeAgent] = []
+    enter_errors: list[BaseException | None] = []
     chat_errors: list[BaseException | None] = []
 
     def __init__(self, config: FakeConfig) -> None:
@@ -128,6 +129,10 @@ class FakeAgent:
         FakeAgent.instances.append(self)
 
     async def __aenter__(self) -> FakeAgent:
+        if FakeAgent.enter_errors:
+            error = FakeAgent.enter_errors.pop(0)
+            if error is not None:
+                raise error
         return self
 
     async def __aexit__(self, *args: object) -> None:
@@ -177,6 +182,7 @@ def _reset_agent() -> None:
     FakeAgent.last_config = None
     FakeAgent.chunks_factory = None
     FakeAgent.instances.clear()
+    FakeAgent.enter_errors = []
     FakeAgent.chat_errors = []
 
 
@@ -282,6 +288,30 @@ async def test_antigravity_runtime_evicts_reused_process_after_sdk_exception(
     assert recovered.output == "done: recover"
     assert recovered.metadata["sdk_process_reused"] is False
     assert recovered.metadata["sdk_process_start_count"] == 2
+    assert len(FakeAgent.instances) == 2
+    assert FakeAgent.instances[0].closed is True
+    assert FakeAgent.instances[1].closed is False
+
+    await runtime.aclose()
+
+    assert FakeAgent.instances[1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_antigravity_runtime_closes_context_after_enter_failure(
+    tmp_path: Path,
+) -> None:
+    FakeAgent.enter_errors = [RuntimeError("enter failed"), None]
+    runtime = make_runtime(data_dir=tmp_path, reuse_process=True)
+
+    with pytest.raises(RuntimeError, match="enter failed"):
+        await runtime.run(AgentTask(goal="fail", session_id="ag-conversation"))
+
+    recovered = await runtime.run(AgentTask(goal="recover", session_id="ag-conversation"))
+
+    assert recovered.output == "done: recover"
+    assert recovered.metadata["sdk_process_reused"] is False
+    assert recovered.metadata["sdk_process_start_count"] == 1
     assert len(FakeAgent.instances) == 2
     assert FakeAgent.instances[0].closed is True
     assert FakeAgent.instances[1].closed is False

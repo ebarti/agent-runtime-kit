@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import os
 from collections.abc import AsyncIterator, Iterable, Mapping
+from contextlib import suppress
 from typing import Any
 
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError
@@ -239,13 +240,18 @@ class ClaudeAgentRuntime:
             if self._client is not None:
                 await self._close_client_locked()
             client = client_cls(options)
-            connect = getattr(client, "connect", None)
-            if callable(connect):
-                await connect()
-            else:
-                enter = getattr(client, "__aenter__", None)
-                if callable(enter):
-                    client = await enter()
+            try:
+                connect = getattr(client, "connect", None)
+                if callable(connect):
+                    await connect()
+                else:
+                    enter = getattr(client, "__aenter__", None)
+                    if callable(enter):
+                        client = await enter()
+            except BaseException:
+                with suppress(Exception):
+                    await _close_client(client)
+                raise
             self._client = client
             self._client_key = key
             self._sdk_process_start_count += 1
@@ -257,19 +263,7 @@ class ClaudeAgentRuntime:
         self._client_key = None
         if client is None:
             return
-        disconnect = getattr(client, "disconnect", None)
-        if callable(disconnect):
-            await disconnect()
-            return
-        exit_method = getattr(client, "__aexit__", None)
-        if callable(exit_method):
-            await exit_method(None, None, None)
-            return
-        close = getattr(client, "aclose", None) or getattr(client, "close", None)
-        if callable(close):
-            result = close()
-            if hasattr(result, "__await__"):
-                await result
+        await _close_client(client)
 
     def _process_reuse_metadata(self, reused: bool) -> dict[str, Any]:
         return {
@@ -322,6 +316,22 @@ class ClaudeAgentRuntime:
 
     def _model(self, task: AgentTask) -> str:
         return metadata_str(task.metadata, "model") or self._default_model
+
+
+async def _close_client(client: Any) -> None:
+    disconnect = getattr(client, "disconnect", None)
+    if callable(disconnect):
+        await disconnect()
+        return
+    exit_method = getattr(client, "__aexit__", None)
+    if callable(exit_method):
+        await exit_method(None, None, None)
+        return
+    close = getattr(client, "aclose", None) or getattr(client, "close", None)
+    if callable(close):
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
 
 
 class _StreamState:

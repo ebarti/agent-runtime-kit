@@ -71,6 +71,7 @@ class FakeThread:
 
 class FakeCodex:
     last_started_kwargs: dict[str, Any] | None = None
+    enter_errors: list[BaseException | None] = []
     instances: list[FakeCodex] = []
 
     def __init__(
@@ -86,6 +87,10 @@ class FakeCodex:
         FakeCodex.instances.append(self)
 
     async def __aenter__(self) -> FakeCodex:
+        if FakeCodex.enter_errors:
+            error = FakeCodex.enter_errors.pop(0)
+            if error is not None:
+                raise error
         return self
 
     async def __aexit__(self, *args: object) -> None:
@@ -121,6 +126,7 @@ def make_runtime(
 @pytest.fixture(autouse=True)
 def reset_fake_codex() -> None:
     FakeCodex.instances.clear()
+    FakeCodex.enter_errors = []
     FakeCodex.last_started_kwargs = None
     FakeThread.last_run_kwargs = None
 
@@ -229,6 +235,28 @@ async def test_codex_runtime_evicts_reused_process_after_sdk_exception() -> None
     assert recovered.output == "done: recover"
     assert recovered.metadata["sdk_process_reused"] is False
     assert recovered.metadata["sdk_process_start_count"] == 2
+    assert len(FakeCodex.instances) == 2
+    assert FakeCodex.instances[0].closed is True
+    assert FakeCodex.instances[1].closed is False
+
+    await runtime.aclose()
+
+    assert FakeCodex.instances[1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_codex_runtime_closes_context_after_enter_failure() -> None:
+    FakeCodex.enter_errors = [RuntimeError("enter failed"), None]
+    runtime = make_runtime(reuse_process=True)
+
+    with pytest.raises(RuntimeError, match="enter failed"):
+        await runtime.run(AgentTask(goal="fail"))
+
+    recovered = await runtime.run(AgentTask(goal="recover"))
+
+    assert recovered.output == "done: recover"
+    assert recovered.metadata["sdk_process_reused"] is False
+    assert recovered.metadata["sdk_process_start_count"] == 1
     assert len(FakeCodex.instances) == 2
     assert FakeCodex.instances[0].closed is True
     assert FakeCodex.instances[1].closed is False

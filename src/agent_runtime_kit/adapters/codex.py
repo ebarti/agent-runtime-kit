@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Mapping
+from contextlib import suppress
 from typing import Any
 
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError, UnsupportedTaskInputError
@@ -318,7 +319,12 @@ class CodexAgentRuntime:
                 await self._close_codex_client_locked()
             context = codex_cls(config=config_cls(**dict(config_kwargs)))
             enter = getattr(context, "__aenter__", None)
-            client = await enter() if callable(enter) else context
+            try:
+                client = await enter() if callable(enter) else context
+            except BaseException:
+                with suppress(Exception):
+                    await _close_codex_context(context)
+                raise
             self._codex_context = context
             self._codex_client = client
             self._codex_client_key = key
@@ -331,16 +337,7 @@ class CodexAgentRuntime:
         self._codex_context = None
         self._codex_client = None
         self._codex_client_key = None
-        if context is not None:
-            exit_method = getattr(context, "__aexit__", None)
-            if callable(exit_method):
-                await exit_method(None, None, None)
-                return
-        close = getattr(client, "aclose", None) or getattr(client, "close", None)
-        if callable(close):
-            result = close()
-            if hasattr(result, "__await__"):
-                await result
+        await _close_codex_context(context, client=client)
 
     def _process_reuse_metadata(self, reused: bool) -> dict[str, Any]:
         return {
@@ -374,6 +371,20 @@ class CodexAgentRuntime:
 
     def _model(self, task: AgentTask) -> str:
         return metadata_str(task.metadata, "model") or self._default_model
+
+
+async def _close_codex_context(context: Any | None, *, client: Any | None = None) -> None:
+    if context is not None:
+        exit_method = getattr(context, "__aexit__", None)
+        if callable(exit_method):
+            await exit_method(None, None, None)
+            return
+    close_target = client if client is not None else context
+    close = getattr(close_target, "aclose", None) or getattr(close_target, "close", None)
+    if callable(close):
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
 
 
 def _translate_run_result(
