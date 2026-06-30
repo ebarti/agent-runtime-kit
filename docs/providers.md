@@ -45,8 +45,13 @@ pass `ClaudeAgentRuntime(reuse_process=True)` to keep a compatible
 `ClaudeSDKClient` process open across tasks, then call `await runtime.aclose()`
 or use `async with ClaudeAgentRuntime(..., reuse_process=True) as runtime:`.
 Each task still uses an explicit stream session id, so omitted session handles do
-not silently share Claude's default stream session. The runtime restarts the SDK
-process when the option fingerprint changes and evicts it after SDK exceptions.
+not silently share Claude's default stream session. The reuse cache key is scoped
+by conversation identity (`resume_from`/`session_id`): two tasks with different
+sessions never share one client even when their options are identical, while tasks
+without an explicit conversation share the process and stay isolated by their
+per-query session id. `AgentResult.metadata["sdk_process_reuse_scope"]` reports
+`"conversation"` or `"shared"` accordingly. The runtime restarts the SDK process
+when the option fingerprint changes and evicts it after SDK exceptions.
 
 Codex uses the `openai-codex` package and maps working directory, session
 resume, approval mode, sandbox, structured output, model, and reasoning effort.
@@ -108,3 +113,9 @@ the local agent process to a conversation, so the adapter reuses the process
 only for tasks that provide an explicit `session_id` or `resume_from` handle.
 Tasks without an explicit conversation id remain task-isolated and restart the
 agent even when process reuse is enabled.
+
+Across all three adapters, `reuse_process=True` serializes `run()` calls on that
+runtime instance: because a single reused vendor subprocess is shared, concurrent
+runs on the same instance are run one at a time. This is a deliberate trade-off of
+the shared-process mode — use separate runtime instances (the default per-call
+isolation) when you need concurrent execution.

@@ -63,6 +63,7 @@ dev = [
     "mypy>=1.8",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
     "ruff>=0.8",
 ]
 
@@ -118,3 +119,14 @@ ignore_missing_imports = true
 markers = [
     "live: optional provider smoke tests that require explicit credentials and opt-in flags",
 ]
+
+[tool.coverage.run]
+source = ["agent_runtime_kit"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+# Vendor-SDK import bodies in each adapter's _load_sdk are unreachable in the
+# SDK-free CI lanes (adapters are exercised via injected fakes), so they are
+# excluded with ``# pragma: no cover`` rather than dragging the floor down.
+exclude_also = ["if TYPE_CHECKING:"]
