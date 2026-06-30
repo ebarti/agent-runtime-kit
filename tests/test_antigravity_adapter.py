@@ -117,18 +117,33 @@ class FakeResponse:
 class FakeAgent:
     last_config: FakeConfig | None = None
     chunks_factory: Any = None
+    instances: list[FakeAgent] = []
+    enter_errors: list[BaseException | None] = []
+    chat_errors: list[BaseException | None] = []
 
     def __init__(self, config: FakeConfig) -> None:
         FakeAgent.last_config = config
         self.conversation_id = "ag-session"
+        self.closed = False
+        self.prompts: list[str] = []
+        FakeAgent.instances.append(self)
 
     async def __aenter__(self) -> FakeAgent:
+        if FakeAgent.enter_errors:
+            error = FakeAgent.enter_errors.pop(0)
+            if error is not None:
+                raise error
         return self
 
     async def __aexit__(self, *args: object) -> None:
-        return None
+        self.closed = True
 
     async def chat(self, prompt: str) -> FakeResponse:
+        self.prompts.append(prompt)
+        if FakeAgent.chat_errors:
+            error = FakeAgent.chat_errors.pop(0)
+            if error is not None:
+                raise error
         return FakeResponse(prompt, FakeAgent.chunks_factory or _chunks)
 
 
@@ -146,6 +161,7 @@ def make_runtime(
     vertex: bool | None = None,
     project: str | None = None,
     location: str | None = None,
+    reuse_process: bool = False,
 ) -> AntigravityAgentRuntime:
     return AntigravityAgentRuntime(
         api_key=api_key,
@@ -157,6 +173,7 @@ def make_runtime(
         config_cls=FakeConfig,
         types_module=FakeTypes,
         policy_module=FakePolicy,
+        reuse_process=reuse_process,
     )
 
 
@@ -164,6 +181,9 @@ def make_runtime(
 def _reset_agent() -> None:
     FakeAgent.last_config = None
     FakeAgent.chunks_factory = None
+    FakeAgent.instances.clear()
+    FakeAgent.enter_errors = []
+    FakeAgent.chat_errors = []
 
 
 @pytest.mark.asyncio
@@ -191,6 +211,114 @@ async def test_antigravity_runtime_runs_with_injected_sdk(tmp_path: Path) -> Non
     assert FakeAgent.last_config is not None
     assert FakeAgent.last_config.kwargs["workspaces"] == [str(tmp_path)]
     assert FakeAgent.last_config.kwargs["api_key"] == "key"
+
+
+@pytest.mark.asyncio
+async def test_antigravity_runtime_defaults_to_per_call_process_isolation(
+    tmp_path: Path,
+) -> None:
+    runtime = make_runtime(data_dir=tmp_path)
+
+    await runtime.run(AgentTask(goal="first"))
+    await runtime.run(AgentTask(goal="second"))
+
+    assert len(FakeAgent.instances) == 2
+    assert [instance.closed for instance in FakeAgent.instances] == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_antigravity_runtime_can_reuse_explicit_conversation_until_closed(
+    tmp_path: Path,
+) -> None:
+    runtime = make_runtime(data_dir=tmp_path, reuse_process=True)
+
+    first = await runtime.run(AgentTask(goal="first", session_id="ag-conversation"))
+    second = await runtime.run(AgentTask(goal="second", session_id="ag-conversation"))
+
+    assert len(FakeAgent.instances) == 1
+    assert FakeAgent.instances[0].closed is False
+    assert FakeAgent.instances[0].prompts == ["first", "second"]
+    assert first.metadata["sdk_process_reuse_enabled"] is True
+    assert first.metadata["sdk_process_reused"] is False
+    assert first.metadata["sdk_process_start_count"] == 1
+    assert second.metadata["sdk_process_reused"] is True
+    assert second.metadata["sdk_process_start_count"] == 1
+    assert second.metadata["sdk_process_reuse_count"] == 1
+
+    await runtime.aclose()
+
+    assert FakeAgent.instances[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_antigravity_runtime_keeps_no_session_tasks_isolated(
+    tmp_path: Path,
+) -> None:
+    runtime = make_runtime(data_dir=tmp_path, reuse_process=True)
+
+    first = await runtime.run(AgentTask(goal="first", task_id="task-first"))
+    second = await runtime.run(AgentTask(goal="second", task_id="task-second"))
+
+    assert first.metadata["sdk_process_reused"] is False
+    assert first.metadata["sdk_process_reuse_scope"] == "task-isolated"
+    assert second.metadata["sdk_process_reused"] is False
+    assert second.metadata["sdk_process_start_count"] == 2
+    assert second.metadata["sdk_process_reuse_scope"] == "task-isolated"
+    assert len(FakeAgent.instances) == 2
+    assert FakeAgent.instances[0].closed is True
+    assert FakeAgent.instances[1].closed is False
+
+    await runtime.aclose()
+
+    assert FakeAgent.instances[1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_antigravity_runtime_evicts_reused_process_after_sdk_exception(
+    tmp_path: Path,
+) -> None:
+    FakeAgent.chat_errors = [RuntimeError("boom"), None]
+    runtime = make_runtime(data_dir=tmp_path, reuse_process=True)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await runtime.run(AgentTask(goal="fail", session_id="ag-conversation"))
+
+    recovered = await runtime.run(AgentTask(goal="recover", session_id="ag-conversation"))
+
+    assert recovered.output == "done: recover"
+    assert recovered.metadata["sdk_process_reused"] is False
+    assert recovered.metadata["sdk_process_start_count"] == 2
+    assert len(FakeAgent.instances) == 2
+    assert FakeAgent.instances[0].closed is True
+    assert FakeAgent.instances[1].closed is False
+
+    await runtime.aclose()
+
+    assert FakeAgent.instances[1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_antigravity_runtime_closes_context_after_enter_failure(
+    tmp_path: Path,
+) -> None:
+    FakeAgent.enter_errors = [RuntimeError("enter failed"), None]
+    runtime = make_runtime(data_dir=tmp_path, reuse_process=True)
+
+    with pytest.raises(RuntimeError, match="enter failed"):
+        await runtime.run(AgentTask(goal="fail", session_id="ag-conversation"))
+
+    recovered = await runtime.run(AgentTask(goal="recover", session_id="ag-conversation"))
+
+    assert recovered.output == "done: recover"
+    assert recovered.metadata["sdk_process_reused"] is False
+    assert recovered.metadata["sdk_process_start_count"] == 1
+    assert len(FakeAgent.instances) == 2
+    assert FakeAgent.instances[0].closed is True
+    assert FakeAgent.instances[1].closed is False
+
+    await runtime.aclose()
+
+    assert FakeAgent.instances[1].closed is True
 
 
 @pytest.mark.asyncio

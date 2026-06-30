@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Codex runtimes can now opt into reusable SDK process lifecycle with
+  `CodexAgentRuntime(reuse_process=True)`, `await runtime.aclose()`, or
+  `async with CodexAgentRuntime(..., reuse_process=True)`. Reuse keeps the Codex
+  app-server process alive across compatible tasks without implicitly reusing
+  Codex threads or sessions.
+- Claude and Antigravity runtimes can now opt into adapter-owned SDK process
+  lifecycle with the same `reuse_process=True`, `aclose()`, and async context
+  manager shape. Claude reuses `ClaudeSDKClient` while preserving per-task
+  stream session IDs; Antigravity only reuses for explicit conversation IDs
+  because its SDK process is conversation-scoped.
+- The SDK evolution agent now enables vendor process reuse for multi-stage
+  SDK-backed runs and closes internally owned runtimes when the run exits.
+
 ### Changed
 
 - Installation docs now lead with `agent-runtime-kit[all]` for the easiest

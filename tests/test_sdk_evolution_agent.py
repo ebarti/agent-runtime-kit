@@ -18,8 +18,13 @@ from agent_runtime_kit import (
     AgentTask,
     FilesystemAccess,
     RuntimeAvailability,
+    RuntimeRegistry,
 )
-from agent_runtime_kit.adapters import CodexAgentRuntime
+from agent_runtime_kit.adapters import (
+    AntigravityAgentRuntime,
+    ClaudeAgentRuntime,
+    CodexAgentRuntime,
+)
 from examples.sdk_evolution_agent import auth as auth_module
 from examples.sdk_evolution_agent.auth import CodexAuthResult, ensure_codex_sdk_auth
 from examples.sdk_evolution_agent.behavior import (
@@ -37,7 +42,10 @@ from examples.sdk_evolution_agent.collectors import (
 from examples.sdk_evolution_agent.current_state import build_current_state
 from examples.sdk_evolution_agent.models import ApiSnapshot, CommandResult, RunContext
 from examples.sdk_evolution_agent.pr import build_draft_pr_body
-from examples.sdk_evolution_agent.release_notes import collect_release_notes
+from examples.sdk_evolution_agent.release_notes import (
+    _format_github_discussions_index,
+    collect_release_notes,
+)
 from examples.sdk_evolution_agent.schemas import (
     DIRECTION_ANALYSIS_SCHEMA,
     SchemaValidationError,
@@ -201,7 +209,82 @@ def test_release_notes_collects_matching_update_source() -> None:
     assert any("TaskUpdatedMessage" in summary for summary in notes[0].summaries)
 
 
-def test_antigravity_release_notes_record_source_coverage_without_version_match() -> None:
+def test_antigravity_release_notes_fetches_matching_discussion_from_announcements() -> None:
+    def fetcher(url: str) -> str:
+        if url.endswith("/discussions/categories/announcements"):
+            return (
+                '<a href="https://github.com/google-antigravity/antigravity-sdk-python/'
+                'discussions/87">'
+                "Google Antigravity Python SDK - v0.1.5 Release Notes</a>"
+            )
+        if url.endswith("/discussions/87"):
+            return (
+                "## Google Antigravity Python SDK - v0.1.5 Release Notes\n"
+                "- OpenTelemetry Tracing Support\n"
+                "- Declarative Subagent Configurations with SubagentConfig\n"
+                "- Python 3.14 Compatibility\n"
+            )
+        return "no matching release note"
+
+    notes = collect_release_notes(
+        [
+            {
+                "name": "google-antigravity",
+                "locked_version": "0.1.4",
+                "installed_version": "0.1.4",
+            }
+        ],
+        {"google-antigravity": "0.1.5"},
+        fetcher=fetcher,
+    )
+
+    assert notes[0].status == "found"
+    assert notes[0].to_version == "0.1.5"
+    assert any(url.endswith("/discussions/87") for url in notes[0].checked_urls)
+    assert any(source.url and source.url.endswith("/discussions/87") for source in notes[0].sources)
+    assert any("OpenTelemetry" in summary for summary in notes[0].summaries)
+    assert any("Python 3.14" in summary for summary in notes[0].summaries)
+
+
+def test_github_discussions_graphql_index_filters_discussion_category() -> None:
+    index = _format_github_discussions_index(
+        {
+            "data": {
+                "repository": {
+                    "discussions": {
+                        "nodes": [
+                            {
+                                "title": "Google Antigravity Python SDK - v0.1.5 Release Notes",
+                                "url": (
+                                    "https://github.com/google-antigravity/"
+                                    "antigravity-sdk-python/discussions/87"
+                                ),
+                                "body": "OpenTelemetry tracing and Python 3.14 compatibility.",
+                                "category": {"slug": "announcements"},
+                            },
+                            {
+                                "title": "Community Discussion",
+                                "url": (
+                                    "https://github.com/google-antigravity/"
+                                    "antigravity-sdk-python/discussions/43"
+                                ),
+                                "body": "Not a release note.",
+                                "category": {"slug": "show-and-tell"},
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+        category_slug="announcements",
+    )
+
+    assert "discussions/87" in index
+    assert "OpenTelemetry" in index
+    assert "discussions/43" not in index
+
+
+def test_release_notes_record_source_coverage_without_version_match() -> None:
     notes = collect_release_notes(
         [
             {
@@ -214,7 +297,7 @@ def test_antigravity_release_notes_record_source_coverage_without_version_match(
         fetcher=lambda url: "Google Antigravity product changelog",
     )
 
-    assert notes[0].status == "found"
+    assert notes[0].status == "no-matching-version"
     assert "no package-version-specific" in notes[0].summaries[0]
 
 
@@ -968,6 +1051,68 @@ version = "0.2.1"
     assert finalize_index > pr_index
 
 
+@pytest.mark.asyncio
+async def test_run_agent_closes_owned_runtime_on_stage_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project.optional-dependencies]
+claude = ["claude-agent-sdk>=0.2"]
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "uv.lock").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        lambda package, *, version=None: ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+        ),
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        lambda package, version: ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+            source="isolated-venv",
+        ),
+    )
+
+    class ClosingRuntime(RecordingRuntime):
+        closed = False
+
+        async def run(self, task: AgentTask) -> AgentResult:
+            self.task = task
+            raise RuntimeError("stage boom")
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    runtime = ClosingRuntime()
+    registry = RuntimeRegistry()
+    registry.register(AgentRuntimeKind.FAKE, lambda: runtime)
+
+    with pytest.raises(StageExecutionError, match="direction-analysis failed"):
+        await run_agent(
+            RunOptions(
+                workspace=tmp_path,
+                runtime="fake",
+                packages=("claude-agent-sdk",),
+                report_dir=Path("reports"),
+                implementation_enabled=False,
+                inspect_candidates=False,
+            ),
+            pypi_client=_fake_pypi,
+            registry=registry,
+        )
+
+    assert runtime.closed is True
+
+
 def test_parse_args_and_pr_body() -> None:
     options = parse_args(
         [
@@ -989,13 +1134,23 @@ def test_parse_args_and_pr_body() -> None:
     assert "No auto-merge" in body
 
 
-def test_build_registry_injects_isolated_codex_home() -> None:
-    runtime = build_registry().resolve(AgentRuntimeKind.CODEX_AGENT_SDK)
+def test_build_registry_configures_vendor_process_reuse() -> None:
+    registry = build_registry()
+    runtime = registry.resolve(AgentRuntimeKind.CODEX_AGENT_SDK)
 
     assert isinstance(runtime, CodexAgentRuntime)
     assert runtime._default_model == SDK_EVOLUTION_CODEX_MODEL
+    assert runtime._reuse_process is True
     assert runtime._env is not None
     assert runtime._env["CODEX_HOME"] == str(SDK_EVOLUTION_CODEX_HOME)
+
+    claude = registry.resolve(AgentRuntimeKind.CLAUDE_AGENT_SDK)
+    assert isinstance(claude, ClaudeAgentRuntime)
+    assert claude._reuse_process is True
+
+    antigravity = registry.resolve(AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK)
+    assert isinstance(antigravity, AntigravityAgentRuntime)
+    assert antigravity._reuse_process is True
 
 
 def test_codex_auth_helper_copies_newer_primary_auth_to_dedicated_home(

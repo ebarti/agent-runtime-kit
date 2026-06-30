@@ -57,6 +57,11 @@ update plan, implement allowed changes, and review the result. This model policy
 is applied only to `codex-agent-sdk`; Claude and Antigravity runs keep their
 provider-native model selection because `gpt-5.5` is not a valid model override
 for those adapters.
+Vendor runtimes also enable `reuse_process=True` for the multi-stage run, so
+compatible SDK subprocesses can stay warm across analysis/review stages and are
+closed by the CLI when the internally owned runtime exits. Codex reuses its
+app-server process, Claude reuses its `ClaudeSDKClient` process, and Antigravity
+keeps task isolation unless a stage provides an explicit conversation id.
 
 For Antigravity, local auth can use `GEMINI_API_KEY` / `GOOGLE_API_KEY` or
 Google Application Default Credentials. ADC runs use Vertex AI config; provide a

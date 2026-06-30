@@ -20,7 +20,12 @@ from agent_runtime_kit import (
     RuntimeAvailability,
     RuntimeRegistry,
 )
-from agent_runtime_kit.adapters import CodexAgentRuntime, register_adapters
+from agent_runtime_kit.adapters import (
+    AntigravityAgentRuntime,
+    ClaudeAgentRuntime,
+    CodexAgentRuntime,
+    register_adapters,
+)
 from agent_runtime_kit.events import safe_emit, task_completed_event, task_started_event
 from agent_runtime_kit.registry import create_default_registry
 from examples.sdk_evolution_agent.auth import prepare_isolated_codex_home
@@ -100,6 +105,16 @@ def build_registry() -> RuntimeRegistry:
         _codex_evolution_runtime,
         replace=True,
     )
+    registry.register(
+        AgentRuntimeKind.CLAUDE_AGENT_SDK,
+        _claude_evolution_runtime,
+        replace=True,
+    )
+    registry.register(
+        AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK,
+        _antigravity_evolution_runtime,
+        replace=True,
+    )
     return registry
 
 
@@ -108,7 +123,18 @@ def _codex_evolution_runtime(**kwargs: Any) -> CodexAgentRuntime:
     env = dict(kwargs.pop("env", {}) or {})
     env.setdefault("CODEX_HOME", str(codex_home))
     kwargs.setdefault("default_model", SDK_EVOLUTION_CODEX_MODEL)
+    kwargs.setdefault("reuse_process", True)
     return CodexAgentRuntime(env=env, **kwargs)
+
+
+def _claude_evolution_runtime(**kwargs: Any) -> ClaudeAgentRuntime:
+    kwargs.setdefault("reuse_process", True)
+    return ClaudeAgentRuntime(**kwargs)
+
+
+def _antigravity_evolution_runtime(**kwargs: Any) -> AntigravityAgentRuntime:
+    kwargs.setdefault("reuse_process", True)
+    return AntigravityAgentRuntime(**kwargs)
 
 
 def resolve_runtime(kind: str, *, registry: RuntimeRegistry | None = None) -> AgentRuntime:
@@ -520,8 +546,8 @@ def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
             "candidate API diffs, unavailable required release-note evidence, "
             "reviewer-identified unsupported vendor behavior, or recursive "
             "runtime-contract impact remain hard blockers. Release-note status found "
-            "is collected evidence, not unavailable evidence, even when the summary "
-            "states that no package-version-specific entry was found."
+            "is direct release-note evidence. Status no-matching-version is source "
+            "coverage with explicit uncertainty, not unavailable evidence."
         )
     if stage == "review":
         prompt += " The review status must be exactly pass or reject."

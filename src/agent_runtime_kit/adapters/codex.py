@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Mapping
+from contextlib import suppress
 from typing import Any
 
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError, UnsupportedTaskInputError
@@ -68,6 +70,7 @@ class CodexAgentRuntime:
         config_cls: Any | None = None,
         sandbox_cls: Any | None = None,
         approval_mode_cls: Any | None = None,
+        reuse_process: bool = False,
     ) -> None:
         self._default_model = default_model
         self._supported_models = supported_models
@@ -79,6 +82,20 @@ class CodexAgentRuntime:
         self._config_cls = config_cls
         self._sandbox_cls = sandbox_cls
         self._approval_mode_cls = approval_mode_cls
+        self._reuse_process = reuse_process
+        self._codex_context: Any | None = None
+        self._codex_client: Any | None = None
+        self._codex_client_key: tuple[Any, ...] | None = None
+        self._sdk_process_start_count = 0
+        self._sdk_process_reuse_count = 0
+        self._codex_client_lock = asyncio.Lock()
+        self._codex_run_lock = asyncio.Lock()
+
+    async def __aenter__(self) -> CodexAgentRuntime:
+        return self
+
+    async def __aexit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        await self.aclose()
 
     def availability(self) -> RuntimeAvailability:
         """Report OpenAI Codex SDK package availability."""
@@ -153,6 +170,12 @@ class CodexAgentRuntime:
 
         del task_id
 
+    async def aclose(self) -> None:
+        """Close any reusable Codex app-server process owned by this runtime."""
+
+        async with self._codex_client_lock:
+            await self._close_codex_client_locked()
+
     def _load_sdk(self) -> tuple[Any, Any, Any, Any]:
         if self._codex_cls is not None and self._config_cls is not None:
             return (
@@ -197,30 +220,132 @@ class CodexAgentRuntime:
         }
         if self._env is not None:
             config_kwargs["env"] = dict(self._env)
-        config = config_cls(**config_kwargs)
-        async with codex_cls(config=config) as codex:
-            thread = await self._start_or_resume_thread(
-                codex,
-                task,
-                model=model,
-                cwd=cwd,
-                sandbox_cls=sandbox_cls,
-                approval_mode_cls=approval_mode_cls,
-            )
-            run_kwargs = {
-                "cwd": cwd,
-                "model": model,
-                "approval_mode": _approval_mode(task.permissions.mode, approval_mode_cls),
-                "sandbox": _sandbox_mode(task.permissions.filesystem, sandbox_cls),
-            }
-            schema = output_schema_from(task.output_schema, task.metadata)
-            if schema is not None:
-                run_kwargs["output_schema"] = dict(schema)
-            effort = metadata_str(task.metadata, "reasoning_effort")
-            if effort:
-                run_kwargs["effort"] = effort
-            raw_result = await thread.run(task.goal, **run_kwargs)
-        return _translate_run_result(task, raw_result, model=model, session_id=_thread_id(thread))
+        process_reused = False
+        try:
+            if self._reuse_process:
+                async with self._codex_run_lock:
+                    key = _codex_client_key(
+                        config_kwargs,
+                        model=model,
+                        permissions=task.permissions,
+                        sandbox_cls=sandbox_cls,
+                        approval_mode_cls=approval_mode_cls,
+                    )
+                    codex, process_reused = await self._persistent_codex_client(
+                        codex_cls,
+                        config_cls,
+                        config_kwargs,
+                        key=key,
+                    )
+                    thread, raw_result = await self._invoke_codex(
+                        codex,
+                        task,
+                        model=model,
+                        cwd=cwd,
+                        sandbox_cls=sandbox_cls,
+                        approval_mode_cls=approval_mode_cls,
+                    )
+            else:
+                config = config_cls(**config_kwargs)
+                async with codex_cls(config=config) as codex:
+                    thread, raw_result = await self._invoke_codex(
+                        codex,
+                        task,
+                        model=model,
+                        cwd=cwd,
+                        sandbox_cls=sandbox_cls,
+                        approval_mode_cls=approval_mode_cls,
+                    )
+        except Exception:
+            if self._reuse_process:
+                await self.aclose()
+            raise
+        return _translate_run_result(
+            task,
+            raw_result,
+            model=model,
+            session_id=_thread_id(thread),
+            process_metadata=(
+                self._process_reuse_metadata(process_reused) if self._reuse_process else None
+            ),
+        )
+
+    async def _invoke_codex(
+        self,
+        codex: Any,
+        task: AgentTask,
+        *,
+        model: str,
+        cwd: str | None,
+        sandbox_cls: Any,
+        approval_mode_cls: Any,
+    ) -> tuple[Any, Any]:
+        thread = await self._start_or_resume_thread(
+            codex,
+            task,
+            model=model,
+            cwd=cwd,
+            sandbox_cls=sandbox_cls,
+            approval_mode_cls=approval_mode_cls,
+        )
+        run_kwargs = {
+            "cwd": cwd,
+            "model": model,
+            "approval_mode": _approval_mode(task.permissions.mode, approval_mode_cls),
+            "sandbox": _sandbox_mode(task.permissions.filesystem, sandbox_cls),
+        }
+        schema = output_schema_from(task.output_schema, task.metadata)
+        if schema is not None:
+            run_kwargs["output_schema"] = dict(schema)
+        effort = metadata_str(task.metadata, "reasoning_effort")
+        if effort:
+            run_kwargs["effort"] = effort
+        raw_result = await thread.run(task.goal, **run_kwargs)
+        return thread, raw_result
+
+    async def _persistent_codex_client(
+        self,
+        codex_cls: Any,
+        config_cls: Any,
+        config_kwargs: Mapping[str, Any],
+        *,
+        key: tuple[Any, ...],
+    ) -> tuple[Any, bool]:
+        async with self._codex_client_lock:
+            if self._codex_client is not None and self._codex_client_key == key:
+                self._sdk_process_reuse_count += 1
+                return self._codex_client, True
+            if self._codex_client is not None:
+                await self._close_codex_client_locked()
+            context = codex_cls(config=config_cls(**dict(config_kwargs)))
+            enter = getattr(context, "__aenter__", None)
+            try:
+                client = await enter() if callable(enter) else context
+            except BaseException:
+                with suppress(Exception):
+                    await _close_codex_context(context)
+                raise
+            self._codex_context = context
+            self._codex_client = client
+            self._codex_client_key = key
+            self._sdk_process_start_count += 1
+            return client, False
+
+    async def _close_codex_client_locked(self) -> None:
+        context = self._codex_context
+        client = self._codex_client
+        self._codex_context = None
+        self._codex_client = None
+        self._codex_client_key = None
+        await _close_codex_context(context, client=client)
+
+    def _process_reuse_metadata(self, reused: bool) -> dict[str, Any]:
+        return {
+            "sdk_process_reuse_enabled": self._reuse_process,
+            "sdk_process_reused": reused,
+            "sdk_process_start_count": self._sdk_process_start_count,
+            "sdk_process_reuse_count": self._sdk_process_reuse_count,
+        }
 
     async def _start_or_resume_thread(
         self,
@@ -248,17 +373,32 @@ class CodexAgentRuntime:
         return metadata_str(task.metadata, "model") or self._default_model
 
 
+async def _close_codex_context(context: Any | None, *, client: Any | None = None) -> None:
+    if context is not None:
+        exit_method = getattr(context, "__aexit__", None)
+        if callable(exit_method):
+            await exit_method(None, None, None)
+            return
+    close_target = client if client is not None else context
+    close = getattr(close_target, "aclose", None) or getattr(close_target, "close", None)
+    if callable(close):
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
+
+
 def _translate_run_result(
     task: AgentTask,
     raw_result: Any,
     *,
     model: str,
     session_id: str | None,
+    process_metadata: Mapping[str, Any] | None = None,
 ) -> AgentResult:
     output = str(_field(raw_result, "final_response", "") or "")
     usage = _codex_usage(_field(raw_result, "usage"))
     tool_calls = tuple(_tool_audits(_field(raw_result, "items", ()) or ()))
-    metadata = {"model": model, "sdk": "openai_codex"}
+    metadata = {"model": model, "sdk": "openai_codex", **dict(process_metadata or {})}
     status = _status_value(_field(raw_result, "status"))
 
     if status == "failed":
@@ -432,6 +572,41 @@ def _sandbox_mode(filesystem: FilesystemAccess, sandbox_cls: Any) -> Any:
     if sandbox_cls is None:
         return name.replace("_", "-")
     return getattr(sandbox_cls, name, name.replace("_", "-"))
+
+
+def _codex_client_key(
+    config_kwargs: Mapping[str, Any],
+    *,
+    model: str,
+    permissions: Any,
+    sandbox_cls: Any,
+    approval_mode_cls: Any,
+) -> tuple[Any, ...]:
+    env = config_kwargs.get("env")
+    env_items = (
+        tuple(sorted((str(key), str(value)) for key, value in env.items()))
+        if isinstance(env, Mapping)
+        else ()
+    )
+    overrides = config_kwargs.get("config_overrides")
+    if isinstance(overrides, tuple):
+        override_items = tuple(str(item) for item in overrides)
+    elif isinstance(overrides, list):
+        override_items = tuple(str(item) for item in overrides)
+    elif overrides is None:
+        override_items = ()
+    else:
+        override_items = (str(overrides),)
+    return (
+        str(config_kwargs.get("cwd") or ""),
+        override_items,
+        env_items,
+        model,
+        str(permissions.mode),
+        str(permissions.filesystem),
+        str(_approval_mode(permissions.mode, approval_mode_cls)),
+        str(_sandbox_mode(permissions.filesystem, sandbox_cls)),
+    )
 
 
 def _thread_id(thread: Any) -> str | None:
