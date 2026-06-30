@@ -546,8 +546,8 @@ def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
             "candidate API diffs, unavailable required release-note evidence, "
             "reviewer-identified unsupported vendor behavior, or recursive "
             "runtime-contract impact remain hard blockers. Release-note status found "
-            "is collected evidence, not unavailable evidence, even when the summary "
-            "states that no package-version-specific entry was found."
+            "is direct release-note evidence. Status no-matching-version is source "
+            "coverage with explicit uncertainty, not unavailable evidence."
         )
     if stage == "review":
         prompt += " The review status must be exactly pass or reject."

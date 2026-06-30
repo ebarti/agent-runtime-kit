@@ -288,7 +288,7 @@ The agent should collect release-note context when a vendor publishes it.
 | `claude-agent-sdk` | Python SDK `CHANGELOG.md` and Claude Agent SDK docs | Claude often ships behavioral changes around task progress, sessions, tools, permissions, and model support. |
 | `openai-codex` | Codex SDK docs, Codex changelog, and `openai/codex` releases | Codex changes can involve sandboxing, working directories, remote execution, app-server behavior, and SDK maturity. |
 | `openai-codex-cli-bin` | `openai/codex` releases and package metadata | The binary package is runtime infrastructure, so behavior can change even when the Python SDK surface does not. |
-| `google-antigravity` | Antigravity changelog, repository, package metadata, examples, and public API snapshots | Antigravity release context may be product-level instead of package-version-specific, so the agent must preserve source coverage and uncertainty separately. |
+| `google-antigravity` | Antigravity GitHub Discussions release notes, repository, package metadata, examples, and public API snapshots | Antigravity publishes package release notes as GitHub Discussions announcements. The agent should prefer the GitHub GraphQL Discussions API when a supported token is present, then fall back to public discussion pages before source coverage and uncertainty. |
 
 The report should preserve source references and a short excerpt or summary. If
 release notes are unavailable, that absence is evidence and should increase
@@ -301,7 +301,8 @@ Primary sources should be recorded with URLs in `release_notes.json`:
 - Codex SDK docs: `https://developers.openai.com/codex/sdk`
 - Codex changelog: `https://developers.openai.com/codex/changelog`
 - Codex repository releases: `https://github.com/openai/codex/releases`
-- Antigravity changelog: `https://antigravity.google/changelog`
+- Antigravity release notes: `https://github.com/google-antigravity/antigravity-sdk-python/discussions/categories/announcements`
+- Antigravity v0.1.5 release notes: `https://github.com/google-antigravity/antigravity-sdk-python/discussions/87`
 - Antigravity repository: `https://github.com/google-antigravity/antigravity-sdk-python`
 
 If a package has no release-note source for the exact version interval, the
@@ -449,10 +450,14 @@ For `openai-codex`, the Codex SDK docs and Codex changelog should be checked.
 The `openai/codex` release page is also relevant because the Python SDK depends
 on a bundled or pinned runtime.
 
-For `google-antigravity`, if the official changelog or repository does not have
-a package-version-specific entry, the agent should not pretend the source is
-complete. It should compensate with package metadata, examples, API snapshots,
-adapter contract tests, and live smoke where credentials are available.
+For `google-antigravity`, check the GitHub Discussions Announcements category
+for versioned SDK release-note threads before falling back to repository and
+package metadata. Prefer GitHub GraphQL when `GITHUB_TOKEN` or `GH_TOKEN` is
+explicitly available; otherwise use the public discussion pages. If no
+package-version-specific discussion or repository entry exists, the agent should
+not pretend the source is complete. It should compensate with package metadata,
+examples, API snapshots, adapter contract tests, and live smoke where credentials
+are available.
 
 ## Behavior Probe Strategy
 
