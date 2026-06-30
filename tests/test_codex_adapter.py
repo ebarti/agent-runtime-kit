@@ -267,6 +267,38 @@ async def test_codex_runtime_closes_context_after_enter_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_codex_logs_when_close_fails_after_enter_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    class ExplodingCodex(FakeCodex):
+        async def __aenter__(self) -> FakeCodex:
+            raise RuntimeError("enter failed")
+
+        async def __aexit__(self, *args: object) -> None:
+            raise RuntimeError("close failed too")
+
+    def codex_factory(*, config: FakeCodexConfig) -> FakeCodex:
+        return ExplodingCodex(config)
+
+    runtime = CodexAgentRuntime(
+        codex_cls=codex_factory,
+        config_cls=FakeCodexConfig,
+        sandbox_cls=FakeSandbox,
+        approval_mode_cls=FakeApprovalMode,
+        reuse_process=True,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        # The original enter error must propagate, not the secondary close error.
+        with pytest.raises(RuntimeError, match="enter failed"):
+            await runtime.run(AgentTask(goal="x"))
+
+    assert "after startup failure" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_codex_thread_start_and_run_kwargs() -> None:
     runtime = make_runtime()
 

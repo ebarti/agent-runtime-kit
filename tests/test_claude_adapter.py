@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -251,6 +252,92 @@ async def test_claude_runtime_closes_client_after_connect_failure() -> None:
     await runtime.aclose()
 
     assert FakeClaudeClient.instances[1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_claude_reuse_is_shared_for_no_session_tasks() -> None:
+    FakeClaudeClient.messages = [assistant("ok"), result_message()]
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([]),
+        options_cls=FakeClaudeOptions,
+        client_cls=FakeClaudeClient,
+        reuse_process=True,
+    )
+
+    first = await runtime.run(AgentTask(goal="a", task_id="task-a"))
+    second = await runtime.run(AgentTask(goal="b", task_id="task-b"))
+
+    # No explicit conversation -> shared process, isolated by per-query session id.
+    assert first.metadata["sdk_process_reuse_scope"] == "shared"
+    assert second.metadata["sdk_process_reused"] is True
+    assert len(FakeClaudeClient.instances) == 1
+
+
+@pytest.mark.asyncio
+async def test_claude_reuse_restarts_for_different_sessions() -> None:
+    FakeClaudeClient.messages = [assistant("ok"), result_message()]
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([]),
+        options_cls=FakeClaudeOptions,
+        client_cls=FakeClaudeClient,
+        reuse_process=True,
+    )
+
+    await runtime.run(AgentTask(goal="a", session_id="sess-a"))
+    second = await runtime.run(AgentTask(goal="b", session_id="sess-b"))
+
+    # Distinct conversations must never share one client, even with identical options.
+    assert second.metadata["sdk_process_reused"] is False
+    assert second.metadata["sdk_process_start_count"] == 2
+    assert second.metadata["sdk_process_reuse_scope"] == "conversation"
+    assert len(FakeClaudeClient.instances) == 2
+
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_claude_reuse_shares_client_for_same_session() -> None:
+    FakeClaudeClient.messages = [assistant("ok"), result_message()]
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([]),
+        options_cls=FakeClaudeOptions,
+        client_cls=FakeClaudeClient,
+        reuse_process=True,
+    )
+
+    await runtime.run(AgentTask(goal="a", session_id="sess-1"))
+    second = await runtime.run(AgentTask(goal="b", session_id="sess-1"))
+
+    assert second.metadata["sdk_process_reused"] is True
+    assert second.metadata["sdk_process_start_count"] == 1
+    assert second.metadata["sdk_process_reuse_scope"] == "conversation"
+    assert len(FakeClaudeClient.instances) == 1
+
+
+@pytest.mark.asyncio
+async def test_claude_logs_when_close_fails_after_connect_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class ExplodingClient(FakeClaudeClient):
+        async def connect(self) -> None:
+            raise RuntimeError("connect failed")
+
+        async def disconnect(self) -> None:
+            raise RuntimeError("close failed too")
+
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([]),
+        options_cls=FakeClaudeOptions,
+        client_cls=ExplodingClient,
+        reuse_process=True,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        # The original connect error must propagate, not the secondary close error.
+        with pytest.raises(RuntimeError, match="connect failed"):
+            await runtime.run(AgentTask(goal="x"))
+
+    assert "after startup failure" in caplog.text
 
 
 @pytest.mark.asyncio
