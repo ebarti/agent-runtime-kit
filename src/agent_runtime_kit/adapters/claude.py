@@ -356,7 +356,7 @@ class ClaudeAgentRuntime:
         return options_cls(**supported), dropped
 
     def _model(self, task: AgentTask) -> str:
-        return metadata_str(task.metadata, "model") or self._default_model
+        return task.model or metadata_str(task.metadata, "model") or self._default_model
 
 
 class _StreamState:
