@@ -291,7 +291,7 @@ class CodexAgentRuntime:
             task,
             raw_result,
             model=model,
-            session_id=_thread_id(thread),
+            session_id=_thread_id(thread) or _task_session_id(task),
             process_metadata=(
                 self._process_reuse_metadata(process_reused) if self._reuse_process else None
             ),
@@ -556,13 +556,19 @@ def _tool_arguments(value: Any) -> Mapping[str, Any]:
 
 
 def _codex_usage(value: Any) -> Usage:
-    total = field_value(value, "total")
-    if total is None and isinstance(value, Mapping):
-        total = value.get("total", value)
-    input_tokens = optional_int(field_value(total, "input_tokens"))
-    output_tokens = optional_int(field_value(total, "output_tokens"))
-    cached = optional_int(field_value(total, "cached_input_tokens"))
-    total_tokens = optional_int(field_value(total, "total_tokens"))
+    # Prefer the per-turn breakdown ('last') over the thread-cumulative 'total':
+    # on a resumed thread 'total' re-reports every prior turn's tokens, inflating
+    # this turn's usage and cost accounting. Fall back to 'total' when 'last' is
+    # absent (older SDKs / dict-based fakes).
+    breakdown = field_value(value, "last")
+    if breakdown is None:
+        breakdown = field_value(value, "total")
+    if breakdown is None and isinstance(value, Mapping):
+        breakdown = value.get("total", value)
+    input_tokens = optional_int(field_value(breakdown, "input_tokens"))
+    output_tokens = optional_int(field_value(breakdown, "output_tokens"))
+    cached = optional_int(field_value(breakdown, "cached_input_tokens"))
+    total_tokens = optional_int(field_value(breakdown, "total_tokens"))
     # OpenAI reports cached input inside input_tokens, so never add cached on top.
     return Usage(
         input_tokens=input_tokens,
@@ -627,6 +633,14 @@ def _codex_client_key(
         str(_approval_mode(permissions.mode, approval_mode_cls)),
         str(_sandbox_mode(permissions.filesystem, sandbox_cls)),
     )
+
+
+def _task_session_id(task: AgentTask) -> str | None:
+    """Conversation id the caller supplied, for result session_id fallback."""
+
+    if task.resume_from is not None:
+        return task.resume_from.session_id
+    return task.session_id
 
 
 def _thread_id(thread: Any) -> str | None:
