@@ -180,7 +180,17 @@ class ClaudeAgentRuntime:
         del task_id
 
     async def aclose(self) -> None:
-        """Close any reusable Claude SDK client process owned by this runtime."""
+        """Close any reusable Claude SDK client process owned by this runtime.
+
+        Acquires the run lock first so an external ``aclose()`` waits for an
+        in-flight ``run()`` to finish instead of closing the client mid-stream.
+        """
+
+        async with self._client_run_lock:
+            await self._close_client()
+
+    async def _close_client(self) -> None:
+        """Close the client holding only the client lock (run lock assumed free)."""
 
         async with self._client_lock:
             await self._close_client_locked()
@@ -230,8 +240,18 @@ class ClaudeAgentRuntime:
                     receiver = client.receive_messages
                 async for message in receiver():
                     await stream.consume(message)
-            except Exception:
-                await self.aclose()
+            except BaseException:
+                # Evict the client on any non-normal exit — including
+                # cancellation (CancelledError is a BaseException) — so a
+                # poisoned process is never handed to the next run(). The run
+                # lock is already held, so close under the client lock only and
+                # never let cleanup mask the original error.
+                try:
+                    await self._close_client()
+                except Exception as close_exc:
+                    logger.warning(
+                        "failed to close Claude client after run failure: %s", close_exc
+                    )
                 raise
             return process_reused
 

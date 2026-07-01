@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -242,6 +243,37 @@ async def test_codex_runtime_evicts_reused_process_after_sdk_exception() -> None
     await runtime.aclose()
 
     assert FakeCodex.instances[1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_codex_runtime_evicts_reused_process_after_cancellation() -> None:
+    # CancelledError is a BaseException; the reuse cleanup must still evict the
+    # interrupted app-server so the next run() does not inherit a poisoned process.
+    errors: list[BaseException | None] = [asyncio.CancelledError(), None]
+
+    def codex_factory(*, config: FakeCodexConfig) -> FakeCodex:
+        return FakeCodex(config, run_error=errors.pop(0))
+
+    runtime = CodexAgentRuntime(
+        codex_cls=codex_factory,
+        config_cls=FakeCodexConfig,
+        sandbox_cls=FakeSandbox,
+        approval_mode_cls=FakeApprovalMode,
+        reuse_process=True,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.run(AgentTask(goal="cancelled"))
+
+    assert FakeCodex.instances[0].closed is True
+
+    recovered = await runtime.run(AgentTask(goal="recover"))
+
+    assert recovered.output == "done: recover"
+    assert recovered.metadata["sdk_process_reused"] is False
+    assert len(FakeCodex.instances) == 2
+
+    await runtime.aclose()
 
 
 @pytest.mark.asyncio

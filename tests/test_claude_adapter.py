@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -224,6 +225,55 @@ async def test_claude_runtime_evicts_reused_process_after_sdk_exception() -> Non
     await runtime.aclose()
 
     assert FakeClaudeClient.instances[1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_evicts_reused_process_after_cancellation() -> None:
+    FakeClaudeClient.messages = [assistant("ok"), result_message()]
+    # CancelledError is a BaseException; the reuse cleanup must still evict the
+    # interrupted client so the next run() does not inherit a poisoned process.
+    FakeClaudeClient.query_errors = [asyncio.CancelledError(), None]
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([]),
+        options_cls=FakeClaudeOptions,
+        client_cls=FakeClaudeClient,
+        reuse_process=True,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.run(AgentTask(goal="cancelled"))
+
+    assert FakeClaudeClient.instances[0].closed is True
+
+    recovered = await runtime.run(AgentTask(goal="recover"))
+
+    assert recovered.output == "ok"
+    assert recovered.metadata["sdk_process_reused"] is False
+    assert len(FakeClaudeClient.instances) == 2
+
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_claude_aclose_waits_for_in_flight_run() -> None:
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([]),
+        options_cls=FakeClaudeOptions,
+        client_cls=FakeClaudeClient,
+        reuse_process=True,
+    )
+
+    # Holding the run lock simulates an in-flight run(); aclose() must block on it
+    # rather than racing in and closing the shared client mid-stream.
+    await runtime._client_run_lock.acquire()
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(runtime.aclose(), timeout=0.05)
+    finally:
+        runtime._client_run_lock.release()
+
+    # Once the run releases the lock, aclose() proceeds.
+    await asyncio.wait_for(runtime.aclose(), timeout=1.0)
 
 
 @pytest.mark.asyncio
