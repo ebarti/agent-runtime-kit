@@ -25,6 +25,7 @@ from agent_runtime_kit.adapters._common import (
     empty_completion_error,
     ensure_supported_model,
     field_value,
+    filter_supported_kwargs,
     metadata_str,
     optional_int,
     output_schema_from,
@@ -252,6 +253,10 @@ class CodexAgentRuntime:
         }
         if self._env is not None:
             config_kwargs["env"] = dict(self._env)
+        # Tolerate vendor option drift like the Claude adapter: drop kwargs the
+        # installed SDK no longer accepts (instead of crashing with TypeError) and
+        # record them so the omission stays visible in AgentResult.metadata.
+        config_supported, dropped = filter_supported_kwargs(config_cls, config_kwargs)
         process_reused = False
         if self._reuse_process:
             async with self._codex_run_lock:
@@ -265,11 +270,10 @@ class CodexAgentRuntime:
                     )
                     codex, process_reused = await self._persistent_codex_client(
                         codex_cls,
-                        config_cls,
-                        config_kwargs,
+                        config_cls(**config_supported),
                         key=key,
                     )
-                    thread, raw_result = await self._invoke_codex(
+                    thread, raw_result, invoke_dropped = await self._invoke_codex(
                         codex,
                         task,
                         model=model,
@@ -293,9 +297,8 @@ class CodexAgentRuntime:
                     raise
         else:
             # Per-call isolation: the context manager owns the process teardown.
-            config = config_cls(**config_kwargs)
-            async with codex_cls(config=config) as codex:
-                thread, raw_result = await self._invoke_codex(
+            async with codex_cls(config=config_cls(**config_supported)) as codex:
+                thread, raw_result, invoke_dropped = await self._invoke_codex(
                     codex,
                     task,
                     model=model,
@@ -303,11 +306,15 @@ class CodexAgentRuntime:
                     sandbox_cls=sandbox_cls,
                     approval_mode_cls=approval_mode_cls,
                 )
+        for key_name in invoke_dropped:
+            if key_name not in dropped:
+                dropped.append(key_name)
         return _translate_run_result(
             task,
             raw_result,
             model=model,
             session_id=_thread_id(thread) or _task_session_id(task),
+            dropped_options=dropped,
             process_metadata=(
                 self._process_reuse_metadata(process_reused) if self._reuse_process else None
             ),
@@ -322,8 +329,8 @@ class CodexAgentRuntime:
         cwd: str | None,
         sandbox_cls: Any,
         approval_mode_cls: Any,
-    ) -> tuple[Any, Any]:
-        thread = await self._start_or_resume_thread(
+    ) -> tuple[Any, Any, list[str]]:
+        thread, dropped = await self._start_or_resume_thread(
             codex,
             task,
             model=model,
@@ -343,14 +350,14 @@ class CodexAgentRuntime:
         effort = metadata_str(task.metadata, "reasoning_effort")
         if effort:
             run_kwargs["effort"] = effort
-        raw_result = await thread.run(task.goal, **run_kwargs)
-        return thread, raw_result
+        run_supported, run_dropped = filter_supported_kwargs(thread.run, run_kwargs)
+        raw_result = await thread.run(task.goal, **run_supported)
+        return thread, raw_result, dropped + [k for k in run_dropped if k not in dropped]
 
     async def _persistent_codex_client(
         self,
         codex_cls: Any,
-        config_cls: Any,
-        config_kwargs: Mapping[str, Any],
+        config: Any,
         *,
         key: tuple[Any, ...],
     ) -> tuple[Any, bool]:
@@ -360,7 +367,7 @@ class CodexAgentRuntime:
                 return self._codex_client, True
             if self._codex_client is not None:
                 await self._close_codex_client_locked()
-            context = codex_cls(config=config_cls(**dict(config_kwargs)))
+            context = codex_cls(config=config)
             enter = getattr(context, "__aenter__", None)
             try:
                 client = await enter() if callable(enter) else context
@@ -403,7 +410,7 @@ class CodexAgentRuntime:
         cwd: str | None,
         sandbox_cls: Any,
         approval_mode_cls: Any,
-    ) -> Any:
+    ) -> tuple[Any, list[str]]:
         kwargs = {
             "cwd": cwd,
             "developer_instructions": task.system,
@@ -413,8 +420,10 @@ class CodexAgentRuntime:
         }
         thread_id = task.resume_from.session_id if task.resume_from is not None else task.session_id
         if thread_id:
-            return await codex.thread_resume(thread_id, **kwargs)
-        return await codex.thread_start(**kwargs)
+            supported, dropped = filter_supported_kwargs(codex.thread_resume, kwargs)
+            return await codex.thread_resume(thread_id, **supported), dropped
+        supported, dropped = filter_supported_kwargs(codex.thread_start, kwargs)
+        return await codex.thread_start(**supported), dropped
 
     def _model(self, task: AgentTask) -> str:
         return metadata_str(task.metadata, "model") or self._default_model
@@ -426,12 +435,19 @@ def _translate_run_result(
     *,
     model: str,
     session_id: str | None,
+    dropped_options: list[str] | None = None,
     process_metadata: Mapping[str, Any] | None = None,
 ) -> AgentResult:
     output = str(field_value(raw_result, "final_response", "") or "")
     usage = _codex_usage(field_value(raw_result, "usage"))
     tool_calls = tuple(_tool_audits(field_value(raw_result, "items", ()) or ()))
-    metadata = {"model": model, "sdk": "openai_codex", **dict(process_metadata or {})}
+    metadata: dict[str, Any] = {
+        "model": model,
+        "sdk": "openai_codex",
+        **dict(process_metadata or {}),
+    }
+    if dropped_options:
+        metadata["dropped_options"] = list(dropped_options)
     status = _status_value(field_value(raw_result, "status"))
 
     if status == "failed":

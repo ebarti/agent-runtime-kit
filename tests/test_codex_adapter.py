@@ -475,6 +475,31 @@ async def test_codex_sandbox_mapping(filesystem: FilesystemAccess, expected: str
 
 
 @pytest.mark.asyncio
+async def test_codex_tolerates_config_option_drift() -> None:
+    # A config class that no longer accepts 'config_overrides' must not crash the
+    # run; the dropped option is recorded like the Claude adapter does.
+    @dataclass
+    class NarrowConfig:
+        cwd: str | None = None
+        env: dict[str, str] | None = None
+
+    def codex_factory(*, config: NarrowConfig) -> FakeCodex:
+        return FakeCodex(config)  # type: ignore[arg-type]
+
+    runtime = CodexAgentRuntime(
+        codex_cls=codex_factory,
+        config_cls=NarrowConfig,
+        sandbox_cls=FakeSandbox,
+        approval_mode_cls=FakeApprovalMode,
+    )
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.finish_reason == "done"
+    assert "config_overrides" in result.metadata["dropped_options"]
+
+
+@pytest.mark.asyncio
 async def test_codex_emits_tool_events() -> None:
     run_result = {
         "status": "completed",

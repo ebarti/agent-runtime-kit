@@ -29,6 +29,7 @@ from agent_runtime_kit.adapters._common import (
     close_vendor_resource,
     empty_completion_error,
     ensure_supported_model,
+    filter_supported_kwargs,
     fingerprint_item,
     metadata_str,
     optional_int,
@@ -155,15 +156,20 @@ class AntigravityAgentRuntime:
                 supported_models=self._supported_models,
             )
             sdk = self._load_sdk()
-            auth = self._auth_config()
+            # Resolve auth off the event loop: ADC discovery can call
+            # google.auth.default(), which reads files and may hit the GCE metadata
+            # server synchronously — blocking the loop for other concurrent tasks.
+            auth = await asyncio.to_thread(self._auth_config)
             if not auth.available:
                 raise AgentRuntimeUnavailableError(
                     self.kind,
                     "Antigravity requires GEMINI_API_KEY, GOOGLE_API_KEY, or Google "
                     "Application Default Credentials with a Vertex AI project/location",
                 )
-            config = self._build_config(task, model=model, auth=auth, sdk=sdk)
-            result = await self._invoke(task, config=config, sdk=sdk, model=model)
+            config, dropped = self._build_config(task, model=model, auth=auth, sdk=sdk)
+            result = await self._invoke(
+                task, config=config, sdk=sdk, model=model, dropped_options=dropped
+            )
         except Exception as exc:
             await safe_emit(task, task_failed_event(task, self.kind, error=str(exc)))
             raise
@@ -229,7 +235,7 @@ class AntigravityAgentRuntime:
         model: str,
         auth: _AntigravityAuthConfig,
         sdk: _AntigravitySDK,
-    ) -> Any:
+    ) -> tuple[Any, list[str]]:
         for server in task.mcp_servers:
             if server.env:
                 raise UnsupportedTaskInputError(
@@ -239,21 +245,21 @@ class AntigravityAgentRuntime:
                 )
         capabilities, policies = _capability_policy(self.kind, task, sdk)
         schema = output_schema_from(task.output_schema, task.metadata)
-        return sdk.config_cls(
-            model=model,
-            api_key=auth.api_key,
-            vertex=auth.vertex,
-            project=auth.project,
-            location=auth.location,
-            system_instructions=task.system,
-            capabilities=capabilities,
-            policies=policies,
-            workspaces=_workspaces(task),
-            conversation_id=_conversation_id(task),
-            save_dir=str(self._runtime_dir("antigravity-sessions")),
-            app_data_dir=str(self._runtime_dir("antigravity-app-data")),
-            response_schema=dict(schema) if schema is not None else None,
-            mcp_servers=[
+        config_kwargs: dict[str, Any] = {
+            "model": model,
+            "api_key": auth.api_key,
+            "vertex": auth.vertex,
+            "project": auth.project,
+            "location": auth.location,
+            "system_instructions": task.system,
+            "capabilities": capabilities,
+            "policies": policies,
+            "workspaces": _workspaces(task),
+            "conversation_id": _conversation_id(task),
+            "save_dir": str(self._runtime_dir("antigravity-sessions")),
+            "app_data_dir": str(self._runtime_dir("antigravity-app-data")),
+            "response_schema": dict(schema) if schema is not None else None,
+            "mcp_servers": [
                 sdk.types.McpStdioServer(
                     name=server.name,
                     command=server.command,
@@ -261,7 +267,11 @@ class AntigravityAgentRuntime:
                 )
                 for server in task.mcp_servers
             ],
-        )
+        }
+        # Tolerate vendor option drift like Claude/Codex: drop kwargs the installed
+        # LocalAgentConfig no longer accepts (instead of a TypeError) and record them.
+        supported, dropped = filter_supported_kwargs(sdk.config_cls, config_kwargs)
+        return sdk.config_cls(**supported), dropped
 
     async def _invoke(
         self,
@@ -270,6 +280,7 @@ class AntigravityAgentRuntime:
         config: Any,
         sdk: _AntigravitySDK,
         model: str,
+        dropped_options: list[str] | None = None,
     ) -> AgentResult:
         text_parts: list[str] = []
         tool_calls: list[ToolCallAudit] = []
@@ -332,11 +343,13 @@ class AntigravityAgentRuntime:
         process_metadata = (
             self._process_reuse_metadata(process_reused) if self._reuse_process else None
         )
-        metadata = {
+        metadata: dict[str, Any] = {
             "model": model,
             "sdk": "google_antigravity",
             **dict(process_metadata or {}),
         }
+        if dropped_options:
+            metadata["dropped_options"] = list(dropped_options)
 
         output = "".join(text_parts).strip()
         if structured_output is None and schema is not None:
