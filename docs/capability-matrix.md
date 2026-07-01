@@ -28,13 +28,20 @@ review this table before assuming a mode is equivalent everywhere.
 | `PermissionMode` | Claude `permission_mode` | Codex `approval_mode` + sandbox | Antigravity toolset + policy |
 |------------------|--------------------------|---------------------------------|------------------------------|
 | `STRICT` | `plan` | `deny_all` (never escalate) | read-only toolset, no `allow_all` policy |
-| `CAUTIOUS` | `acceptEdits` | `deny_all` (never escalate) | nondestructive toolset (no `run_command`), `allow_all` policy |
+| `CAUTIOUS` | `default` | `deny_all` (never escalate) | nondestructive toolset (no `run_command`), `allow_all` policy |
 | `DEFAULT` | `default` | `auto_review` (escalations auto-adjudicated) | nondestructive toolset (no `run_command`), `allow_all` policy |
 | `PERMISSIVE` | `bypassPermissions` | `auto_review` (escalations auto-adjudicated) | all tools, `allow_all` policy |
 
+The ladder is monotonic: `CAUTIOUS` is never looser than `DEFAULT` on any
+backend. Claude has no distinct cautious-execution tier, so `CAUTIOUS` and
+`DEFAULT` both map to `default` (no auto-approval); `acceptEdits` is not used, as
+it would auto-approve edits and in-cwd deletes. Claude's effective
+`permission_mode` is echoed in `AgentResult.metadata["permission_mode"]`.
+
 Codex sandbox is derived from `FilesystemAccess`, independent of the approval
 mode: `READ_ONLY` → `read_only`, `WORKSPACE_WRITE` → `workspace_write`,
-`FULL_ACCESS` → `full_access`.
+`FULL_ACCESS` → `full_access`. On Claude, a `READ_ONLY` filesystem forces
+`plan` mode (no writes) regardless of `PermissionMode`.
 
 Antigravity toolset notes: the table above describes the default posture when
 `allowed_tools` is empty. A `READ_ONLY` filesystem forces the read-only toolset

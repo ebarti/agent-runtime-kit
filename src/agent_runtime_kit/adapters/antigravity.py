@@ -514,21 +514,11 @@ class AntigravityAgentRuntime:
             vendor_turn_event(task, self.kind, payload={"chunk_type": type(chunk).__name__}),
         )
 
-    def _api_key_value(self) -> str | None:
-        return self._api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-
-    def _auth_config(self) -> _AntigravityAuthConfig:
-        api_key = self._api_key_value()
-        if api_key:
-            return _AntigravityAuthConfig(api_key=api_key, source="api-key")
-        if self._vertex is False:
-            return _AntigravityAuthConfig(source="none")
-
-        adc_project = _google_adc_project()
+    def _vertex_auth_config(self) -> _AntigravityAuthConfig:
         project = (
             self._project
             or _env_first("GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT")
-            or adc_project
+            or _google_adc_project()
         )
         location = self._location or _env_first(
             "GOOGLE_CLOUD_LOCATION",
@@ -543,6 +533,22 @@ class AntigravityAgentRuntime:
                 source="application-default-credentials",
             )
         return _AntigravityAuthConfig(source="none")
+
+    def _auth_config(self) -> _AntigravityAuthConfig:
+        # An explicit constructor api_key is the most specific request and wins.
+        if self._api_key:
+            return _AntigravityAuthConfig(api_key=self._api_key, source="api-key")
+        # Explicit vertex=True takes precedence over an ambient env API key, so
+        # AntigravityAgentRuntime(vertex=True, project=...) is not silently
+        # redirected to the Gemini API just because GEMINI_API_KEY is exported.
+        if self._vertex is True:
+            return self._vertex_auth_config()
+        ambient_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if ambient_key:
+            return _AntigravityAuthConfig(api_key=ambient_key, source="api-key")
+        if self._vertex is False:
+            return _AntigravityAuthConfig(source="none")
+        return self._vertex_auth_config()
 
     def _model(self, task: AgentTask) -> str:
         return metadata_str(task.metadata, "model") or self._default_model
@@ -618,7 +624,14 @@ def _capability_policy(
             tools = _default_tools(task, builtin)
         else:
             tools = _validate_tools(kind, "allowed_tools", task.permissions.allowed_tools, builtin)
-        enable_subagents = is_permissive and _contains_tool(tools, subagent)
+            if task.permissions.filesystem is FilesystemAccess.READ_ONLY:
+                # READ_ONLY is a hard constraint; an explicit allow-list must not be
+                # a backdoor to write tools (previously it bypassed the read-only
+                # default entirely). Reject rather than silently widen access.
+                _reject_non_read_only_tools(kind, tools, builtin)
+        # Honor an explicitly allow-listed subagent tool regardless of mode; gating
+        # this on PERMISSIVE left an explicit start_subagent request silently inert.
+        enable_subagents = _contains_tool(tools, subagent)
         capabilities = sdk.types.CapabilitiesConfig(
             enabled_tools=tools,
             enable_subagents=enable_subagents,
@@ -679,8 +692,27 @@ def _validate_tools(
                 f"permissions.{field}",
                 f"{value!r} is not an Antigravity built-in tool; valid values: {ordered}",
             )
-        resolved.append(value)
+        # Return real enum members so validated allow/deny lists match the type the
+        # default-tool paths hand CapabilitiesConfig (previously plain strings).
+        resolved.append(builtin(value))
     return resolved
+
+
+def _reject_non_read_only_tools(kind: AgentRuntimeKind, tools: list[Any], builtin: Any) -> None:
+    read_only = getattr(builtin, "read_only", None)
+    if not callable(read_only):
+        return
+    allowed = {getattr(tool, "value", tool) for tool in read_only()}
+    for tool in tools:
+        value = getattr(tool, "value", tool)
+        if value not in allowed:
+            ordered = ", ".join(sorted(str(item) for item in allowed))
+            raise UnsupportedTaskInputError(
+                kind,
+                "permissions.allowed_tools",
+                f"{value!r} is not permitted under a READ_ONLY filesystem; "
+                f"read-only tools are: {ordered}",
+            )
 
 
 def _builtin_tool_values(builtin: Any) -> set[str] | None:

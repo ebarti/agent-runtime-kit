@@ -11,6 +11,7 @@ import pytest
 from agent_runtime_kit import (
     AgentRuntimeKind,
     AgentTask,
+    FilesystemAccess,
     McpServerConfig,
     PermissionMode,
     PermissionProfile,
@@ -394,10 +395,13 @@ async def test_claude_logs_when_close_fails_after_connect_failure(
 @pytest.mark.parametrize(
     ("mode", "expected"),
     [
+        # Monotonic ladder: CAUTIOUS must never be looser than DEFAULT. Claude has no
+        # distinct cautious-execution tier, so CAUTIOUS collapses to "default" (no
+        # auto-approval) rather than the old "acceptEdits" (auto-approved edits).
         (PermissionMode.STRICT, "plan"),
-        (PermissionMode.CAUTIOUS, "acceptEdits"),
-        (PermissionMode.PERMISSIVE, "bypassPermissions"),
+        (PermissionMode.CAUTIOUS, "default"),
         (PermissionMode.DEFAULT, "default"),
+        (PermissionMode.PERMISSIVE, "bypassPermissions"),
     ],
 )
 async def test_claude_builds_permission_mode(mode: PermissionMode, expected: str) -> None:
@@ -409,6 +413,28 @@ async def test_claude_builds_permission_mode(mode: PermissionMode, expected: str
     await runtime.run(AgentTask(goal="x", permissions=PermissionProfile(mode=mode)))
 
     assert RECORDED["options"].permission_mode == expected
+
+
+@pytest.mark.asyncio
+async def test_claude_read_only_filesystem_forces_plan_mode() -> None:
+    # READ_ONLY is a hard constraint: it forces plan mode even when the permission
+    # mode would otherwise allow writes. Previously filesystem was ignored entirely.
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant("ok"), result_message()]),
+        options_cls=FakeClaudeOptions,
+    )
+
+    result = await runtime.run(
+        AgentTask(
+            goal="x",
+            permissions=PermissionProfile(
+                mode=PermissionMode.PERMISSIVE, filesystem=FilesystemAccess.READ_ONLY
+            ),
+        )
+    )
+
+    assert RECORDED["options"].permission_mode == "plan"
+    assert result.metadata["permission_mode"] == "plan"
 
 
 @pytest.mark.asyncio
