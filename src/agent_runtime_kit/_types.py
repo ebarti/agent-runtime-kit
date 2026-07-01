@@ -65,6 +65,22 @@ class PermissionMode(str, Enum):
     PERMISSIVE = "permissive"
 
 
+class FinishReason(str, Enum):
+    """Canonical ``AgentResult.finish_reason`` values across all runtimes.
+
+    ``finish_reason`` is typed ``str`` for forward-compatibility, but the built-in
+    adapters only ever emit these values. Callers can compare against these members
+    (a ``str`` subclass, so ``result.finish_reason == FinishReason.FAILED`` and
+    ``== "failed"`` both hold) instead of matching bare string literals.
+    """
+
+    DONE = "done"
+    FAILED = "failed"
+    MAX_TURNS = "max_turns"
+    MAX_TOKENS = "max_tokens"
+    INTERRUPTED = "interrupted"
+
+
 class FilesystemAccess(str, Enum):
     """Filesystem mutation level requested by a task."""
 
@@ -231,6 +247,11 @@ class AgentTask:
     goal: str
     task_id: str = field(default_factory=lambda: f"task-{uuid4().hex}")
     system: str | None = None
+    # First-class model / reasoning-effort selection. Adapters prefer these over the
+    # legacy metadata["model"] / metadata["reasoning_effort"] aliases, which are kept
+    # working for back-compat.
+    model: str | None = None
+    reasoning_effort: str | None = None
     working_directory: Path | None = None
     mcp_servers: tuple[McpServerConfig, ...] = ()
     permissions: PermissionProfile = field(default_factory=PermissionProfile)
@@ -251,7 +272,7 @@ class AgentResult:
     """Typed result returned by all runtimes."""
 
     output: str
-    finish_reason: str = "done"
+    finish_reason: str = FinishReason.DONE.value
     error: str | None = None
     parsed_output: Any | None = None
     usage: Usage = field(default_factory=Usage)

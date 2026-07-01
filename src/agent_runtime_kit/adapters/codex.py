@@ -350,7 +350,7 @@ class CodexAgentRuntime:
         schema = output_schema_from(task.output_schema, task.metadata)
         if schema is not None:
             run_kwargs["output_schema"] = dict(schema)
-        effort = metadata_str(task.metadata, "reasoning_effort")
+        effort = task.reasoning_effort or metadata_str(task.metadata, "reasoning_effort")
         if effort:
             run_kwargs["effort"] = effort
         run_supported, run_dropped = filter_supported_kwargs(
@@ -435,7 +435,7 @@ class CodexAgentRuntime:
         return await codex.thread_start(**supported), dropped
 
     def _model(self, task: AgentTask) -> str:
-        return metadata_str(task.metadata, "model") or self._default_model
+        return task.model or metadata_str(task.metadata, "model") or self._default_model
 
 
 def _translate_run_result(

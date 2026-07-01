@@ -475,6 +475,31 @@ async def test_codex_sandbox_mapping(filesystem: FilesystemAccess, expected: str
 
 
 @pytest.mark.asyncio
+async def test_codex_prefers_typed_model_and_effort_fields() -> None:
+    runtime = make_runtime()
+
+    await runtime.run(
+        AgentTask(goal="x", model="gpt-5.5-codex", reasoning_effort="high"),
+    )
+
+    assert FakeThread.last_run_kwargs is not None
+    assert FakeThread.last_run_kwargs["model"] == "gpt-5.5-codex"
+    assert FakeThread.last_run_kwargs["effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_codex_typed_model_field_overrides_metadata_alias() -> None:
+    runtime = make_runtime()
+
+    await runtime.run(
+        AgentTask(goal="x", model="from-field", metadata={"model": "from-metadata"}),
+    )
+
+    assert FakeThread.last_run_kwargs is not None
+    assert FakeThread.last_run_kwargs["model"] == "from-field"
+
+
+@pytest.mark.asyncio
 async def test_codex_tolerates_config_option_drift() -> None:
     # A config class that no longer accepts 'config_overrides' must not crash the
     # run; the dropped option is recorded like the Claude adapter does.

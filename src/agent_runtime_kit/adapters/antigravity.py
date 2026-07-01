@@ -583,7 +583,7 @@ class AntigravityAgentRuntime:
         return self._vertex_auth_config()
 
     def _model(self, task: AgentTask) -> str:
-        return metadata_str(task.metadata, "model") or self._default_model
+        return task.model or metadata_str(task.metadata, "model") or self._default_model
 
     def _runtime_dir(self, name: str) -> Path:
         base = self._data_dir or _default_data_dir()
