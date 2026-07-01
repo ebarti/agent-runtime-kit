@@ -4,10 +4,12 @@ import pytest
 
 from agent_runtime_kit import (
     AgentCapabilities,
+    AgentResult,
     AgentRuntime,
     AgentRuntimeKind,
     AgentTask,
     FakeAgentRuntime,
+    FinishReason,
     RuntimeNotRegisteredError,
     UnsupportedTaskInputError,
     create_default_registry,
@@ -53,6 +55,15 @@ def test_registry_accepts_namespaced_third_party_kind() -> None:
     assert "x-myorg-agent" in registry.kinds()
     runtime = registry.resolve("x-myorg-agent")
     assert isinstance(runtime, FakeAgentRuntime)
+
+
+def test_finish_reason_enum_compares_as_string() -> None:
+    result = AgentResult(output="x", finish_reason=FinishReason.FAILED)
+
+    # FinishReason is a str subclass: enum-vs-enum and enum-vs-literal both hold.
+    assert result.finish_reason == FinishReason.FAILED
+    assert result.finish_reason == "failed"
+    assert AgentResult(output="x").finish_reason == FinishReason.DONE
 
 
 def test_coerce_returns_namespaced_string_and_rejects_blank() -> None:
