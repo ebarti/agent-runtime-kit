@@ -493,14 +493,17 @@ class AntigravityAgentRuntime:
             )
             return
         if isinstance(chunk, sdk.types.ToolCall):
+            name = _tool_name(getattr(chunk, "name", "tool"))
+            arguments = _tool_arguments(chunk)
+            # Record the requested call now so result.tool_calls counts every
+            # invocation (matching Claude/Codex), including ones that never emit a
+            # ToolResult chunk. The matching result fills it in below.
+            tool_calls.append(
+                ToolCallAudit(tool_name=name, arguments=arguments, status="requested")
+            )
             await safe_emit(
                 task,
-                tool_requested_event(
-                    task,
-                    self.kind,
-                    tool_name=_tool_name(getattr(chunk, "name", "tool")),
-                    arguments=_tool_arguments(chunk),
-                ),
+                tool_requested_event(task, self.kind, tool_name=name, arguments=arguments),
             )
             return
         if isinstance(chunk, sdk.types.ToolResult):
@@ -510,7 +513,7 @@ class AntigravityAgentRuntime:
                 result_preview=str(getattr(chunk, "result", ""))[:256],
                 status=_tool_result_status(chunk),
             )
-            tool_calls.append(audit)
+            _attach_tool_result(tool_calls, audit)
             await safe_emit(task, tool_completed_event(task, self.kind, audit))
             return
         await safe_emit(
@@ -805,6 +808,21 @@ def _builtin_tool_values(builtin: Any) -> set[str] | None:
         return None
     members: list[Any] = list(builtin)
     return {str(getattr(member, "value", member)) for member in members}
+
+
+def _attach_tool_result(tool_calls: list[ToolCallAudit], result_audit: ToolCallAudit) -> None:
+    """Fill the most recent matching requested call with its result, else append.
+
+    Keeps result.tool_calls one-entry-per-invocation: a ToolCall recorded the
+    pending audit; its ToolResult replaces it here rather than adding a duplicate.
+    """
+
+    for index in range(len(tool_calls) - 1, -1, -1):
+        existing = tool_calls[index]
+        if existing.status == "requested" and existing.tool_name == result_audit.tool_name:
+            tool_calls[index] = result_audit
+            return
+    tool_calls.append(result_audit)
 
 
 def _tool_result_status(chunk: Any) -> str:

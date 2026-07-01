@@ -155,6 +155,7 @@ class ClaudeAgentRuntime:
                 model=model,
                 dropped_options=dropped,
                 tool_results=stream.tool_results,
+                tool_previews=stream.tool_previews,
                 permission_mode=_effective_permission_mode(task.permissions),
                 process_metadata=(
                     self._process_reuse_metadata(process_reused)
@@ -369,6 +370,9 @@ class _StreamState:
         self._tool_names: dict[str, str] = {}
         # tool_use_id -> "ok" | "error", populated from ToolResultBlock messages.
         self.tool_results: dict[str, str] = {}
+        # tool_use_id -> result preview, so result.tool_calls carry the same preview
+        # the streamed tool_completed events do (previously result audits had none).
+        self.tool_previews: dict[str, str] = {}
 
     async def consume(self, message: Any) -> None:
         self.messages.append(message)
@@ -400,11 +404,13 @@ class _StreamState:
                     continue
                 tool_use_id = optional_str(field_value(block, "tool_use_id"))
                 status = "error" if field_value(block, "is_error", False) else "ok"
+                preview = str(field_value(block, "content", ""))[:256]
                 if tool_use_id is not None:
                     self.tool_results[tool_use_id] = status
+                    self.tool_previews[tool_use_id] = preview
                 audit = ToolCallAudit(
                     tool_name=self._tool_names.get(tool_use_id or "", "tool"),
-                    result_preview=str(field_value(block, "content", ""))[:256],
+                    result_preview=preview,
                     status=status,
                 )
                 await safe_emit(task, tool_completed_event(task, kind, audit))
@@ -437,6 +443,7 @@ def _translate_messages(
     model: str,
     dropped_options: list[str],
     tool_results: Mapping[str, str],
+    tool_previews: Mapping[str, str],
     permission_mode: str,
     process_metadata: Mapping[str, Any] | None = None,
 ) -> AgentResult:
@@ -496,7 +503,7 @@ def _translate_messages(
         total_tokens=usage.total_tokens,
         cost_usd=cost_usd,
     )
-    tool_calls = _apply_tool_results(tool_calls, tool_use_ids, tool_results)
+    tool_calls = _apply_tool_results(tool_calls, tool_use_ids, tool_results, tool_previews)
     metadata: dict[str, Any] = {
         "model": model,
         "sdk": "claude_agent_sdk",
@@ -534,19 +541,23 @@ def _apply_tool_results(
     tool_calls: list[ToolCallAudit],
     tool_use_ids: list[str | None],
     tool_results: Mapping[str, str],
+    tool_previews: Mapping[str, str],
 ) -> list[ToolCallAudit]:
-    if not tool_results:
+    if not tool_results and not tool_previews:
         return tool_calls
     updated: list[ToolCallAudit] = []
     for audit, tool_use_id in zip(tool_calls, tool_use_ids, strict=True):
-        status = tool_results.get(tool_use_id or "")
-        if status is not None and status != audit.status:
+        key = tool_use_id or ""
+        status = tool_results.get(key)
+        preview = tool_previews.get(key, audit.result_preview)
+        new_status = status if status is not None else audit.status
+        if new_status != audit.status or preview != audit.result_preview:
             updated.append(
                 ToolCallAudit(
                     tool_name=audit.tool_name,
                     arguments=audit.arguments,
-                    result_preview=audit.result_preview,
-                    status=status,
+                    result_preview=preview,
+                    status=new_status,
                     duration_ms=audit.duration_ms,
                 )
             )

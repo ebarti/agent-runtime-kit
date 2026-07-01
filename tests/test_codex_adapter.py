@@ -475,6 +475,28 @@ async def test_codex_sandbox_mapping(filesystem: FilesystemAccess, expected: str
 
 
 @pytest.mark.asyncio
+async def test_codex_emits_tool_events() -> None:
+    run_result = {
+        "status": "completed",
+        "final_response": "done",
+        "items": [
+            {"type": "commandExecution", "command": "ls", "aggregated_output": "ok"},
+        ],
+    }
+    sink = RecordingEventSink()
+    runtime = make_runtime(run_result)
+
+    result = await runtime.run(AgentTask(goal="x", event_sink=sink))
+
+    names = [event["name"] for event in sink.events]
+    # Codex now emits tool events (parsed from the TurnResult) like the streaming
+    # adapters, not just result.tool_calls.
+    assert "agent.tool.requested" in names
+    assert "agent.tool.completed" in names
+    assert result.tool_calls[0].tool_name == "command"
+
+
+@pytest.mark.asyncio
 async def test_codex_usage_prefers_per_turn_over_cumulative() -> None:
     # A resumed thread reports cumulative 'total'; the per-turn 'last' is what this
     # turn actually cost and must be preferred so usage/cost are not over-counted.
