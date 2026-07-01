@@ -395,6 +395,37 @@ async def test_codex_sandbox_mapping(filesystem: FilesystemAccess, expected: str
 
 
 @pytest.mark.asyncio
+async def test_codex_empty_output_with_tool_calls_succeeds() -> None:
+    # Empty final_response is fine when the turn did real tool work; only a
+    # completion with nothing usable is a failure (matches Claude/Antigravity).
+    run_result = {
+        "status": "completed",
+        "final_response": "",
+        "items": [
+            {"type": "commandExecution", "command": "ls", "aggregated_output": "ok"},
+        ],
+    }
+    runtime = make_runtime(run_result)
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.finish_reason == "done"
+    assert result.output == ""
+    assert result.tool_calls[0].tool_name == "command"
+
+
+@pytest.mark.asyncio
+async def test_codex_empty_completion_without_tool_calls_fails() -> None:
+    runtime = make_runtime({"status": "completed", "final_response": "", "items": []})
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.finish_reason == "failed"
+    assert result.rounds == 1
+    assert result.error is not None
+
+
+@pytest.mark.asyncio
 async def test_codex_failed_status_maps_to_error() -> None:
     run_result = {
         "status": "failed",

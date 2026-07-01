@@ -553,6 +553,36 @@ async def test_claude_max_turns_finish_reason() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_unsatisfied_output_schema_fails() -> None:
+    # Schema requested, no native structured output, text is not JSON -> failure,
+    # matching Codex/Antigravity instead of silently succeeding with None.
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant("not json at all"), result_message()]),
+        options_cls=FakeClaudeOptions,
+    )
+
+    result = await runtime.run(AgentTask(goal="x", output_schema={"type": "object"}))
+
+    assert result.finish_reason == "failed"
+    assert result.parsed_output is None
+    assert "output_schema" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_claude_empty_completion_fails() -> None:
+    # No text, no tool calls, no structured output -> nothing usable -> failure.
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant(""), result_message()]),
+        options_cls=FakeClaudeOptions,
+    )
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.finish_reason == "failed"
+    assert result.error is not None
+
+
+@pytest.mark.asyncio
 async def test_claude_failed_uses_errors_list() -> None:
     runtime = ClaudeAgentRuntime(
         query_func=make_query(

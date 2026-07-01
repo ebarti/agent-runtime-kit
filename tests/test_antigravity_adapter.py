@@ -215,6 +215,84 @@ async def test_antigravity_runtime_runs_with_injected_sdk(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_antigravity_max_tokens_stop_reason_fails(tmp_path: Path) -> None:
+    class TruncatedResponse:
+        def __init__(self, prompt: str) -> None:
+            self.chunks = _chunks(prompt)
+            self.usage_metadata = FakeUsage()
+            self.finish_reason = "MAX_TOKENS"
+
+        async def structured_output(self) -> None:
+            return None
+
+    class TruncatingAgent:
+        def __init__(self, config: FakeConfig) -> None:
+            self.conversation_id = "ag-session"
+
+        async def __aenter__(self) -> TruncatingAgent:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def chat(self, prompt: str) -> TruncatedResponse:
+            return TruncatedResponse(prompt)
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=TruncatingAgent,
+        config_cls=FakeConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    # A token-limit stop is a failure, not a successful completion of partial text.
+    assert result.finish_reason == "max_tokens"
+    assert result.error is not None
+
+
+@pytest.mark.asyncio
+async def test_antigravity_skips_structured_output_without_schema(tmp_path: Path) -> None:
+    class StrictResponse:
+        def __init__(self, prompt: str) -> None:
+            self.chunks = _chunks(prompt)
+            self.usage_metadata = FakeUsage()
+
+        async def structured_output(self) -> None:
+            raise AssertionError("structured_output() must not be called without a schema")
+
+    class StrictAgent:
+        def __init__(self, config: FakeConfig) -> None:
+            self.conversation_id = "ag-session"
+
+        async def __aenter__(self) -> StrictAgent:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def chat(self, prompt: str) -> StrictResponse:
+            return StrictResponse(prompt)
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=StrictAgent,
+        config_cls=FakeConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.finish_reason == "done"
+    assert result.parsed_output is None
+
+
+@pytest.mark.asyncio
 async def test_antigravity_runtime_defaults_to_per_call_process_isolation(
     tmp_path: Path,
 ) -> None:

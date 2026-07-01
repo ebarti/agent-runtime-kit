@@ -22,6 +22,7 @@ from agent_runtime_kit._types import (
 )
 from agent_runtime_kit.adapters._common import (
     close_vendor_resource,
+    empty_completion_error,
     ensure_supported_model,
     field_value,
     filter_supported_kwargs,
@@ -32,6 +33,7 @@ from agent_runtime_kit.adapters._common import (
     package_availability,
     parse_json_output,
     reject_unsupported_inputs,
+    structured_output_unsatisfied_error,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -471,11 +473,17 @@ def _translate_messages(
                 finish_reason, error = _result_failure(message, result_text)
 
     output = "\n".join(part for part in content_parts if part).strip()
-    if (
-        structured_output is None
-        and output_schema_from(task.output_schema, task.metadata) is not None
-    ):
+    schema_requested = output_schema_from(task.output_schema, task.metadata) is not None
+    if structured_output is None and schema_requested:
         structured_output = parse_json_output(output)
+    if error is None and schema_requested and structured_output is None:
+        # Match Codex/Antigravity: a requested schema that cannot be satisfied is a
+        # failure, not a silently-successful task with parsed_output=None.
+        finish_reason = "failed"
+        error = structured_output_unsatisfied_error("Claude Agent SDK")
+    elif error is None and not output and not tool_calls and structured_output is None:
+        finish_reason = "failed"
+        error = empty_completion_error("Claude Agent SDK")
     usage = Usage(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
