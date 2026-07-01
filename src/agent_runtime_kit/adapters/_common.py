@@ -105,6 +105,27 @@ def parse_json_output(output: str) -> Any | None:
         return None
 
 
+def structured_output_unsatisfied_error(sdk_label: str) -> str:
+    """Uniform error text when a requested ``output_schema`` was not satisfied.
+
+    Kept in one place so all three adapters fail identically instead of each
+    inventing its own message (and, previously, its own success/failure verdict).
+    """
+
+    return f"{sdk_label} returned output that did not satisfy the requested output_schema"
+
+
+def empty_completion_error(sdk_label: str) -> str:
+    """Uniform error text when a runtime completed with nothing usable.
+
+    "Nothing usable" means no text output, no tool calls, and no structured
+    output — a completion the caller cannot act on, reported consistently across
+    adapters rather than as success by some and failure by others.
+    """
+
+    return f"{sdk_label} completed with no output, tool calls, or structured output"
+
+
 def reject_unsupported_inputs(
     kind: AgentRuntimeKind,
     task: AgentTask,

@@ -22,6 +22,7 @@ from agent_runtime_kit._types import (
 )
 from agent_runtime_kit.adapters._common import (
     close_vendor_resource,
+    empty_completion_error,
     ensure_supported_model,
     field_value,
     metadata_str,
@@ -30,6 +31,7 @@ from agent_runtime_kit.adapters._common import (
     package_availability,
     parse_json_output,
     reject_unsupported_inputs,
+    structured_output_unsatisfied_error,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -448,21 +450,24 @@ def _translate_run_result(
         return AgentResult(
             output=output,
             finish_reason="failed",
-            error="Codex SDK returned output that did not satisfy output_schema",
+            error=structured_output_unsatisfied_error("Codex SDK"),
             usage=usage,
             tool_calls=tool_calls,
             session_id=session_id,
             rounds=1,
             metadata=metadata,
         )
-    if not output:
+    if not output and not tool_calls and parsed is None:
+        # Empty output alone is not a failure when the turn did real tool work;
+        # only a completion with nothing usable is (matches Claude/Antigravity).
         return AgentResult(
             output="",
             finish_reason="failed",
-            error="Codex SDK completed without final_response",
+            error=empty_completion_error("Codex SDK"),
             usage=usage,
             tool_calls=tool_calls,
             session_id=session_id,
+            rounds=1,
             metadata=metadata,
         )
     return AgentResult(

@@ -27,6 +27,7 @@ from agent_runtime_kit._types import (
 )
 from agent_runtime_kit.adapters._common import (
     close_vendor_resource,
+    empty_completion_error,
     ensure_supported_model,
     fingerprint_item,
     metadata_str,
@@ -36,6 +37,7 @@ from agent_runtime_kit.adapters._common import (
     package_availability,
     parse_json_output,
     reject_unsupported_inputs,
+    structured_output_unsatisfied_error,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -274,7 +276,9 @@ class AntigravityAgentRuntime:
         usage_metadata: Any | None = None
         structured_output: Any | None = None
         session_id: str | None = None
+        stop_reason: str | None = None
         process_reused = False
+        schema = output_schema_from(task.output_schema, task.metadata)
 
         if self._reuse_process:
             async with self._agent_run_lock:
@@ -284,12 +288,15 @@ class AntigravityAgentRuntime:
                         sdk=sdk,
                         config=config,
                     )
-                    structured_output, usage_metadata, session_id = await self._chat_agent(
-                        task,
-                        agent=agent,
-                        sdk=sdk,
-                        text_parts=text_parts,
-                        tool_calls=tool_calls,
+                    structured_output, usage_metadata, session_id, stop_reason = (
+                        await self._chat_agent(
+                            task,
+                            agent=agent,
+                            sdk=sdk,
+                            text_parts=text_parts,
+                            tool_calls=tool_calls,
+                            wants_structured=schema is not None,
+                        )
                     )
                 except BaseException:
                     # Evict the reused agent on any non-normal exit — including
@@ -307,35 +314,66 @@ class AntigravityAgentRuntime:
                     raise
         else:
             async with sdk.agent_cls(config) as agent:
-                structured_output, usage_metadata, session_id = await self._chat_agent(
-                    task,
-                    agent=agent,
-                    sdk=sdk,
-                    text_parts=text_parts,
-                    tool_calls=tool_calls,
+                structured_output, usage_metadata, session_id, stop_reason = (
+                    await self._chat_agent(
+                        task,
+                        agent=agent,
+                        sdk=sdk,
+                        text_parts=text_parts,
+                        tool_calls=tool_calls,
+                        wants_structured=schema is not None,
+                    )
                 )
 
         process_metadata = (
             self._process_reuse_metadata(process_reused) if self._reuse_process else None
         )
+        metadata = {
+            "model": model,
+            "sdk": "google_antigravity",
+            **dict(process_metadata or {}),
+        }
 
         output = "".join(text_parts).strip()
-        schema = output_schema_from(task.output_schema, task.metadata)
         if structured_output is None and schema is not None:
             structured_output = parse_json_output(output)
+
+        # A non-natural stop (token limit, safety block) is a failure, not a
+        # successful completion of whatever partial text arrived first.
+        terminal_reason, terminal_error = _map_stop_reason(stop_reason)
+        if terminal_reason is not None:
+            return AgentResult(
+                output=output,
+                finish_reason=terminal_reason,
+                error=terminal_error,
+                parsed_output=structured_output,
+                usage=_usage_from(usage_metadata),
+                tool_calls=tuple(tool_calls),
+                session_id=session_id,
+                rounds=1,
+                metadata=metadata,
+            )
         if schema is not None and structured_output is None:
             return AgentResult(
                 output=output,
                 finish_reason="failed",
-                error="Antigravity SDK returned no structured output for output_schema",
+                error=structured_output_unsatisfied_error("Antigravity SDK"),
                 usage=_usage_from(usage_metadata),
                 tool_calls=tuple(tool_calls),
                 session_id=session_id,
-                metadata={
-                    "model": model,
-                    "sdk": "google_antigravity",
-                    **dict(process_metadata or {}),
-                },
+                rounds=1,
+                metadata=metadata,
+            )
+        if not output and not tool_calls and structured_output is None:
+            return AgentResult(
+                output="",
+                finish_reason="failed",
+                error=empty_completion_error("Antigravity SDK"),
+                usage=_usage_from(usage_metadata),
+                tool_calls=tuple(tool_calls),
+                session_id=session_id,
+                rounds=1,
+                metadata=metadata,
             )
         return AgentResult(
             output=output,
@@ -344,11 +382,7 @@ class AntigravityAgentRuntime:
             tool_calls=tuple(tool_calls),
             session_id=session_id,
             rounds=1,
-            metadata={
-                "model": model,
-                "sdk": "google_antigravity",
-                **dict(process_metadata or {}),
-            },
+            metadata=metadata,
         )
 
     async def _chat_agent(
@@ -359,7 +393,8 @@ class AntigravityAgentRuntime:
         sdk: _AntigravitySDK,
         text_parts: list[str],
         tool_calls: list[ToolCallAudit],
-    ) -> tuple[Any | None, Any | None, str | None]:
+        wants_structured: bool,
+    ) -> tuple[Any | None, Any | None, str | None, str | None]:
         response = await agent.chat(task.goal)
         async for chunk in response.chunks:
             await self._consume_chunk(
@@ -369,10 +404,15 @@ class AntigravityAgentRuntime:
                 text_parts=text_parts,
                 tool_calls=tool_calls,
             )
-        structured_output = await _maybe_await(response.structured_output())
+        # Only pull native structured output when the caller asked for it; calling
+        # structured_output() unconditionally either fabricates parsed_output or,
+        # if the SDK errors when unconfigured, breaks every plain-text task.
+        structured_output = (
+            await _maybe_await(response.structured_output()) if wants_structured else None
+        )
         usage_metadata = getattr(response, "usage_metadata", None)
         session_id = optional_str(getattr(agent, "conversation_id", None))
-        return structured_output, usage_metadata, session_id
+        return structured_output, usage_metadata, session_id, _response_stop_reason(response)
 
     async def _persistent_agent(
         self,
@@ -714,3 +754,47 @@ async def _maybe_await(value: Any) -> Any:
     if hasattr(value, "__await__"):
         return await value
     return value
+
+
+# Stop/finish reasons the SDK may report that still mean "completed normally".
+_ANTIGRAVITY_SUCCESS_STOPS = frozenset(
+    {"", "STOP", "FINISH_REASON_UNSPECIFIED", "END_TURN", "MODEL_FINISH"}
+)
+
+
+def _response_stop_reason(response: Any) -> str | None:
+    """Best-effort read of a Gemini-style finish reason from the response.
+
+    ASSUMES VENDOR BEHAVIOR: the exact attribute name is not verifiable without
+    the installed SDK, so this probes the common shapes (``finish_reason`` /
+    ``stop_reason`` on the response, then on the first candidate) and normalizes
+    enums (which expose ``.name``) to an upper-case string. Returns ``None`` when
+    no reason is exposed, which is treated as a normal completion.
+    """
+
+    raw = getattr(response, "finish_reason", None) or getattr(response, "stop_reason", None)
+    if raw is None:
+        candidates = getattr(response, "candidates", None)
+        if isinstance(candidates, list | tuple):
+            for candidate in candidates:
+                raw = getattr(candidate, "finish_reason", None)
+                if raw is not None:
+                    break
+    if raw is None:
+        return None
+    return str(getattr(raw, "name", raw) or "").upper()
+
+
+def _map_stop_reason(stop_reason: str | None) -> tuple[str | None, str | None]:
+    """Map a normalized stop reason to (finish_reason, error), or (None, None).
+
+    (None, None) means "no override" — let the normal success/schema/empty logic
+    decide. A token-limit truncation or a safety/recitation block is a failure,
+    not a successful completion of whatever partial text arrived first.
+    """
+
+    if not stop_reason or stop_reason in _ANTIGRAVITY_SUCCESS_STOPS:
+        return None, None
+    if stop_reason == "MAX_TOKENS":
+        return "max_tokens", "Antigravity response truncated at the output token limit"
+    return "failed", f"Antigravity stopped early: {stop_reason}"
