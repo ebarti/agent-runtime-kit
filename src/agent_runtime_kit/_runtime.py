@@ -111,6 +111,15 @@ class FakeAgentRuntime:
 
         self.cancelled_task_ids.add(task_id)
 
+    async def aclose(self) -> None:
+        """No-op: the fake runtime owns no vendor process."""
+
+    async def __aenter__(self) -> FakeAgentRuntime:
+        return self
+
+    async def __aexit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        await self.aclose()
+
 
 def _ensure_supported(
     kind: AgentRuntimeKind,

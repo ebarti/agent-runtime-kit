@@ -12,6 +12,7 @@ from agent_runtime_kit._types import (
     AgentRuntime,
     AgentRuntimeKind,
     RuntimeAvailability,
+    runtime_kind_value,
 )
 
 RuntimeFactory = Callable[..., AgentRuntime]
@@ -21,7 +22,7 @@ class RuntimeRegistry:
     """Register and resolve runtime factories by kind."""
 
     def __init__(self) -> None:
-        self._factories: dict[AgentRuntimeKind, RuntimeFactory] = {}
+        self._factories: dict[AgentRuntimeKind | str, RuntimeFactory] = {}
 
     def register(
         self,
@@ -34,7 +35,9 @@ class RuntimeRegistry:
 
         normalized = AgentRuntimeKind.coerce(kind)
         if normalized in self._factories and not replace:
-            raise ValueError(f"Runtime already registered for {normalized.value!r}")
+            raise ValueError(
+                f"Runtime already registered for {runtime_kind_value(normalized)!r}"
+            )
         self._factories[normalized] = factory
 
     def unregister(self, kind: AgentRuntimeKind | str) -> None:
@@ -43,7 +46,7 @@ class RuntimeRegistry:
         normalized = AgentRuntimeKind.coerce(kind)
         self._factories.pop(normalized, None)
 
-    def kinds(self) -> tuple[AgentRuntimeKind, ...]:
+    def kinds(self) -> tuple[AgentRuntimeKind | str, ...]:
         """Return registered runtime kinds."""
 
         return tuple(self._factories)

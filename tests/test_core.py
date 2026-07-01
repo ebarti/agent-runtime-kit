@@ -4,12 +4,14 @@ import pytest
 
 from agent_runtime_kit import (
     AgentCapabilities,
+    AgentRuntime,
     AgentRuntimeKind,
     AgentTask,
     FakeAgentRuntime,
     RuntimeNotRegisteredError,
     UnsupportedTaskInputError,
     create_default_registry,
+    runtime_kind_value,
 )
 
 
@@ -40,6 +42,37 @@ def test_registry_rejects_missing_runtime() -> None:
 
     with pytest.raises(RuntimeNotRegisteredError):
         registry.resolve(AgentRuntimeKind.FAKE)
+
+
+def test_registry_accepts_namespaced_third_party_kind() -> None:
+    # A third party can register a runtime under a namespaced string kind without
+    # forking the built-in enum.
+    registry = create_default_registry()
+    registry.register("x-myorg-agent", lambda **_: FakeAgentRuntime(output="third-party"))
+
+    assert "x-myorg-agent" in registry.kinds()
+    runtime = registry.resolve("x-myorg-agent")
+    assert isinstance(runtime, FakeAgentRuntime)
+
+
+def test_coerce_returns_namespaced_string_and_rejects_blank() -> None:
+    assert AgentRuntimeKind.coerce("claude-agent-sdk") is AgentRuntimeKind.CLAUDE_AGENT_SDK
+    assert AgentRuntimeKind.coerce("x-myorg-agent") == "x-myorg-agent"
+    assert runtime_kind_value(AgentRuntimeKind.FAKE) == "fake"
+    assert runtime_kind_value("x-myorg-agent") == "x-myorg-agent"
+    with pytest.raises(ValueError):
+        AgentRuntimeKind.coerce("   ")
+
+
+@pytest.mark.asyncio
+async def test_fake_runtime_satisfies_protocol_with_lifecycle() -> None:
+    runtime = FakeAgentRuntime(output="done")
+
+    assert isinstance(runtime, AgentRuntime)
+    async with runtime as entered:
+        result = await entered.run(AgentTask(goal="x"))
+    assert result.output == "done"
+    await runtime.aclose()
 
 
 @pytest.mark.asyncio

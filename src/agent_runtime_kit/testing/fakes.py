@@ -151,6 +151,15 @@ class FakeSDKRuntime:
 
         del task_id
 
+    async def aclose(self) -> None:
+        """No-op: the fake runtime owns no vendor process."""
+
+    async def __aenter__(self) -> FakeSDKRuntime:
+        return self
+
+    async def __aexit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        await self.aclose()
+
 
 class RecordingEventSink:
     """In-memory event sink for tests."""
