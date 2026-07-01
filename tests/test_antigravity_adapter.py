@@ -499,6 +499,70 @@ async def test_antigravity_disallowed_tools_map_to_disabled(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_antigravity_allowed_subagent_enables_subagents_outside_permissive(
+    tmp_path: Path,
+) -> None:
+    runtime = make_runtime(data_dir=tmp_path)
+
+    await runtime.run(
+        AgentTask(
+            goal="task",
+            permissions=PermissionProfile(
+                mode=PermissionMode.DEFAULT,
+                allowed_tools=("start_subagent", "view_file"),
+            ),
+        )
+    )
+
+    config = FakeAgent.last_config
+    assert config is not None
+    # An explicitly allow-listed start_subagent is honored even outside PERMISSIVE.
+    assert config.kwargs["capabilities"].enable_subagents is True
+
+
+@pytest.mark.asyncio
+async def test_antigravity_read_only_rejects_write_allowed_tool(tmp_path: Path) -> None:
+    runtime = make_runtime(data_dir=tmp_path)
+
+    with pytest.raises(UnsupportedTaskInputError):
+        await runtime.run(
+            AgentTask(
+                goal="task",
+                permissions=PermissionProfile(
+                    filesystem=FilesystemAccess.READ_ONLY,
+                    allowed_tools=("run_command",),
+                ),
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_antigravity_explicit_vertex_beats_ambient_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "ambient-should-not-win")
+    runtime = AntigravityAgentRuntime(
+        vertex=True,
+        project="proj",
+        location="us-central1",
+        data_dir=tmp_path,
+        agent_cls=FakeAgent,
+        config_cls=FakeConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    await runtime.run(AgentTask(goal="task"))
+
+    config = FakeAgent.last_config
+    assert config is not None
+    # Explicit vertex config must win over an ambient env API key.
+    assert config.kwargs["vertex"] is True
+    assert config.kwargs["project"] == "proj"
+    assert config.kwargs["api_key"] is None
+
+
+@pytest.mark.asyncio
 async def test_antigravity_rejects_allow_and_deny_list_together(tmp_path: Path) -> None:
     runtime = make_runtime(data_dir=tmp_path)
 
