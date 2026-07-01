@@ -7,7 +7,13 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from agent_runtime_kit._types import AgentResult, AgentRuntimeKind, AgentTask, ToolCallAudit
+from agent_runtime_kit._types import (
+    AgentResult,
+    AgentRuntimeKind,
+    AgentTask,
+    ToolCallAudit,
+    runtime_kind_value,
+)
 
 DEFAULT_PREVIEW_CHARS = 1000
 SENSITIVE_KEY_SUBSTRINGS = (
@@ -40,7 +46,7 @@ def task_started_event(
 
     attrs = {
         "task_id": task.task_id,
-        "runtime_kind": AgentRuntimeKind.coerce(kind).value,
+        "runtime_kind": runtime_kind_value(kind),
         "session_id": task.session_id,
         "task_goal": task.goal,
         "system_prompt": task.system,
@@ -66,7 +72,7 @@ def task_completed_event(
 
     attrs = {
         "task_id": task.task_id,
-        "runtime_kind": AgentRuntimeKind.coerce(kind).value,
+        "runtime_kind": runtime_kind_value(kind),
         "finish_reason": result.finish_reason,
         "output": result.output,
         "rounds": result.rounds,
@@ -97,7 +103,7 @@ def task_failed_event(
 
     attrs = {
         "task_id": task.task_id,
-        "runtime_kind": AgentRuntimeKind.coerce(kind).value,
+        "runtime_kind": runtime_kind_value(kind),
         "finish_reason": finish_reason,
         "error": error,
     }
@@ -119,7 +125,7 @@ def output_delta_event(
     preview, truncated = _preview(text)
     attrs = {
         "task_id": task.task_id,
-        "runtime_kind": AgentRuntimeKind.coerce(kind).value,
+        "runtime_kind": runtime_kind_value(kind),
         "text_delta": preview,
         "text_delta_length": len(text),
         "text_delta_truncated": truncated,
@@ -142,7 +148,7 @@ def tool_requested_event(
 
     attrs = {
         "task_id": task.task_id,
-        "runtime_kind": AgentRuntimeKind.coerce(kind).value,
+        "runtime_kind": runtime_kind_value(kind),
         "tool_name": tool_name,
         "argument_count": len(arguments or {}),
         "argument_keys": sorted(str(key) for key in (arguments or {})),
@@ -164,7 +170,7 @@ def tool_completed_event(
 
     attrs = {
         "task_id": task.task_id,
-        "runtime_kind": AgentRuntimeKind.coerce(kind).value,
+        "runtime_kind": runtime_kind_value(kind),
         "tool_name": audit.tool_name,
         "status": audit.status,
         "duration_ms": audit.duration_ms,
@@ -192,7 +198,7 @@ def vendor_turn_event(
 
     attrs = {
         "task_id": task.task_id,
-        "runtime_kind": AgentRuntimeKind.coerce(kind).value,
+        "runtime_kind": runtime_kind_value(kind),
         "turn_index": turn_index,
         "payload": dict(payload or {}),
     }

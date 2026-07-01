@@ -24,6 +24,7 @@ from agent_runtime_kit._types import (
     SessionResumeState,
     ToolCallAudit,
     Usage,
+    runtime_kind_value,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -61,6 +62,7 @@ __all__ = [
     "UnsupportedTaskInputError",
     "Usage",
     "create_default_registry",
+    "runtime_kind_value",
     "output_delta_event",
     "safe_emit",
     "task_completed_event",

@@ -19,12 +19,30 @@ class AgentRuntimeKind(str, Enum):
     ANTIGRAVITY_AGENT_SDK = "antigravity-agent-sdk"
 
     @classmethod
-    def coerce(cls, value: AgentRuntimeKind | str) -> AgentRuntimeKind:
-        """Normalize a string or enum value into an ``AgentRuntimeKind``."""
+    def coerce(cls, value: AgentRuntimeKind | str) -> AgentRuntimeKind | str:
+        """Normalize a runtime kind, allowing namespaced third-party strings.
+
+        A value matching a built-in member returns that member. Any other
+        non-empty string is returned as-is so a third party can register and
+        dispatch a runtime kind (e.g. ``"x-myorg-agent"``) without forking the
+        enum. Empty/blank values still raise ``ValueError``.
+        """
 
         if isinstance(value, cls):
             return value
-        return cls(value)
+        try:
+            return cls(value)
+        except ValueError:
+            normalized = str(value).strip()
+            if not normalized:
+                raise ValueError("runtime kind must be a non-empty string") from None
+            return normalized
+
+
+def runtime_kind_value(value: AgentRuntimeKind | str) -> str:
+    """Return the wire/string form of a runtime kind (enum member or raw string)."""
+
+    return value.value if isinstance(value, AgentRuntimeKind) else str(value)
 
 
 class AvailabilityReason(str, Enum):
@@ -81,7 +99,7 @@ class AgentCapabilities:
 class RuntimeAvailability:
     """Availability diagnostic for a runtime in the current environment."""
 
-    kind: AgentRuntimeKind
+    kind: AgentRuntimeKind | str
     available: bool
     reason: AvailabilityReason = AvailabilityReason.UNKNOWN
     message: str = ""
@@ -254,7 +272,11 @@ class AgentResult:
 class AgentRuntime(Protocol):
     """Async runtime that drives an ``AgentTask`` to completion."""
 
-    kind: AgentRuntimeKind
+    # Read-only (covariant) so a concrete adapter may narrow it to a specific
+    # ``AgentRuntimeKind`` member while third-party adapters use a namespaced str.
+    @property
+    def kind(self) -> AgentRuntimeKind | str: ...
+
     capabilities: AgentCapabilities
 
     def availability(self) -> RuntimeAvailability:
@@ -265,3 +287,19 @@ class AgentRuntime(Protocol):
 
     async def cancel(self, task_id: str) -> None:
         """Request cancellation for a task if supported."""
+
+    async def aclose(self) -> None:
+        """Release any resources (e.g. a reused vendor process) owned by the runtime.
+
+        Stateless runtimes may implement this as a no-op, but every runtime must
+        expose it so callers can manage lifecycle uniformly without ``getattr``.
+        """
+
+    async def __aenter__(self) -> AgentRuntime:
+        """Enter an async context managing this runtime's lifecycle."""
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object, /) -> None:
+        """Exit the async context, releasing resources via :meth:`aclose`.
+
+        Parameters are positional-only so implementations may name them freely.
+        """
