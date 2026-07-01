@@ -82,6 +82,60 @@ def test_events_redact_sensitive_metadata_and_truncate_text() -> None:
     assert attrs["task_goal"].endswith("...[truncated]")
 
 
+def test_events_redact_camelcase_secret_keys() -> None:
+    event = task_started_event(
+        AgentTask(
+            goal="x",
+            metadata={
+                "accessToken": "a",
+                "refreshToken": "b",
+                "authToken": "c",
+                "apiKey": "d",
+                # camelCase "token" plural is a count, not a secret -> keep it.
+                "inputTokens": 7,
+                # deliberately-emitted non-secret label must survive.
+                "auth_source": "anthropic-api-key",
+                "session_id": "sess-1",
+            },
+        ),
+        "fake",
+    )
+
+    metadata = event["attributes"]["metadata"]
+    assert metadata["accessToken"] == "[redacted]"
+    assert metadata["refreshToken"] == "[redacted]"
+    assert metadata["authToken"] == "[redacted]"
+    assert metadata["apiKey"] == "[redacted]"
+    assert metadata["inputTokens"] == 7
+    assert metadata["auth_source"] == "anthropic-api-key"
+    assert metadata["session_id"] == "sess-1"
+
+
+def test_event_construction_survives_cyclic_metadata() -> None:
+    cyclic: dict[str, object] = {"self": None}
+    cyclic["self"] = cyclic
+
+    # A cycle in user metadata must not raise (RecursionError) out of the builder,
+    # which runs before safe_emit's guard and would otherwise abort run().
+    event = task_started_event(AgentTask(goal="x", metadata={"loop": cyclic}), "fake")
+
+    assert event["attributes"]["metadata"]["loop"]["self"] == "[truncated: cycle]"
+
+
+def test_event_construction_bounds_deep_metadata() -> None:
+    node: dict[str, object] = {}
+    root = node
+    for _ in range(50):
+        child: dict[str, object] = {}
+        node["child"] = child
+        node = child
+
+    event = task_started_event(AgentTask(goal="x", metadata={"deep": root}), "fake")
+
+    # Somewhere within the depth bound the recursion is cut off cleanly.
+    assert "truncated: max depth" in repr(event["attributes"]["metadata"])
+
+
 @pytest.mark.asyncio
 async def test_fake_sdk_harness_simulates_success_with_tools() -> None:
     sink = RecordingEventSink()

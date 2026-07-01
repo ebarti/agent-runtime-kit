@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -9,8 +10,23 @@ from typing import Any
 from agent_runtime_kit._types import AgentResult, AgentRuntimeKind, AgentTask, ToolCallAudit
 
 DEFAULT_PREVIEW_CHARS = 1000
-SENSITIVE_KEY_SUBSTRINGS = ("api_key", "apikey", "authorization", "password", "secret")
+SENSITIVE_KEY_SUBSTRINGS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "password",
+    "passwd",
+    "secret",
+    "credential",
+    "private_key",
+)
 SENSITIVE_KEY_SEGMENTS = ("token",)
+# Bound recursion so pathological metadata (cycles, extreme nesting) can never turn
+# event construction into a RecursionError that aborts run().
+_MAX_SANITIZE_DEPTH = 8
+# Split camelCase so "accessToken"/"refreshToken" normalize to the same segments as
+# "access_token", i.e. reach the "token" segment rule below.
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 def task_started_event(
@@ -205,18 +221,32 @@ def _event(name: str, summary: str, attributes: Mapping[str, Any]) -> dict[str, 
     }
 
 
-def _sanitize(value: Any, *, key: str | None = None) -> Any:
+def _sanitize(
+    value: Any,
+    *,
+    key: str | None = None,
+    _depth: int = 0,
+    _seen: frozenset[int] = frozenset(),
+) -> Any:
     if key is not None and _is_sensitive_key(key):
         return "[redacted]"
-    if isinstance(value, Mapping):
-        return {
-            str(item_key): _sanitize(item_value, key=str(item_key))
-            for item_key, item_value in value.items()
-        }
-    if isinstance(value, tuple):
-        return tuple(_sanitize(item) for item in value)
-    if isinstance(value, list):
-        return [_sanitize(item) for item in value]
+    if _depth >= _MAX_SANITIZE_DEPTH:
+        return "[truncated: max depth]"
+    if isinstance(value, Mapping | list | tuple):
+        marker = id(value)
+        if marker in _seen:
+            return "[truncated: cycle]"
+        seen = _seen | {marker}
+        if isinstance(value, Mapping):
+            return {
+                str(item_key): _sanitize(
+                    item_value, key=str(item_key), _depth=_depth + 1, _seen=seen
+                )
+                for item_key, item_value in value.items()
+            }
+        if isinstance(value, tuple):
+            return tuple(_sanitize(item, _depth=_depth + 1, _seen=seen) for item in value)
+        return [_sanitize(item, _depth=_depth + 1, _seen=seen) for item in value]
     if isinstance(value, str):
         preview, truncated = _preview(value)
         return f"{preview}...[truncated]" if truncated else preview
@@ -230,8 +260,10 @@ def _preview(text: str) -> tuple[str, bool]:
 
 
 def _is_sensitive_key(key: str) -> bool:
-    lowered = key.lower().replace("-", "_")
-    if any(part in lowered for part in SENSITIVE_KEY_SUBSTRINGS):
+    # Normalize camelCase and dashes to underscores so "accessToken", "access-token",
+    # and "access_token" are treated identically.
+    normalized = _CAMEL_BOUNDARY.sub("_", key).lower().replace("-", "_")
+    if any(part in normalized for part in SENSITIVE_KEY_SUBSTRINGS):
         return True
-    segments = lowered.split("_")
+    segments = normalized.split("_")
     return any(segment in segments for segment in SENSITIVE_KEY_SEGMENTS)
