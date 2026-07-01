@@ -15,7 +15,9 @@ from agent_runtime_kit._types import (
     AgentResult,
     AgentRuntimeKind,
     AgentTask,
+    FilesystemAccess,
     PermissionMode,
+    PermissionProfile,
     RuntimeAvailability,
     ToolCallAudit,
     Usage,
@@ -153,6 +155,7 @@ class ClaudeAgentRuntime:
                 model=model,
                 dropped_options=dropped,
                 tool_results=stream.tool_results,
+                permission_mode=_effective_permission_mode(task.permissions),
                 process_metadata=(
                     self._process_reuse_metadata(process_reused)
                     if self._reuse_process
@@ -318,7 +321,7 @@ class ClaudeAgentRuntime:
             "model": model,
             "allowed_tools": list(task.permissions.allowed_tools),
             "disallowed_tools": list(task.permissions.disallowed_tools),
-            "permission_mode": _permission_mode(task.permissions.mode),
+            "permission_mode": _effective_permission_mode(task.permissions),
         }
         if task.system:
             kwargs["system_prompt"] = task.system
@@ -434,6 +437,7 @@ def _translate_messages(
     model: str,
     dropped_options: list[str],
     tool_results: Mapping[str, str],
+    permission_mode: str,
     process_metadata: Mapping[str, Any] | None = None,
 ) -> AgentResult:
     content_parts: list[str] = []
@@ -496,6 +500,7 @@ def _translate_messages(
     metadata: dict[str, Any] = {
         "model": model,
         "sdk": "claude_agent_sdk",
+        "permission_mode": permission_mode,
         **dict(process_metadata or {}),
     }
     if dropped_options:
@@ -551,13 +556,31 @@ def _apply_tool_results(
 
 
 def _permission_mode(mode: PermissionMode) -> str:
+    # Claude's modes ordered by permissiveness: plan < default < bypassPermissions.
+    # The portable ladder must stay monotonic: CAUTIOUS must never be looser than
+    # DEFAULT. CAUTIOUS previously mapped to "acceptEdits" (auto-approves edits and
+    # in-cwd deletes), which was strictly looser than DEFAULT's "default" — a
+    # security footgun. Claude has no distinct cautious-execution tier, so CAUTIOUS
+    # and DEFAULT both map to "default" (no auto-approval).
     if mode is PermissionMode.STRICT:
         return "plan"
-    if mode is PermissionMode.CAUTIOUS:
-        return "acceptEdits"
     if mode is PermissionMode.PERMISSIVE:
         return "bypassPermissions"
     return "default"
+
+
+def _effective_permission_mode(permissions: PermissionProfile) -> str:
+    """Vendor permission_mode after applying the filesystem constraint.
+
+    READ_ONLY is a hard constraint, so it forces "plan" (Claude's read/analyze,
+    no-write posture) regardless of mode. Otherwise the mode mapping applies.
+    Previously ``permissions.filesystem`` was ignored entirely, so a READ_ONLY
+    task ran read-write on Claude while Codex/Antigravity honored it.
+    """
+
+    if permissions.filesystem is FilesystemAccess.READ_ONLY:
+        return "plan"
+    return _permission_mode(permissions.mode)
 
 
 def _client_session_id(task: AgentTask) -> str:
