@@ -176,7 +176,17 @@ class CodexAgentRuntime:
         del task_id
 
     async def aclose(self) -> None:
-        """Close any reusable Codex app-server process owned by this runtime."""
+        """Close any reusable Codex app-server process owned by this runtime.
+
+        Acquires the run lock first so an external ``aclose()`` waits for an
+        in-flight ``run()`` instead of closing the process mid-turn.
+        """
+
+        async with self._codex_run_lock:
+            await self._close_codex_client()
+
+    async def _close_codex_client(self) -> None:
+        """Close the app-server holding only the client lock (run lock assumed free)."""
 
         async with self._codex_client_lock:
             await self._close_codex_client_locked()
@@ -261,9 +271,19 @@ class CodexAgentRuntime:
                         sandbox_cls=sandbox_cls,
                         approval_mode_cls=approval_mode_cls,
                     )
-        except Exception:
+        except BaseException:
+            # Evict the reused app-server on any non-normal exit — including
+            # cancellation (CancelledError is a BaseException) — so the next
+            # run() never reuses a poisoned process. The reuse branch holds the
+            # run lock, so close under the client lock only and never let
+            # cleanup mask the original error.
             if self._reuse_process:
-                await self.aclose()
+                try:
+                    await self._close_codex_client()
+                except Exception as close_exc:
+                    logger.warning(
+                        "failed to close Codex app-server after run failure: %s", close_exc
+                    )
             raise
         return _translate_run_result(
             task,

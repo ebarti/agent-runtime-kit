@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import enum
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -295,6 +296,29 @@ async def test_antigravity_runtime_evicts_reused_process_after_sdk_exception(
     await runtime.aclose()
 
     assert FakeAgent.instances[1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_antigravity_runtime_evicts_reused_process_after_cancellation(
+    tmp_path: Path,
+) -> None:
+    # CancelledError is a BaseException; the reuse cleanup must still evict the
+    # interrupted agent so the next run() does not inherit a poisoned process.
+    FakeAgent.chat_errors = [asyncio.CancelledError(), None]
+    runtime = make_runtime(data_dir=tmp_path, reuse_process=True)
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.run(AgentTask(goal="cancelled", session_id="ag-conversation"))
+
+    assert FakeAgent.instances[0].closed is True
+
+    recovered = await runtime.run(AgentTask(goal="recover", session_id="ag-conversation"))
+
+    assert recovered.output == "done: recover"
+    assert recovered.metadata["sdk_process_reused"] is False
+    assert len(FakeAgent.instances) == 2
+
+    await runtime.aclose()
 
 
 @pytest.mark.asyncio

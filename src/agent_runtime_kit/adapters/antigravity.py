@@ -183,7 +183,17 @@ class AntigravityAgentRuntime:
         del task_id
 
     async def aclose(self) -> None:
-        """Close any reusable Antigravity agent process owned by this runtime."""
+        """Close any reusable Antigravity agent process owned by this runtime.
+
+        Acquires the run lock first so an external ``aclose()`` waits for an
+        in-flight ``run()`` instead of closing the agent mid-turn.
+        """
+
+        async with self._agent_run_lock:
+            await self._close_agent()
+
+    async def _close_agent(self) -> None:
+        """Close the agent holding only the agent lock (run lock assumed free)."""
 
         async with self._agent_lock:
             await self._close_agent_locked()
@@ -281,8 +291,19 @@ class AntigravityAgentRuntime:
                         text_parts=text_parts,
                         tool_calls=tool_calls,
                     )
-                except Exception:
-                    await self.aclose()
+                except BaseException:
+                    # Evict the reused agent on any non-normal exit — including
+                    # cancellation (CancelledError is a BaseException) — so the
+                    # next run() never reuses a poisoned process. The run lock is
+                    # already held, so close under the agent lock only and never
+                    # let cleanup mask the original error.
+                    try:
+                        await self._close_agent()
+                    except Exception as close_exc:
+                        logger.warning(
+                            "failed to close Antigravity agent after run failure: %s",
+                            close_exc,
+                        )
                     raise
         else:
             async with sdk.agent_cls(config) as agent:
