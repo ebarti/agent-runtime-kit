@@ -325,6 +325,10 @@ class AntigravityAgentRuntime:
                     )
                 )
 
+        # Fall back to the caller's conversation id when the SDK does not echo one,
+        # so a resumed task always returns a usable session_id (matches Claude).
+        session_id = session_id or _conversation_id(task)
+
         process_metadata = (
             self._process_reuse_metadata(process_reused) if self._reuse_process else None
         )
