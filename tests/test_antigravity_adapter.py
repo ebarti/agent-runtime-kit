@@ -215,6 +215,43 @@ async def test_antigravity_runtime_runs_with_injected_sdk(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_antigravity_session_id_falls_back_to_task(tmp_path: Path) -> None:
+    class NoIdResponse:
+        def __init__(self, prompt: str) -> None:
+            self.chunks = _chunks(prompt)
+            self.usage_metadata = FakeUsage()
+
+        async def structured_output(self) -> None:
+            return None
+
+    class NoIdAgent:
+        def __init__(self, config: FakeConfig) -> None:
+            self.conversation_id = None
+
+        async def __aenter__(self) -> NoIdAgent:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def chat(self, prompt: str) -> NoIdResponse:
+            return NoIdResponse(prompt)
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=NoIdAgent,
+        config_cls=FakeConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    result = await runtime.run(AgentTask(goal="x", session_id="conv-77"))
+
+    assert result.session_id == "conv-77"
+
+
+@pytest.mark.asyncio
 async def test_antigravity_max_tokens_stop_reason_fails(tmp_path: Path) -> None:
     class TruncatedResponse:
         def __init__(self, prompt: str) -> None:

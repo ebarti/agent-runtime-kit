@@ -473,6 +473,56 @@ async def test_codex_sandbox_mapping(filesystem: FilesystemAccess, expected: str
 
 
 @pytest.mark.asyncio
+async def test_codex_usage_prefers_per_turn_over_cumulative() -> None:
+    # A resumed thread reports cumulative 'total'; the per-turn 'last' is what this
+    # turn actually cost and must be preferred so usage/cost are not over-counted.
+    run_result = {
+        "status": "completed",
+        "final_response": "ok",
+        "usage": {
+            "total": {"input_tokens": 1000, "output_tokens": 2000, "total_tokens": 3000},
+            "last": {"input_tokens": 4, "output_tokens": 6, "total_tokens": 10},
+        },
+    }
+    runtime = make_runtime(run_result)
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.usage.input_tokens == 4
+    assert result.usage.output_tokens == 6
+    assert result.usage.total_tokens == 10
+
+
+@pytest.mark.asyncio
+async def test_codex_session_id_falls_back_to_task_when_sdk_omits_it() -> None:
+    # Thread with a falsy id -> result session_id should still reflect the resume id.
+    run_result = {"status": "completed", "final_response": "ok"}
+
+    def codex_factory(*, config: FakeCodexConfig) -> FakeCodex:
+        codex = FakeCodex(config, run_result)
+        original_resume = codex.thread_resume
+
+        async def resume_without_id(thread_id: str, **kwargs: Any) -> FakeThread:
+            thread = await original_resume(thread_id, **kwargs)
+            thread.id = ""
+            return thread
+
+        codex.thread_resume = resume_without_id  # type: ignore[method-assign]
+        return codex
+
+    runtime = CodexAgentRuntime(
+        codex_cls=codex_factory,
+        config_cls=FakeCodexConfig,
+        sandbox_cls=FakeSandbox,
+        approval_mode_cls=FakeApprovalMode,
+    )
+
+    result = await runtime.run(AgentTask(goal="x", session_id="thread-123"))
+
+    assert result.session_id == "thread-123"
+
+
+@pytest.mark.asyncio
 async def test_codex_empty_output_with_tool_calls_succeeds() -> None:
     # Empty final_response is fine when the turn did real tool work; only a
     # completion with nothing usable is a failure (matches Claude/Antigravity).
