@@ -39,6 +39,8 @@ from agent_runtime_kit.events import (
     task_completed_event,
     task_failed_event,
     task_started_event,
+    tool_completed_event,
+    tool_requested_event,
 )
 
 # Vendor ``ThreadItem`` discriminator values that carry a tool/command invocation.
@@ -158,6 +160,19 @@ class CodexAgentRuntime:
         except Exception as exc:
             await safe_emit(task, task_failed_event(task, self.kind, error=str(exc)))
             raise
+
+        # Codex is non-streaming, so tool calls are parsed from the final TurnResult.
+        # Emit them as events anyway so an observability sink sees the same tool
+        # activity here as it does from the streaming Claude/Antigravity adapters,
+        # instead of only in result.tool_calls.
+        for audit in result.tool_calls:
+            await safe_emit(
+                task,
+                tool_requested_event(
+                    task, self.kind, tool_name=audit.tool_name, arguments=audit.arguments
+                ),
+            )
+            await safe_emit(task, tool_completed_event(task, self.kind, audit))
 
         if result.output:
             await safe_emit(task, output_delta_event(task, self.kind, text=result.output))

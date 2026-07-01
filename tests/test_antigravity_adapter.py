@@ -215,6 +215,25 @@ async def test_antigravity_runtime_runs_with_injected_sdk(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_antigravity_counts_requested_tool_call_without_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def only_call(prompt: str):
+        yield FakeTypes.Text("working")
+        yield FakeTypes.ToolCall("Search", {"q": "x"})
+
+    monkeypatch.setattr(FakeAgent, "chunks_factory", staticmethod(only_call))
+    runtime = make_runtime(data_dir=tmp_path)
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    # A tool call with no ToolResult chunk is still counted (cardinality parity).
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].tool_name == "Search"
+    assert result.tool_calls[0].status == "requested"
+
+
+@pytest.mark.asyncio
 async def test_antigravity_session_id_falls_back_to_task(tmp_path: Path) -> None:
     class NoIdResponse:
         def __init__(self, prompt: str) -> None:

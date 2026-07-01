@@ -579,6 +579,34 @@ async def test_claude_max_turns_finish_reason() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_result_tool_calls_carry_result_preview() -> None:
+    messages = [
+        {
+            "type": "AssistantMessage",
+            "content": [
+                {"type": "text", "text": "run"},
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "x"}},
+            ],
+        },
+        {
+            "type": "UserMessage",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "file body"},
+            ],
+        },
+        result_message(),
+    ]
+    runtime = ClaudeAgentRuntime(query_func=make_query(messages), options_cls=FakeClaudeOptions)
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    # result.tool_calls now carry the same preview the streamed events do.
+    assert result.tool_calls[0].tool_name == "Read"
+    assert result.tool_calls[0].result_preview == "file body"
+    assert result.tool_calls[0].status == "ok"
+
+
+@pytest.mark.asyncio
 async def test_claude_unsatisfied_output_schema_fails() -> None:
     # Schema requested, no native structured output, text is not JSON -> failure,
     # matching Codex/Antigravity instead of silently succeeding with None.
