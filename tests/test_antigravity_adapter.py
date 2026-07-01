@@ -215,6 +215,31 @@ async def test_antigravity_runtime_runs_with_injected_sdk(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_antigravity_tolerates_config_option_drift(tmp_path: Path) -> None:
+    # A config class that only accepts a subset of kwargs must not crash the run;
+    # dropped options are recorded like the Claude/Codex adapters.
+    class NarrowConfig:
+        def __init__(self, *, model: str, api_key: str | None = None) -> None:
+            self.model = model
+            self.api_key = api_key
+            self.kwargs = {"model": model, "api_key": api_key}
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=FakeAgent,
+        config_cls=NarrowConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.finish_reason == "done"
+    assert "capabilities" in result.metadata["dropped_options"]
+
+
+@pytest.mark.asyncio
 async def test_antigravity_counts_requested_tool_call_without_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
