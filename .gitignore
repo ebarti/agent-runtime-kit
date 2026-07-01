@@ -13,10 +13,15 @@ htmlcov/
 .DS_Store
 
 # Local generated reports
-reports/sdk-evolution/
+reports/
 
 # Local review artifacts
 CODE-REVIEW.md
+REVIEW.md
+
+# Secrets / local environment
+.env
+.env.*
 
 # Virtual environments
 .venv
