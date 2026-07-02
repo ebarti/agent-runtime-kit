@@ -101,7 +101,10 @@ def _isolated_env(home: Path) -> dict[str, str]:
     """A minimal environment for candidate subprocesses: PATH + a throwaway HOME.
 
     Deliberately omits the caller's credentials/config so freshly downloaded
-    upstream code executed during inspection cannot read them.
+    upstream code executed during inspection cannot read them. That scrub also
+    drops proxy and CA overrides (HTTPS_PROXY, SSL_CERT_FILE, PIP_INDEX_URL...),
+    so behind a corporate TLS-intercepting proxy or private mirror the candidate
+    install may fail — an accepted trade-off of the isolation.
     """
 
     env = {"PATH": os.environ.get("PATH", ""), "HOME": str(home)}

@@ -654,6 +654,52 @@ def test_collect_snapshots_uses_locked_baseline_when_environment_drifted(
     ]
 
 
+def test_collect_snapshots_without_opt_in_never_installs_even_when_lock_drifted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The security default: a drifted lock (locked != installed) plus pending
+    # updates must NOT trigger isolated-venv installs unless --inspect-candidates
+    # was passed; everything snapshots from the already-installed environment.
+    calls: list[tuple[str, str, str | None]] = []
+
+    def current_snapshot(package: str, *, version: str | None = None) -> ApiSnapshot:
+        calls.append(("current", package, version))
+        return ApiSnapshot(package=package, version=version, module=package.replace("-", "_"))
+
+    def isolated_snapshot(package: str, version: str) -> ApiSnapshot:
+        calls.append(("isolated", package, version))
+        return ApiSnapshot(package=package, version=version, module=package.replace("-", "_"))
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        current_snapshot,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        isolated_snapshot,
+    )
+
+    _collect_snapshots(
+        {
+            "packages": [
+                {
+                    "name": "claude-agent-sdk",
+                    "locked_version": "0.2.96",
+                    "installed_version": "0.2.106",
+                    "latest_version": "0.2.106",
+                },
+            ],
+            "refresh_preview": {
+                "stdout": "",
+                "stderr": "Update claude-agent-sdk v0.2.96 -> v0.2.106\n",
+            },
+        },
+        inspect_candidates=False,
+    )
+
+    assert calls == [("current", "claude-agent-sdk", "0.2.96")]
+
+
 def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
     guarded = with_candidate_api_diff_guard(
         {
@@ -1025,6 +1071,41 @@ def test_finalize_report_skips_when_report_dir_is_gitignored(tmp_path: Path) -> 
         tmp_path,
         report_path=report_path,
         options=RunOptions(workspace=tmp_path, runtime="fake"),
+        command_runner=runner,
+    )
+
+    assert not any(command[:2] == ("git", "commit") for command in commands)
+    assert not any(command[:2] == ("git", "add") for command in commands)
+
+
+def test_finalize_report_skips_when_report_dir_is_outside_the_repo(tmp_path: Path) -> None:
+    from examples.sdk_evolution_agent.cli import _commit_final_autonomous_pr_report
+
+    commands: list[tuple[str, ...]] = []
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandResult:
+        del cwd, env
+        commands.append(command)
+        # check-ignore exits 128 when it cannot judge the path (outside the repo).
+        if command[:2] == ("git", "check-ignore"):
+            return CommandResult(command=command, returncode=128, stderr="fatal: outside repo")
+        return CommandResult(command=command, returncode=0)
+
+    report_path = tmp_path / "elsewhere" / "run" / "report.md"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("x", encoding="utf-8")
+
+    # A --report-dir outside the workspace must skip cleanly, not stage a
+    # doomed out-of-repo path and raise.
+    _commit_final_autonomous_pr_report(
+        tmp_path / "repo",
+        report_path=report_path,
+        options=RunOptions(workspace=tmp_path / "repo", runtime="fake"),
         command_runner=runner,
     )
 

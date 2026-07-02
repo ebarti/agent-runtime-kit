@@ -454,10 +454,11 @@ def _commit_final_autonomous_pr_report(
 ) -> None:
     branch_name = options.branch_name or _current_branch(root, command_runner=command_runner)
     relative_report = _relative_path(root, report_path.parent)
-    if _path_is_git_ignored(root, relative_report, command_runner=command_runner):
-        # The default report dir is gitignored; its content is already embedded in
-        # the draft PR body, so there is nothing to commit. Previously this staged
-        # an ignored path (rc=1) and then raised. Skip cleanly instead.
+    if not _report_dir_committable(root, relative_report, command_runner=command_runner):
+        # Skipped when the report dir is gitignored (the default location) or
+        # outside the repository entirely: `git add` would fail on either, and
+        # the report content is already embedded in the draft PR body, so there
+        # is nothing that must be committed.
         return
     results = [
         stage_paths(root, (relative_report,), command_runner=command_runner),
@@ -475,7 +476,7 @@ def _commit_final_autonomous_pr_report(
         raise RuntimeError(f"failed to commit final autonomous PR report: {detail}")
 
 
-def _path_is_git_ignored(
+def _report_dir_committable(
     root: Path, path: str, *, command_runner: CommandRunner | None
 ) -> bool:
     runner = command_runner
@@ -483,8 +484,10 @@ def _path_is_git_ignored(
         from examples.sdk_evolution_agent.collectors import run_command
 
         runner = run_command
-    # `git check-ignore` exits 0 when the path is ignored, 1 when it is tracked.
-    return runner(("git", "check-ignore", path), cwd=root).returncode == 0
+    # `git check-ignore` exits 0 when the path is ignored, 1 when it is not
+    # ignored, and 128 when it cannot judge it (e.g. the path lies outside the
+    # repository). Only a definitively not-ignored path can be staged.
+    return runner(("git", "check-ignore", path), cwd=root).returncode == 1
 
 
 def _current_branch(root: Path, *, command_runner: CommandRunner | None) -> str:
