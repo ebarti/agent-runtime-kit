@@ -15,8 +15,11 @@ from agent_runtime_kit import (
     AgentTask,
     ArtifactRef,
     FakeAgentRuntime,
+    FilesystemAccess,
     FinishReason,
     McpServerConfig,
+    PermissionMode,
+    PermissionProfile,
     RuntimeAvailability,
     RuntimeNotRegisteredError,
     ToolCallAudit,
@@ -64,6 +67,30 @@ def test_registry_accepts_namespaced_third_party_kind() -> None:
     assert "x-myorg-agent" in registry.kinds()
     runtime = registry.resolve("x-myorg-agent")
     assert isinstance(runtime, FakeAgentRuntime)
+
+
+def test_permission_profile_coerces_string_literals_to_enum_members() -> None:
+    profile = PermissionProfile(mode="strict", filesystem="read-only")  # type: ignore[arg-type]
+
+    # Identity, not just equality: adapters gate on `mode is PermissionMode.STRICT`,
+    # so coercion must produce the actual members or the posture silently loosens.
+    assert profile.mode is PermissionMode.STRICT
+    assert profile.filesystem is FilesystemAccess.READ_ONLY
+    # Enum members pass through untouched.
+    assert PermissionProfile(mode=PermissionMode.CAUTIOUS).mode is PermissionMode.CAUTIOUS
+
+
+def test_permission_profile_rejects_unknown_literals() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        PermissionProfile(mode="paranoid")  # type: ignore[arg-type]
+
+    message = str(exc_info.value)
+    assert "paranoid" in message
+    # The error teaches the valid vocabulary.
+    assert "strict" in message and "permissive" in message
+
+    with pytest.raises(ValueError):
+        PermissionProfile(filesystem="ro")  # type: ignore[arg-type]
 
 
 def test_agent_task_model_fields_are_keyword_only() -> None:

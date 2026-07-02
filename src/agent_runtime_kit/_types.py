@@ -6,8 +6,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, NoReturn, Protocol, runtime_checkable
+from typing import Any, NoReturn, Protocol, TypeVar, runtime_checkable
 from uuid import uuid4
+
+_EnumT = TypeVar("_EnumT", bound=Enum)
 
 
 class _FrozenMapping(dict[str, Any]):
@@ -61,6 +63,22 @@ def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
     """
 
     return _FrozenMapping(value)
+
+
+def _coerce_enum(enum_cls: type[_EnumT], value: Any, field_name: str) -> _EnumT:
+    """Coerce a raw value (typically a string literal) into an enum member.
+
+    Boundary coercion must yield the actual member, never an equal bare string:
+    the adapters compare these fields with identity (``mode is
+    PermissionMode.STRICT``), so an uncoerced string would silently match
+    nothing and run at the default posture.
+    """
+
+    try:
+        return enum_cls(value)
+    except ValueError:
+        valid = ", ".join(sorted(str(member.value) for member in enum_cls))
+        raise ValueError(f"invalid {field_name} {value!r}; valid values: {valid}") from None
 
 
 class AgentRuntimeKind(str, Enum):
@@ -244,13 +262,29 @@ class McpServerConfig:
 
 @dataclass(frozen=True)
 class PermissionProfile:
-    """Portable permission request mapped by each adapter."""
+    """Portable permission request mapped by each adapter.
+
+    ``mode`` and ``filesystem`` also accept their string values ("strict",
+    "read-only", ...) and are coerced to enum members at construction, so a
+    literal that slips past type checking can never silently bypass the
+    adapters' identity comparisons. Unknown values raise ``ValueError``.
+    """
 
     mode: PermissionMode = PermissionMode.DEFAULT
     filesystem: FilesystemAccess = FilesystemAccess.WORKSPACE_WRITE
     allowed_tools: tuple[str, ...] = ()
     disallowed_tools: tuple[str, ...] = ()
     network: bool | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, PermissionMode):
+            object.__setattr__(self, "mode", _coerce_enum(PermissionMode, self.mode, "mode"))
+        if not isinstance(self.filesystem, FilesystemAccess):
+            object.__setattr__(
+                self,
+                "filesystem",
+                _coerce_enum(FilesystemAccess, self.filesystem, "filesystem"),
+            )
 
 
 @dataclass(frozen=True)
