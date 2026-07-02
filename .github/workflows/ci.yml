@@ -56,10 +56,10 @@ jobs:
       - name: Pytest
         run: uv run pytest -q --cov=agent_runtime_kit --cov-report=term-missing --cov-fail-under=85
 
-  pip-floors:
+  fresh-install:
     # The lockfile lanes above test pinned versions; real users get whatever pip
-    # resolves within the specifiers. This lane installs with no uv.lock so an
-    # unbounded/mis-bounded floor that breaks a fresh install is caught here.
+    # resolves within the specifiers today. This lane installs with no uv.lock so
+    # a fresh `pip install agent-runtime-kit[all]` breaking is caught here.
     name: pip install (no lockfile)
     runs-on: ubuntu-latest
     steps:
@@ -77,6 +77,31 @@ jobs:
           pip install ".[all]" pytest pytest-asyncio
           pytest -q
 
+  floors:
+    # The fresh-install lane resolves the HIGHEST versions within the specifiers,
+    # so it can never catch a stale or broken declared floor. This lane installs
+    # every direct dependency at its declared minimum (--resolution lowest-direct)
+    # on the oldest supported Python — the worst combination the metadata allows.
+    # --prerelease=allow: the openai-codex floor is itself a beta whose pinned
+    # CLI binary is a pre-release.
+    name: declared dependency floors
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install at floor resolution and run tests
+        run: |
+          uv venv
+          uv pip install --resolution lowest-direct --prerelease=allow ".[all]"
+          uv pip install "pytest>=8.0" "pytest-asyncio>=0.23"
+          .venv/bin/python -m pytest -q
+
   upstream-latest:
     # Scheduled canary: upgrade the vendor SDKs past the lockfile to surface API
     # drift (the contract tests are the tripwire) before it reaches users.
@@ -93,6 +118,14 @@ jobs:
           python-version: "3.12"
 
       - name: Sync with upgraded vendor SDKs and run tests
+        # Upgrade only the vendor SDKs (the drift this canary exists to catch),
+        # so an unrelated dev-tool release cannot break the signal. Upgrades stay
+        # within the declared caps; releases above a cap are adopted deliberately
+        # by raising the cap after revalidation.
         run: |
-          uv sync --all-extras --upgrade
+          uv sync --all-extras \
+            --upgrade-package claude-agent-sdk \
+            --upgrade-package openai-codex \
+            --upgrade-package openai-codex-cli-bin \
+            --upgrade-package google-antigravity
           uv run pytest -q
