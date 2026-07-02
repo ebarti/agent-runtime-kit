@@ -9,7 +9,7 @@ import os
 from collections.abc import AsyncIterator, Iterable, Mapping
 from typing import Any
 
-from agent_runtime_kit._errors import AgentRuntimeUnavailableError
+from agent_runtime_kit._errors import AgentRuntimeUnavailableError, UnsupportedTaskInputError
 from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentResult,
@@ -362,6 +362,16 @@ class ClaudeAgentRuntime:
         supported, dropped = filter_supported_kwargs(
             options_cls, kwargs, required=required, kind=self.kind
         )
+        if task.budget_usd is not None and "max_budget_usd" in dropped:
+            # The spend cap is a limit, not a permission, so it is enforced here
+            # rather than via required= (whose typed error reports
+            # field="permissions"). Silently dropping it would run uncapped.
+            raise UnsupportedTaskInputError(
+                self.kind,
+                "budget_usd",
+                "the installed claude-agent-sdk does not accept max_budget_usd; "
+                "refusing to run without the requested spend cap",
+            )
         return options_cls(**supported), dropped
 
     def _model(self, task: AgentTask) -> str:

@@ -549,6 +549,32 @@ async def test_claude_tool_filter_drop_fails_closed_only_when_requested() -> Non
 
 
 @pytest.mark.asyncio
+async def test_claude_budget_drop_fails_closed_only_when_requested() -> None:
+    @dataclass
+    class NoBudgetOptions:
+        model: str | None = None
+        permission_mode: str | None = None
+        allowed_tools: list[str] = field(default_factory=list)
+        disallowed_tools: list[str] = field(default_factory=list)
+        # Intentionally missing max_budget_usd.
+
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant("ok"), result_message()]),
+        options_cls=NoBudgetOptions,
+    )
+
+    # No budget requested: nothing to enforce, the run proceeds.
+    result = await runtime.run(AgentTask(goal="x"))
+    assert result.error is None
+
+    # A requested spend cap must not silently disappear into an uncapped run.
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(AgentTask(goal="x", budget_usd=2.5))
+
+    assert exc_info.value.field == "budget_usd"
+
+
+@pytest.mark.asyncio
 async def test_claude_streams_events_before_completion() -> None:
     sink = RecordingEventSink()
     messages = [

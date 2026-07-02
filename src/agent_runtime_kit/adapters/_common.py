@@ -188,9 +188,16 @@ def filter_supported_kwargs(
     (sandbox, approval/permission mode, tool filters). Best-effort dropping is the
     wrong failure mode there — the run would silently proceed with MORE access
     than the caller asked for — so drift on a required key fails closed with
-    ``UnsupportedTaskInputError`` (``kind`` is needed for that error). Signatures
-    that cannot be introspected pass everything through, which also fails closed:
-    a truly unsupported kwarg then raises ``TypeError`` inside the SDK call.
+    ``UnsupportedTaskInputError`` (``kind`` is needed for that error).
+
+    Two signature shapes limit detection, with different guarantees. A signature
+    that cannot be introspected passes everything through and still fails closed:
+    a truly unsupported kwarg raises ``TypeError`` inside the SDK call. A
+    signature with ``**kwargs`` also passes everything through, but that path is
+    NOT fail-closed — the callee accepts and may silently ignore unknown options,
+    so drift (required keys included) is undetectable here. Callers that need a
+    hard guarantee against a ``**kwargs``-style vendor API must verify the
+    behavior, not just the signature.
     """
 
     try:
