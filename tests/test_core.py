@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import copy
+import json
+import pickle
+from dataclasses import asdict
+
 import pytest
 
 from agent_runtime_kit import (
@@ -82,6 +87,24 @@ def test_agent_task_does_not_leak_caller_mapping() -> None:
     assert task.metadata["model"] == "x"
     with pytest.raises(TypeError):
         task.metadata["model"] = "nope"  # type: ignore[index]
+
+
+def test_frozen_models_stay_serializable() -> None:
+    # Freezing must not break the standard object plumbing embedding applications
+    # rely on: asdict for logging, pickle for multiprocessing, deepcopy, json.
+    task = AgentTask(goal="g", metadata={"model": "x"}, output_schema={"type": "object"})
+    result = AgentResult(output="ok", metadata={"turns": 1})
+
+    assert asdict(task)["metadata"] == {"model": "x"}
+    assert asdict(result)["metadata"] == {"turns": 1}
+    assert copy.deepcopy(result).metadata == {"turns": 1}
+    assert pickle.loads(pickle.dumps(result)).metadata == {"turns": 1}
+    assert pickle.loads(pickle.dumps(task)).output_schema == {"type": "object"}
+    assert json.dumps(result.metadata) == '{"turns": 1}'
+
+    restored = pickle.loads(pickle.dumps(result))
+    with pytest.raises(TypeError):
+        restored.metadata["turns"] = 2  # a pickle round-trip stays read-only
 
 
 def test_finish_reason_enum_compares_as_string() -> None:

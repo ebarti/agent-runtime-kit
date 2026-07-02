@@ -6,9 +6,50 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from types import MappingProxyType
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, NoReturn, Protocol, runtime_checkable
 from uuid import uuid4
+
+
+class _FrozenMapping(dict[str, Any]):
+    """A ``dict`` that rejects in-place mutation.
+
+    ``MappingProxyType`` would also be read-only, but it breaks
+    ``dataclasses.asdict``, ``copy.deepcopy``, ``pickle``, and ``json.dumps`` —
+    all routinely applied to tasks and results by embedding applications. A
+    ``dict`` subclass keeps those working (and ``isinstance(x, dict)`` true)
+    while still failing loudly on writes.
+    """
+
+    def __setitem__(self, key: str, value: Any) -> NoReturn:
+        raise TypeError("mapping fields on frozen models are read-only")
+
+    def __delitem__(self, key: str) -> NoReturn:
+        raise TypeError("mapping fields on frozen models are read-only")
+
+    # mypy [misc]: dict.__or__ is overloaded and an always-raising __ior__ can't
+    # mirror its shape; `d |= ...` must still be blocked (it bypasses update()).
+    def __ior__(self, other: Any) -> NoReturn:  # type: ignore[misc]
+        raise TypeError("mapping fields on frozen models are read-only")
+
+    def clear(self) -> NoReturn:
+        raise TypeError("mapping fields on frozen models are read-only")
+
+    def pop(self, *args: Any) -> NoReturn:
+        raise TypeError("mapping fields on frozen models are read-only")
+
+    def popitem(self) -> NoReturn:
+        raise TypeError("mapping fields on frozen models are read-only")
+
+    def setdefault(self, *args: Any) -> NoReturn:
+        raise TypeError("mapping fields on frozen models are read-only")
+
+    def update(self, *args: Any, **kwargs: Any) -> NoReturn:
+        raise TypeError("mapping fields on frozen models are read-only")
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # Rebuild via the constructor: the default dict-subclass reduce protocol
+        # restores items through __setitem__, which this class forbids.
+        return (type(self), (dict(self),))
 
 
 def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -16,10 +57,10 @@ def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
 
     The dataclasses are ``frozen=True``, but a ``Mapping`` field still stored the
     caller's dict by reference — mutating that dict afterward mutated the "frozen"
-    model. Copying into a ``MappingProxyType`` closes that leak.
+    model. Copying into a read-only dict closes that leak.
     """
 
-    return MappingProxyType(dict(value))
+    return _FrozenMapping(value)
 
 
 class AgentRuntimeKind(str, Enum):
