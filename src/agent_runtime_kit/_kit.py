@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+import inspect
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import Any, TypeVar, cast, overload
@@ -26,9 +27,13 @@ from agent_runtime_kit._types import (
     RuntimeAvailability,
     SessionResumeState,
 )
-from agent_runtime_kit.registry import RuntimeRegistry, create_default_registry
+from agent_runtime_kit.registry import RuntimeFactory, RuntimeRegistry, create_default_registry
 
 _T = TypeVar("_T")
+# An event handler receives one normalized event dict; sync or async.
+_EventHandler = Callable[[Mapping[str, Any]], Any]
+_HandlerT = TypeVar("_HandlerT", bound=_EventHandler)
+_FactoryT = TypeVar("_FactoryT", bound=RuntimeFactory)
 
 # Short spellings for the built-in kinds, resolved only by AgentKit (the
 # registry itself stays alias-free; the full kind strings always work).
@@ -71,6 +76,7 @@ class AgentKit:
                 register_adapters(registry)
         self._registry = registry
         self._runtimes: dict[AgentRuntimeKind | str, AgentRuntime] = {}
+        self._handlers: list[tuple[str, _EventHandler]] = []
         self._cache_lock = asyncio.Lock()
 
     @property
@@ -90,6 +96,36 @@ class AgentKit:
 
     def capabilities_for(self, kind: AgentRuntimeKind | str) -> AgentCapabilities:
         return self._registry.capabilities_for(self._normalize_kind(kind))
+
+    def on(self, event: str = "*") -> Callable[[_HandlerT], _HandlerT]:
+        """Register an event handler for tasks assembled by this hub.
+
+        ``event`` is an exact normalized event name (``"agent.tool.completed"``,
+        ...) or ``"*"`` for everything. Handlers may be sync or async and their
+        exceptions are swallowed — the ``safe_emit`` contract: observability
+        must never break a run. Registration applies to runs started after it.
+        """
+
+        def register(handler: _HandlerT) -> _HandlerT:
+            self._handlers.append((event, handler))
+            return handler
+
+        return register
+
+    def runtime(
+        self, kind: AgentRuntimeKind | str, *, replace: bool = False
+    ) -> Callable[[_FactoryT], _FactoryT]:
+        """Register a runtime factory under ``kind`` (decorator form).
+
+        The factory must remain constructible with zero arguments:
+        ``capabilities_for``/``availability_for`` build it that way.
+        """
+
+        def register(factory: _FactoryT) -> _FactoryT:
+            self._registry.register(kind, factory, replace=replace)
+            return factory
+
+        return register
 
     @overload
     async def run(
@@ -220,7 +256,7 @@ class AgentKit:
                 "permissions": _normalize_permissions(
                     permissions, filesystem, allowed_tools, disallowed_tools
                 ),
-                "event_sink": event_sink,
+                "event_sink": self._compose_sink(event_sink),
                 "sdk_executions": sdk_executions,
                 "budget_usd": budget_usd,
                 "session_id": session_id,
@@ -290,13 +326,54 @@ class AgentKit:
         replacements: dict[str, Any] = {}
         if schema is not None:
             replacements["output_schema"] = schema
-        if event_sink is not None:
-            replacements["event_sink"] = event_sink
+        effective_sink = event_sink if event_sink is not None else task.event_sink
+        composed_sink = self._compose_sink(effective_sink)
+        if composed_sink is not task.event_sink:
+            replacements["event_sink"] = composed_sink
         if not replacements:
             return task
         values = {f.name: getattr(task, f.name) for f in dataclass_fields(task)}
         values.update(replacements)
         return AgentTask(**values)
+
+    def _compose_sink(self, downstream: EventSink | None) -> EventSink | None:
+        if not self._handlers:
+            return downstream
+        return _TeeSink(tuple(self._handlers), downstream)
+
+
+class _TeeSink:
+    """Fan events out to hub handlers, then to the task's own sink.
+
+    Handler and downstream failures are swallowed independently (the
+    ``safe_emit`` contract): observability must never break a run, and one bad
+    handler must not starve the others or the downstream sink.
+    """
+
+    def __init__(
+        self,
+        handlers: tuple[tuple[str, _EventHandler], ...],
+        downstream: EventSink | None,
+    ) -> None:
+        self._handlers = handlers
+        self._downstream = downstream
+
+    async def emit(self, event: Mapping[str, Any]) -> None:
+        name = str(event.get("name", ""))
+        for pattern, handler in self._handlers:
+            if pattern != "*" and pattern != name:
+                continue
+            try:
+                outcome = handler(event)
+                if inspect.isawaitable(outcome):
+                    await outcome
+            except Exception:
+                continue
+        if self._downstream is not None:
+            try:
+                await self._downstream.emit(event)
+            except Exception:
+                return
 
 
 def _as_path(value: Path | str | None) -> Path | None:

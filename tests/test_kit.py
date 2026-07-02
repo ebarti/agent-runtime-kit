@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from agent_runtime_kit import (
     RuntimeAvailability,
 )
 from agent_runtime_kit._schema import json_schema_for
+from agent_runtime_kit.testing import RecordingEventSink
 
 
 @dataclass
@@ -241,6 +243,78 @@ async def test_kit_output_type_composes_with_task_passthrough() -> None:
     task = runtime.task
     assert task is not None
     assert task.output_schema is not None  # schema injected into the prebuilt task
+
+
+@pytest.mark.asyncio
+async def test_kit_on_handlers_filter_compose_and_never_break_runs() -> None:
+    kit = AgentKit(register_default_adapters=False)
+    completed: list[str] = []
+    everything: list[str] = []
+    awaited: list[str] = []
+    user_sink = RecordingEventSink()
+
+    @kit.on("agent.task.completed")
+    def only_completed(event: Mapping[str, Any]) -> None:
+        completed.append(str(event["name"]))
+
+    @kit.on()
+    def wildcard(event: Mapping[str, Any]) -> None:
+        everything.append(str(event["name"]))
+
+    @kit.on("agent.task.started")
+    async def async_handler(event: Mapping[str, Any]) -> None:
+        awaited.append(str(event["name"]))
+
+    @kit.on()
+    def exploding(event: Mapping[str, Any]) -> None:
+        raise RuntimeError("handler bug")
+
+    result = await kit.run("fake", goal="observe me", event_sink=user_sink)
+
+    assert result.finish_reason == "done"
+    assert completed == ["agent.task.completed"]
+    assert awaited == ["agent.task.started"]
+    # The fake runtime emits the full normalized sequence; wildcard saw it all.
+    assert everything[0] == "agent.task.started"
+    assert everything[-1] == "agent.task.completed"
+    # The raising handler broke neither the run, the other handlers, nor the
+    # user's own sink.
+    assert [event["name"] for event in user_sink.events] == everything
+
+
+@pytest.mark.asyncio
+async def test_kit_on_handlers_apply_to_prebuilt_tasks() -> None:
+    runtime = RecordingRuntime()
+    kit = AgentKit(register_default_adapters=False)
+    seen: list[str] = []
+
+    @kit.on()
+    def watch(event: Mapping[str, Any]) -> None:
+        seen.append(str(event["name"]))
+
+    await kit.run(runtime, task=AgentTask(goal="prebuilt"))
+
+    task = runtime.task
+    assert task is not None
+    assert task.event_sink is not None  # tee injected into the passthrough task
+    await task.event_sink.emit({"name": "agent.task.started"})
+    assert seen == ["agent.task.started"]
+
+
+@pytest.mark.asyncio
+async def test_kit_runtime_decorator_registers_factory() -> None:
+    kit = AgentKit(register_default_adapters=False)
+
+    @kit.runtime("x-third-party")
+    def factory(**_: Any) -> FakeAgentRuntime:
+        return FakeAgentRuntime(output="third-party output")
+
+    result = await kit.run("x-third-party", goal="g")
+
+    assert result.output == "third-party output"
+    assert "x-third-party" in kit.kinds()
+    # Zero-arg constructibility keeps diagnostics working.
+    assert kit.availability_for("x-third-party").available is True
 
 
 @pytest.mark.asyncio
