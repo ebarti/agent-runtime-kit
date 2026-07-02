@@ -148,7 +148,9 @@ async def test_codex_runtime_runs_with_injected_sdk() -> None:
 
     assert result.output == '{"ok": true}'
     assert result.parsed_output == {"ok": True}
-    assert result.usage.input_tokens == 4
+    # 4 raw input tokens minus 1 cached: input_tokens excludes cache reads.
+    assert result.usage.input_tokens == 3
+    assert result.usage.cache_read_tokens == 1
     assert result.session_id == "thread-new"
     assert sink.events[-1]["name"] == "agent.task.completed"
 
@@ -725,7 +727,7 @@ async def test_codex_rejects_network() -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_usage_fallback_excludes_cached() -> None:
+async def test_codex_usage_excludes_cached_from_input_tokens() -> None:
     run_result = {
         "status": "completed",
         "final_response": "done",
@@ -735,8 +737,29 @@ async def test_codex_usage_fallback_excludes_cached() -> None:
 
     result = await runtime.run(AgentTask(goal="x"))
 
-    # Fallback total is input + output only (cached is already inside input_tokens).
+    # OpenAI counts cached input inside input_tokens; the Usage contract reports
+    # cache reads separately, so the 4 cached tokens must not appear in both fields.
+    assert result.usage.input_tokens == 6
+    assert result.usage.cache_read_tokens == 4
+    # Fallback total keeps vendor semantics: raw input (incl. cached) + output.
     assert result.usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_codex_usage_clamps_when_cached_exceeds_input() -> None:
+    # Defensive clamp: a vendor bug reporting cached > input must not produce a
+    # negative input_tokens.
+    run_result = {
+        "status": "completed",
+        "final_response": "done",
+        "usage": {"total": {"input_tokens": 2, "output_tokens": 5, "cached_input_tokens": 7}},
+    }
+    runtime = make_runtime(run_result)
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.usage.input_tokens == 0
+    assert result.usage.cache_read_tokens == 7
 
 
 def test_codex_availability_uses_injected_sdk() -> None:

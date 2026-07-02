@@ -584,9 +584,12 @@ def _codex_usage(value: Any) -> Usage:
     output_tokens = optional_int(field_value(breakdown, "output_tokens"))
     cached = optional_int(field_value(breakdown, "cached_input_tokens"))
     total_tokens = optional_int(field_value(breakdown, "total_tokens"))
-    # OpenAI reports cached input inside input_tokens, so never add cached on top.
+    # OpenAI reports cached input INSIDE input_tokens, while the Usage contract
+    # (and the Antigravity adapter) excludes cache reads from input_tokens and
+    # reports them separately. Subtract rather than double-count across the two
+    # fields; the raw value still backs the vendor-style total fallback.
     return Usage(
-        input_tokens=input_tokens,
+        input_tokens=max(input_tokens - cached, 0),
         output_tokens=output_tokens,
         cache_read_tokens=cached,
         total_tokens=total_tokens or input_tokens + output_tokens,
