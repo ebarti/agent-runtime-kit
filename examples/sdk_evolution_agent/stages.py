@@ -19,6 +19,7 @@ from agent_runtime_kit import (
     PermissionProfile,
     RuntimeAvailability,
     RuntimeRegistry,
+    runtime_kind_value,
 )
 from agent_runtime_kit.adapters import (
     AntigravityAgentRuntime,
@@ -93,6 +94,15 @@ class FixtureEvolutionRuntime:
 
         del task_id
 
+    async def aclose(self) -> None:
+        """Fixture runtime holds no resources."""
+
+    async def __aenter__(self) -> FixtureEvolutionRuntime:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object, /) -> None:
+        await self.aclose()
+
 
 def build_registry() -> RuntimeRegistry:
     """Build the runtime registry used by the SDK evolution agent."""
@@ -159,10 +169,12 @@ async def run_stage(
 ) -> dict[str, Any]:
     """Run one AI stage through agent-runtime-kit and validate its output."""
 
+    # runtime_kind_value: third-party runtimes may use plain string kinds.
+    kind_label = runtime_kind_value(runtime.kind)
     if not runtime.capabilities.structured_output:
-        raise StageExecutionError(f"{runtime.kind.value} cannot honor required output_schema")
+        raise StageExecutionError(f"{kind_label} cannot honor required output_schema")
     if not runtime.capabilities.working_directory:
-        raise StageExecutionError(f"{runtime.kind.value} cannot honor required working_directory")
+        raise StageExecutionError(f"{kind_label} cannot honor required working_directory")
     permissions = _stage_permissions(runtime, write_enabled=write_enabled)
     task = AgentTask(
         goal=json.dumps(payload, sort_keys=True, default=str),
@@ -176,7 +188,7 @@ async def run_stage(
     try:
         result = await runtime.run(task)
     except Exception as exc:
-        raise StageExecutionError(f"{stage} failed through {runtime.kind.value}: {exc}") from exc
+        raise StageExecutionError(f"{stage} failed through {kind_label}: {exc}") from exc
     data = result.parsed_output
     if data is None:
         try:

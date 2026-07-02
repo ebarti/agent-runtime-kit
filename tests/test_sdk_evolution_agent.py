@@ -1426,6 +1426,15 @@ class RecordingRuntime:
     async def cancel(self, task_id: str) -> None:
         del task_id
 
+    async def aclose(self) -> None:
+        return None
+
+    async def __aenter__(self) -> RecordingRuntime:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object, /) -> None:
+        await self.aclose()
+
 
 class PermissiveRuntime(RecordingRuntime):
     async def run(self, task: AgentTask) -> AgentResult:
