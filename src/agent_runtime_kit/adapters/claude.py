@@ -370,8 +370,10 @@ class _StreamState:
         self._tool_names: dict[str, str] = {}
         # tool_use_id -> "ok" | "error", populated from ToolResultBlock messages.
         self.tool_results: dict[str, str] = {}
-        # tool_use_id -> result preview, so result.tool_calls carry the same preview
-        # the streamed tool_completed events do (previously result audits had none).
+        # tool_use_id -> result preview, so result.tool_calls carry a capped raw
+        # preview of each tool result (previously result audits had none). Only
+        # the RESULT carries content; the sanitized tool_completed events expose
+        # just result_preview_length, never the preview text itself.
         self.tool_previews: dict[str, str] = {}
 
     async def consume(self, message: Any) -> None:
