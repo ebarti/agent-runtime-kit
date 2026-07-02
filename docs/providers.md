@@ -92,10 +92,14 @@ from ADC, `GOOGLE_CLOUD_PROJECT`, or `GCLOUD_PROJECT`; location defaults to
 most specific request and wins; otherwise an explicit
 `AntigravityAgentRuntime(vertex=True, ...)` takes precedence over an ambient
 `GEMINI_API_KEY`/`GOOGLE_API_KEY`, so a Vertex-configured runtime is never
-silently redirected to the Gemini API by an exported environment key. `disallowed_tools` maps to
-`CapabilitiesConfig.disabled_tools`, and an allow-list and a deny-list are
-mutually exclusive (the SDK forbids combining enabled and disabled tool lists),
-so supplying both is rejected. Tool names are validated against the
+silently redirected to the Gemini API by an exported environment key. Under
+`PERMISSIVE`, `disallowed_tools` maps to `CapabilitiesConfig.disabled_tools`
+(the baseline is every tool, so "enable everything else" is exact); under any
+other posture the deny-list is folded into an allow-list of the mode's baseline
+minus the denied tools, so denying one tool can never re-enable others past the
+baseline. An allow-list and a deny-list are mutually exclusive (the SDK forbids
+combining enabled and disabled tool lists), so supplying both is rejected. Tool
+names are validated against the
 `BuiltinTools` enum (`"view_file"`, not `"Read"`). `budget_usd` and
 `permissions.network` are rejected with typed errors, and MCP server configs do
 not accept per-server env values. The default tool posture with no
@@ -107,11 +111,13 @@ not accept per-server env values. The default tool posture with no
 | `CAUTIOUS`, `DEFAULT` | nondestructive (no `run_command`) | `allow_all` |
 | `PERMISSIVE` | all tools | `allow_all` |
 
-A deny-list under a `READ_ONLY` filesystem (or `STRICT`) is honored by enabling
-the read-only toolset minus the denied tools — `disabled_tools` alone would
-re-enable every unnamed write tool. An `allowed_tools` list containing
-`start_subagent` enables subagents in any mode; the approval policy still
-follows the mode (only `STRICT` omits `allow_all`).
+A deny-list under a `READ_ONLY` filesystem (or `STRICT`) subtracts from the
+read-only toolset, and under `DEFAULT`/`CAUTIOUS` from the nondestructive
+toolset — `disabled_tools` alone would re-enable every unnamed write or
+destructive tool. An explicit `allowed_tools` list is rejected if it names a
+non-read-only tool under a `READ_ONLY` filesystem or `STRICT` mode. An
+`allowed_tools` list containing `start_subagent` enables subagents in any mode;
+the approval policy still follows the mode (only `STRICT` omits `allow_all`).
 
 Session and app-data directories are written under
 `$XDG_CACHE_HOME/agent-runtime-kit` (default `~/.cache/agent-runtime-kit`,

@@ -522,13 +522,18 @@ async def test_antigravity_strict_uses_read_only_and_no_policies(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_antigravity_disallowed_tools_map_to_disabled(tmp_path: Path) -> None:
+async def test_antigravity_permissive_disallowed_tools_map_to_disabled(tmp_path: Path) -> None:
+    # Only PERMISSIVE takes the SDK's disabled_tools route: its baseline is every
+    # tool, so "enable everything else" expresses baseline-minus-denied exactly.
     runtime = make_runtime(data_dir=tmp_path)
 
     await runtime.run(
         AgentTask(
             goal="task",
-            permissions=PermissionProfile(disallowed_tools=("run_command",)),
+            permissions=PermissionProfile(
+                mode=PermissionMode.PERMISSIVE,
+                disallowed_tools=("run_command",),
+            ),
         )
     )
 
@@ -538,6 +543,35 @@ async def test_antigravity_disallowed_tools_map_to_disabled(tmp_path: Path) -> N
     assert capabilities.disabled_tools == ["run_command"]
     # enabled_tools and disabled_tools are mutually exclusive in the real SDK.
     assert capabilities.enabled_tools is None
+    assert capabilities.enable_subagents is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [PermissionMode.DEFAULT, PermissionMode.CAUTIOUS])
+async def test_antigravity_deny_list_stays_within_nondestructive_baseline(
+    tmp_path: Path, mode: PermissionMode
+) -> None:
+    # disabled_tools means "enable everything else": under DEFAULT/CAUTIOUS that
+    # would re-enable run_command (and every other destructive tool) past the
+    # nondestructive baseline just by denying one unrelated tool. The deny-list
+    # must stay subtractive: nondestructive minus denied.
+    runtime = make_runtime(data_dir=tmp_path)
+
+    await runtime.run(
+        AgentTask(
+            goal="task",
+            permissions=PermissionProfile(mode=mode, disallowed_tools=("edit_file",)),
+        )
+    )
+
+    capabilities = FakeAgent.last_config.kwargs["capabilities"]  # type: ignore[union-attr]
+    assert capabilities.disabled_tools is None
+    assert capabilities.enabled_tools == [
+        FakeBuiltinTools.LIST_DIR,
+        FakeBuiltinTools.VIEW_FILE,
+        FakeBuiltinTools.FINISH,
+    ]
+    assert capabilities.enable_subagents is False
 
 
 @pytest.mark.asyncio
@@ -633,6 +667,49 @@ async def test_antigravity_read_only_rejects_write_allowed_tool(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_antigravity_strict_rejects_write_allowed_tool(tmp_path: Path) -> None:
+    # STRICT is a read-only posture everywhere else in the adapter (default tools,
+    # deny-lists); an explicit allow-list must not be a backdoor to write tools
+    # under it, even with a writable filesystem setting.
+    runtime = make_runtime(data_dir=tmp_path)
+
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(
+            AgentTask(
+                goal="task",
+                permissions=PermissionProfile(
+                    mode=PermissionMode.STRICT,
+                    filesystem=FilesystemAccess.WORKSPACE_WRITE,
+                    allowed_tools=("run_command",),
+                ),
+            )
+        )
+
+    assert exc_info.value.field == "permissions.allowed_tools"
+
+
+@pytest.mark.asyncio
+async def test_antigravity_strict_honors_read_only_allow_list(tmp_path: Path) -> None:
+    # The STRICT guard must reject write tools without breaking legitimate
+    # read-only allow-lists.
+    runtime = make_runtime(data_dir=tmp_path)
+
+    await runtime.run(
+        AgentTask(
+            goal="task",
+            permissions=PermissionProfile(
+                mode=PermissionMode.STRICT, allowed_tools=("view_file",)
+            ),
+        )
+    )
+
+    config = FakeAgent.last_config
+    assert config is not None
+    assert config.kwargs["capabilities"].enabled_tools == [FakeBuiltinTools.VIEW_FILE]
+    assert config.kwargs["policies"] == []
+
+
+@pytest.mark.asyncio
 async def test_antigravity_read_only_allowlist_fails_closed_without_readonly_toolset(
     tmp_path: Path,
 ) -> None:
@@ -668,6 +745,41 @@ async def test_antigravity_read_only_allowlist_fails_closed_without_readonly_too
         )
 
     assert exc_info.value.field == "permissions.allowed_tools"
+
+
+@pytest.mark.asyncio
+async def test_antigravity_deny_list_fails_closed_without_nondestructive_toolset(
+    tmp_path: Path,
+) -> None:
+    # If a future SDK drops the nondestructive helper, the DEFAULT/CAUTIOUS
+    # deny-list baseline cannot be resolved — refuse rather than fall back to
+    # the SDK's "enable everything else" route.
+    class DriftedBuiltinTools(str, enum.Enum):
+        VIEW_FILE = "view_file"
+        RUN_COMMAND = "run_command"
+        # No read_only()/nondestructive()/all_tools() helpers.
+
+    class DriftedTypes(FakeTypes):
+        BuiltinTools = DriftedBuiltinTools
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=FakeAgent,
+        config_cls=FakeConfig,
+        types_module=DriftedTypes,
+        policy_module=FakePolicy,
+    )
+
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(
+            AgentTask(
+                goal="task",
+                permissions=PermissionProfile(disallowed_tools=("view_file",)),
+            )
+        )
+
+    assert exc_info.value.field == "permissions.disallowed_tools"
 
 
 @pytest.mark.asyncio

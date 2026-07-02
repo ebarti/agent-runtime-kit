@@ -601,8 +601,9 @@ def _capability_policy(
     is_permissive = task.permissions.mode is PermissionMode.PERMISSIVE
     if task.permissions.disallowed_tools:
         # The real CapabilitiesConfig requires enabled_tools and disabled_tools to be
-        # mutually exclusive, so a deny-list takes the disabled_tools route and lets
-        # the SDK enable everything else. Combining it with an explicit allow-list is
+        # mutually exclusive, so a deny-list either takes the disabled_tools route
+        # (PERMISSIVE, whose baseline is every tool) or is folded into an allow-list
+        # of baseline-minus-denied. Combining it with an explicit allow-list is
         # unrepresentable, so reject that rather than silently drop one.
         if task.permissions.allowed_tools:
             raise UnsupportedTaskInputError(
@@ -634,21 +635,42 @@ def _capability_policy(
                 enabled_tools=tools,
                 enable_subagents=_contains_tool(tools, subagent),
             )
-        else:
-            enable_subagents = is_permissive and not _contains_tool(disabled, subagent)
+        elif is_permissive:
+            # PERMISSIVE's baseline is every tool, so the SDK's disabled_tools route
+            # ("enable everything else") expresses baseline-minus-denied exactly.
             capabilities = sdk.types.CapabilitiesConfig(
                 disabled_tools=disabled,
-                enable_subagents=enable_subagents,
+                enable_subagents=not _contains_tool(disabled, subagent),
+            )
+        else:
+            # DEFAULT/CAUTIOUS: "enable everything else" would widen access past the
+            # nondestructive baseline — denying one unrelated tool would bring back
+            # run_command and every other destructive tool. Keep the deny-list
+            # subtractive here too: baseline minus denied.
+            denied = {getattr(tool, "value", tool) for tool in disabled}
+            tools = [
+                tool
+                for tool in _nondestructive_tools(kind, "permissions.disallowed_tools", builtin)
+                if getattr(tool, "value", tool) not in denied
+            ]
+            capabilities = sdk.types.CapabilitiesConfig(
+                enabled_tools=tools,
+                enable_subagents=_contains_tool(tools, subagent),
             )
     else:
         if task.permissions.allowed_tools == ():
             tools = _default_tools(task, builtin)
         else:
             tools = _validate_tools(kind, "allowed_tools", task.permissions.allowed_tools, builtin)
-            if task.permissions.filesystem is FilesystemAccess.READ_ONLY:
-                # READ_ONLY is a hard constraint; an explicit allow-list must not be
-                # a backdoor to write tools (previously it bypassed the read-only
-                # default entirely). Reject rather than silently widen access.
+            if (
+                task.permissions.filesystem is FilesystemAccess.READ_ONLY
+                or task.permissions.mode is PermissionMode.STRICT
+            ):
+                # READ_ONLY — and STRICT, whose posture is read-only everywhere else
+                # in this adapter (default tools, deny-lists) — is a hard constraint;
+                # an explicit allow-list must not be a backdoor to write tools
+                # (previously STRICT honored any named write tool). Reject rather
+                # than silently widen access.
                 _reject_non_read_only_tools(kind, tools, builtin)
         # Honor an explicitly allow-listed subagent tool regardless of mode; gating
         # this on PERMISSIVE left an explicit start_subagent request silently inert.
@@ -738,6 +760,25 @@ def _read_only_tools(kind: AgentRuntimeKind, field: str, builtin: Any) -> list[A
     return list(read_only())
 
 
+def _nondestructive_tools(kind: AgentRuntimeKind, field: str, builtin: Any) -> list[Any]:
+    """The SDK's non-destructive toolset, or a typed refusal when it is missing.
+
+    The DEFAULT/CAUTIOUS deny-list conversion subtracts from this baseline; if the
+    installed SDK no longer exposes it (vendor drift), refusing is the only option
+    that cannot widen access.
+    """
+
+    nondestructive = getattr(builtin, "nondestructive", None)
+    if not callable(nondestructive):
+        raise UnsupportedTaskInputError(
+            kind,
+            field,
+            "the installed SDK exposes no non-destructive toolset to bound a "
+            "deny-list against; refusing rather than widening access",
+        )
+    return list(nondestructive())
+
+
 def _reject_non_read_only_tools(kind: AgentRuntimeKind, tools: list[Any], builtin: Any) -> None:
     allowed = {
         getattr(tool, "value", tool)
@@ -750,8 +791,8 @@ def _reject_non_read_only_tools(kind: AgentRuntimeKind, tools: list[Any], builti
             raise UnsupportedTaskInputError(
                 kind,
                 "permissions.allowed_tools",
-                f"{value!r} is not permitted under a READ_ONLY filesystem; "
-                f"read-only tools are: {ordered}",
+                f"{value!r} is not permitted under a read-only posture "
+                f"(READ_ONLY filesystem or STRICT mode); read-only tools are: {ordered}",
             )
 
 
