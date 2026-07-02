@@ -26,10 +26,13 @@ import the names from the top-level package instead.
 - **`finish_reason` values** come from `FinishReason`. The field is typed `str`
   for forward-compatibility, so new reasons can be added without a type break;
   compare against `FinishReason` members rather than bare literals.
-- **Result/task mappings are read-only.** `AgentTask`/`AgentResult` copy `Mapping`
-  fields into read-only dicts at construction; treat them as immutable and compare
-  by value. They remain plain `dict` subclasses, so `dataclasses.asdict`, `pickle`,
-  `copy.deepcopy`, and JSON serialization keep working.
+- **Result/task mappings are read-only at the top level.** `AgentTask`/`AgentResult`
+  copy `Mapping` fields into read-only dicts at construction; in-place writes to
+  the mapping itself raise `TypeError`. The freeze is shallow — nested containers
+  are not copied or frozen — so treat the whole structure as immutable by
+  convention and compare by value. The wrappers remain plain `dict` subclasses,
+  so `dataclasses.asdict`, `pickle`, `copy.deepcopy`, and JSON serialization
+  keep working.
 - **Unsupported inputs raise, they are not dropped.** An adapter that cannot honor
   a task field raises `UnsupportedTaskInputError`; the one exception is
   vendor-option drift, which is recorded in

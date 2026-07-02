@@ -46,9 +46,13 @@ mode: `READ_ONLY` → `read_only`, `WORKSPACE_WRITE` → `workspace_write`,
 
 Antigravity toolset notes: the table above describes the default posture when
 `allowed_tools` is empty. A `READ_ONLY` filesystem forces the read-only toolset
-regardless of mode. User-supplied `allowed_tools`/`disallowed_tools` override the
-defaults and are validated against the `BuiltinTools` enum (for example
-`"view_file"`, not `"Read"`); an unknown name raises `UnsupportedTaskInputError`.
+regardless of mode. User-supplied `allowed_tools`/`disallowed_tools` are
+validated against the `BuiltinTools` enum (for example `"view_file"`, not
+`"Read"`); an unknown name raises `UnsupportedTaskInputError`. An allow-list
+naming a non-read-only tool under a `READ_ONLY` filesystem or `STRICT` mode is
+rejected, and a deny-list subtracts from the mode's baseline toolset rather
+than re-enabling everything else (only `PERMISSIVE`, whose baseline is every
+tool, uses the SDK's `disabled_tools` route).
 
 ## Rejected inputs
 
@@ -57,9 +61,10 @@ surface to honor, rather than dropping them silently.
 
 | Field | Claude | Codex | Antigravity |
 |-------|--------|-------|-------------|
-| `budget_usd` | Mapped (`max_budget_usd`) | Rejected | Rejected |
+| `budget_usd` | Mapped (`max_budget_usd`, fails closed under SDK drift) | Rejected | Rejected |
+| `reasoning_effort` | Mapped (`effort`) | Mapped (`effort`) | Rejected (no SDK surface) |
 | `permissions.network` | Rejected | Rejected | Rejected |
-| `allowed_tools` / `disallowed_tools` | Mapped | Rejected | Mapped (`disallowed_tools` → `disabled_tools`); allow-list and deny-list are mutually exclusive and rejected if combined |
+| `allowed_tools` / `disallowed_tools` | Mapped | Rejected | Mapped; deny-lists subtract from the mode's baseline (only `PERMISSIVE` uses `disabled_tools`), and allow-list plus deny-list together is rejected |
 | `mcp_servers` | Mapped | Rejected (no per-task MCP) | Mapped, without per-server `env` |
 
 Two task fields are informational only and not enforced by any built-in adapter:

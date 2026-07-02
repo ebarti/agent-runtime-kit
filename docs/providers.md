@@ -26,14 +26,23 @@ to the exact missing extra.
 ## Runtime Notes
 
 All three adapters map the task's system prompt (Claude `system_prompt`, Codex
-`developer_instructions`, Antigravity `system_instructions`) and the `model` /
-`reasoning_effort` fields (falling back to the `metadata` aliases of the same
-names).
+`developer_instructions`, Antigravity `system_instructions`) and the `model`
+field (falling back to the `metadata` aliases of the same names).
+`reasoning_effort` maps to the Claude and Codex `effort` options; Antigravity
+has no reasoning-effort control and rejects the first-class field with a typed
+error (its legacy `metadata["reasoning_effort"]` alias stays ignored, as it
+always has been). Effort values are passed through to the vendor SDK rather
+than validated by this library — each vendor defines its own accepted
+vocabulary (for example `claude-agent-sdk` 0.2.x accepts
+`low`/`medium`/`high`/`xhigh`/`max`), and an SDK too old to accept `effort` at
+all records the drop in `AgentResult.metadata["dropped_options"]`.
 
 Claude uses the `claude-agent-sdk` package and maps working directory,
 permissions, filesystem access (a `READ_ONLY` filesystem forces `plan` mode),
 MCP servers, sessions, structured output, tool allow/deny lists, runtime
-environment, and budget where supported by the installed SDK. It streams
+environment, and budget (a requested `budget_usd` fails closed with a typed
+error if the installed SDK stops accepting `max_budget_usd`, so a spend cap
+can never silently vanish). It streams
 incremental output and tool events while the SDK runs, and sets
 `finish_reason="max_turns"` when a turn is truncated by the max-turns limit.
 The effective vendor `permission_mode` is reported in
