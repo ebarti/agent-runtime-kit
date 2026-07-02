@@ -33,6 +33,7 @@ class FakeClaudeOptions:
     mcp_servers: dict[str, Any] | None = None
     resume: str | None = None
     max_budget_usd: float | None = None
+    effort: str | None = None
     output_format: dict[str, Any] | None = None
     setting_sources: list[str] | None = None
     env: dict[str, str] | None = None
@@ -469,6 +470,40 @@ async def test_claude_builds_full_request(tmp_path: Path) -> None:
         "schema": {"type": "object", "properties": {}},
     }
     assert options.mcp_servers["fs"]["type"] == "stdio"
+
+
+@pytest.mark.asyncio
+async def test_claude_maps_reasoning_effort_to_effort() -> None:
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant("ok"), result_message()]),
+        options_cls=FakeClaudeOptions,
+    )
+
+    await runtime.run(AgentTask(goal="x", reasoning_effort="xhigh"))
+
+    assert RECORDED["options"].effort == "xhigh"
+
+
+@pytest.mark.asyncio
+async def test_claude_reasoning_effort_drop_is_recorded_not_fatal() -> None:
+    # effort is a quality preference: an SDK that predates effort= must record
+    # the drop, not fail the run (unlike permission/budget drift).
+    @dataclass
+    class NoEffortOptions:
+        model: str | None = None
+        permission_mode: str | None = None
+        allowed_tools: list[str] = field(default_factory=list)
+        disallowed_tools: list[str] = field(default_factory=list)
+
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant("ok"), result_message()]),
+        options_cls=NoEffortOptions,
+    )
+
+    result = await runtime.run(AgentTask(goal="x", reasoning_effort="high"))
+
+    assert result.error is None
+    assert "effort" in result.metadata["dropped_options"]
 
 
 @pytest.mark.asyncio

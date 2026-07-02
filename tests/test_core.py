@@ -57,6 +57,21 @@ def test_registry_accepts_namespaced_third_party_kind() -> None:
     assert isinstance(runtime, FakeAgentRuntime)
 
 
+def test_agent_task_model_fields_are_keyword_only() -> None:
+    from pathlib import Path
+
+    # model/reasoning_effort were inserted mid-dataclass; kw_only keeps the
+    # positional layout that predates them, so the fourth positional argument is
+    # still working_directory (not model).
+    task = AgentTask("goal", "task-1", "system prompt", Path("/tmp"))
+
+    assert task.system == "system prompt"
+    assert task.working_directory == Path("/tmp")
+    assert task.model is None
+    assert task.reasoning_effort is None
+    assert AgentTask("g", model="m-1", reasoning_effort="high").model == "m-1"
+
+
 def test_finish_reason_enum_compares_as_string() -> None:
     result = AgentResult(output="x", finish_reason=FinishReason.FAILED)
 

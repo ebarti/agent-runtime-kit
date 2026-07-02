@@ -1025,6 +1025,18 @@ async def test_antigravity_explicit_vertex_beats_ambient_api_key(
 
 
 @pytest.mark.asyncio
+async def test_antigravity_rejects_reasoning_effort(tmp_path: Path) -> None:
+    # No LocalAgentConfig field maps onto reasoning effort, so the first-class
+    # task field must raise instead of silently no-oping.
+    runtime = make_runtime(data_dir=tmp_path)
+
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(AgentTask(goal="task", reasoning_effort="high"))
+
+    assert exc_info.value.field == "reasoning_effort"
+
+
+@pytest.mark.asyncio
 async def test_antigravity_rejects_allow_and_deny_list_together(tmp_path: Path) -> None:
     runtime = make_runtime(data_dir=tmp_path)
 

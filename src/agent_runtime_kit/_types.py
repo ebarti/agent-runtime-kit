@@ -257,9 +257,11 @@ class AgentTask:
     system: str | None = None
     # First-class model / reasoning-effort selection. Adapters prefer these over the
     # legacy metadata["model"] / metadata["reasoning_effort"] aliases, which are kept
-    # working for back-compat.
-    model: str | None = None
-    reasoning_effort: str | None = None
+    # working for back-compat. kw_only so inserting them here does not shift the
+    # positional layout that predates them (goal, task_id, system,
+    # working_directory, ...).
+    model: str | None = field(default=None, kw_only=True)
+    reasoning_effort: str | None = field(default=None, kw_only=True)
     working_directory: Path | None = None
     mcp_servers: tuple[McpServerConfig, ...] = ()
     permissions: PermissionProfile = field(default_factory=PermissionProfile)

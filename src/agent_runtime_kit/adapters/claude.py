@@ -346,6 +346,12 @@ class ClaudeAgentRuntime:
             kwargs["resume"] = task.session_id
         if task.budget_usd is not None:
             kwargs["max_budget_usd"] = task.budget_usd
+        effort = task.reasoning_effort or metadata_str(metadata, "reasoning_effort")
+        if effort:
+            # claude-agent-sdk >= 0.2.87 accepts effort=. On older SDKs the drop is
+            # recorded, not fatal: effort is a quality preference, unlike the
+            # security/spend kwargs enforced above.
+            kwargs["effort"] = effort
         output_schema = output_schema_from(task.output_schema, metadata)
         if output_schema is not None:
             kwargs["output_format"] = {"type": "json_schema", "schema": dict(output_schema)}

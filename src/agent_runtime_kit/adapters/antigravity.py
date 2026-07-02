@@ -154,6 +154,17 @@ class AntigravityAgentRuntime:
             reject_unsupported_inputs(
                 self.kind, task, budget=True, network=True, tool_filters=False
             )
+            if task.reasoning_effort:
+                # LocalAgentConfig exposes no reasoning/thinking-effort control
+                # (google-antigravity 0.1.x), so the first-class field must not
+                # silently no-op. The legacy metadata alias stays ignored, as it
+                # always has been for this adapter.
+                raise UnsupportedTaskInputError(
+                    self.kind,
+                    "reasoning_effort",
+                    "google-antigravity exposes no reasoning-effort control; "
+                    "unset reasoning_effort for this runtime",
+                )
             model = self._model(task)
             ensure_supported_model(
                 kind=self.kind,
