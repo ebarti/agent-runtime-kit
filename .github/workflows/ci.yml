@@ -96,8 +96,10 @@ jobs:
           python-version: "3.10"
 
       - name: Install at floor resolution and run tests
+        # --clear: setup-uv pre-creates .venv when python-version is set, and a
+        # bare `uv venv` refuses to overwrite it.
         run: |
-          uv venv
+          uv venv --clear
           uv pip install --resolution lowest-direct --prerelease=allow ".[all]"
           uv pip install "pytest>=8.0" "pytest-asyncio>=0.23"
           .venv/bin/python -m pytest -q

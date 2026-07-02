@@ -72,6 +72,13 @@ dev = [
 ]
 
 [tool.uv]
+# Supply-chain freshness delay: never resolve releases younger than 8 days, so a
+# freshly compromised upload cannot reach the lockfile before the ecosystem has
+# had time to notice. Committed here (not just a developer env var) so CI and
+# every contributor resolve under the same policy and `uv sync --locked` agrees
+# everywhere. The SDK-evolution agent strips env-level cutoffs for its refresh
+# preview; this project-level floor still applies to what it may lock.
+exclude-newer = "8 days"
 # openai-codex-cli-bin ships per-platform binary wheels; require the platforms we
 # develop and run CI on so resolution never locks a version missing one of them.
 required-environments = [
