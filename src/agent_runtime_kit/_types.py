@@ -6,8 +6,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
+
+
+def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return a read-only copy so a frozen model can't be mutated via a shared dict.
+
+    The dataclasses are ``frozen=True``, but a ``Mapping`` field still stored the
+    caller's dict by reference — mutating that dict afterward mutated the "frozen"
+    model. Copying into a ``MappingProxyType`` closes that leak.
+    """
+
+    return MappingProxyType(dict(value))
 
 
 class AgentRuntimeKind(str, Enum):
@@ -115,7 +127,6 @@ class AgentCapabilities:
     structured_output: bool = False
     streaming: bool = False
     tool_audit: bool = False
-    sdk_turn_limit: bool = False
     cancellation: bool = False
 
 
@@ -130,6 +141,9 @@ class RuntimeAvailability:
     package: str | None = None
     version: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
 
     @classmethod
     def ok(
@@ -183,6 +197,9 @@ class McpServerConfig:
     args: tuple[str, ...] = ()
     env: Mapping[str, str] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "env", _freeze_mapping(self.env))
+
 
 @dataclass(frozen=True)
 class PermissionProfile:
@@ -205,6 +222,9 @@ class ToolCallAudit:
     status: str = "ok"
     duration_ms: int = 0
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "arguments", _freeze_mapping(self.arguments))
+
 
 @dataclass(frozen=True)
 class ArtifactRef:
@@ -213,6 +233,9 @@ class ArtifactRef:
     uri: str
     kind: str = "file"
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
 
 
 @dataclass(frozen=True)
@@ -276,6 +299,11 @@ class AgentTask:
     output_schema: Mapping[str, Any] | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
+        if self.output_schema is not None:
+            object.__setattr__(self, "output_schema", _freeze_mapping(self.output_schema))
+
 
 @dataclass(frozen=True)
 class AgentResult:
@@ -291,6 +319,9 @@ class AgentResult:
     session_id: str | None = None
     rounds: int = 0
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
 
     @property
     def cost_usd(self) -> float:

@@ -72,6 +72,18 @@ def test_agent_task_model_fields_are_keyword_only() -> None:
     assert AgentTask("g", model="m-1", reasoning_effort="high").model == "m-1"
 
 
+def test_agent_task_does_not_leak_caller_mapping() -> None:
+    source = {"model": "x"}
+    task = AgentTask(goal="g", metadata=source)
+
+    # Mutating the caller's dict must not mutate the frozen task, and the field
+    # itself must be read-only.
+    source["model"] = "mutated"
+    assert task.metadata["model"] == "x"
+    with pytest.raises(TypeError):
+        task.metadata["model"] = "nope"  # type: ignore[index]
+
+
 def test_finish_reason_enum_compares_as_string() -> None:
     result = AgentResult(output="x", finish_reason=FinishReason.FAILED)
 

@@ -743,7 +743,8 @@ async def test_stage_execution_uses_agent_task_runtime_primitives(tmp_path: Path
 
     assert output["uncertainty"] == []
     assert isinstance(runtime.task, AgentTask)
-    assert runtime.task.output_schema is DIRECTION_ANALYSIS_SCHEMA
+    # AgentTask copies mapping fields into a read-only proxy, so compare by value.
+    assert runtime.task.output_schema == DIRECTION_ANALYSIS_SCHEMA
     assert runtime.task.working_directory == tmp_path
     assert runtime.task.permissions.filesystem is FilesystemAccess.READ_ONLY
     assert runtime.task.metadata["stage"] == "direction-analysis"
