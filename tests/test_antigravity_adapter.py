@@ -206,7 +206,11 @@ async def test_antigravity_runtime_runs_with_injected_sdk(tmp_path: Path) -> Non
     assert result.output == "done: task"
     assert result.parsed_output == {"ok": True}
     assert result.session_id == "ag-session"
+    # ToolCall + its ToolResult must collapse into ONE completed audit entry,
+    # not a requested/ok pair — this is the cardinality contract.
+    assert len(result.tool_calls) == 1
     assert result.tool_calls[0].tool_name == "Read"
+    assert result.tool_calls[0].status == "ok"
     assert result.usage.input_tokens == 4
     assert sink.events[-1]["name"] == "agent.task.completed"
     assert FakeAgent.last_config is not None
@@ -231,6 +235,27 @@ async def test_antigravity_counts_requested_tool_call_without_result(
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].tool_name == "Search"
     assert result.tool_calls[0].status == "requested"
+
+
+@pytest.mark.asyncio
+async def test_antigravity_tool_result_without_args_keeps_requested_arguments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def argless_result(prompt: str):
+        yield FakeTypes.ToolCall("Read", {"path": "README.md"})
+        # ToolResult chunks may omit args entirely.
+        yield FakeTypes.ToolResult("Read", "contents")
+
+    monkeypatch.setattr(FakeAgent, "chunks_factory", staticmethod(argless_result))
+    runtime = make_runtime(data_dir=tmp_path)
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].status == "ok"
+    # The merged audit keeps the request-time arguments instead of degrading
+    # to an empty mapping when the result chunk carries none.
+    assert result.tool_calls[0].arguments == {"path": "README.md"}
 
 
 @pytest.mark.asyncio

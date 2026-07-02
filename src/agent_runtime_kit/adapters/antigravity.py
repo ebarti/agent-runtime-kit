@@ -815,12 +815,23 @@ def _attach_tool_result(tool_calls: list[ToolCallAudit], result_audit: ToolCallA
 
     Keeps result.tool_calls one-entry-per-invocation: a ToolCall recorded the
     pending audit; its ToolResult replaces it here rather than adding a duplicate.
+    Vendor chunks carry no correlation id, so matching is by tool name against
+    the most recent pending call — exact for the sequential call/result pattern
+    the SDK emits, best-effort if same-name calls ever interleave.
     """
 
     for index in range(len(tool_calls) - 1, -1, -1):
         existing = tool_calls[index]
         if existing.status == "requested" and existing.tool_name == result_audit.tool_name:
-            tool_calls[index] = result_audit
+            tool_calls[index] = ToolCallAudit(
+                tool_name=result_audit.tool_name,
+                # ToolResult chunks may omit args; keep the request-time arguments
+                # rather than degrading the audit to an empty mapping.
+                arguments=result_audit.arguments or existing.arguments,
+                result_preview=result_audit.result_preview,
+                status=result_audit.status,
+                duration_ms=result_audit.duration_ms,
+            )
             return
     tool_calls.append(result_audit)
 
