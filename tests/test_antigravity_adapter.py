@@ -255,6 +255,48 @@ async def test_antigravity_max_tokens_stop_reason_fails(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_antigravity_unknown_stop_reason_fails_not_done(tmp_path: Path) -> None:
+    # SAFETY (or any unrecognized future stop reason) must surface as a failure,
+    # never as a silent successful completion of the partial text.
+    class BlockedResponse:
+        def __init__(self, prompt: str) -> None:
+            self.chunks = _chunks(prompt)
+            self.usage_metadata = FakeUsage()
+            self.finish_reason = "SAFETY"
+
+        async def structured_output(self) -> None:
+            return None
+
+    class BlockedAgent:
+        def __init__(self, config: FakeConfig) -> None:
+            self.conversation_id = "ag-session"
+
+        async def __aenter__(self) -> BlockedAgent:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def chat(self, prompt: str) -> BlockedResponse:
+            return BlockedResponse(prompt)
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=BlockedAgent,
+        config_cls=FakeConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.finish_reason == "failed"
+    assert result.error is not None
+    assert "SAFETY" in result.error
+
+
+@pytest.mark.asyncio
 async def test_antigravity_skips_structured_output_without_schema(tmp_path: Path) -> None:
     class StrictResponse:
         def __init__(self, prompt: str) -> None:
