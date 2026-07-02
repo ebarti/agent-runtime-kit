@@ -64,6 +64,11 @@ def test_finish_reason_enum_compares_as_string() -> None:
     assert result.finish_reason == FinishReason.FAILED
     assert result.finish_reason == "failed"
     assert AgentResult(output="x").finish_reason == FinishReason.DONE
+    # And it renders as its value everywhere, on 3.10 and 3.11+ alike — event
+    # summaries interpolate finish_reason and must never show "FinishReason.FAILED".
+    assert str(FinishReason.FAILED) == "failed"
+    assert f"{FinishReason.FAILED}" == "failed"
+    assert format(FinishReason.FAILED) == "failed"
 
 
 def test_coerce_returns_namespaced_string_and_rejects_blank() -> None:

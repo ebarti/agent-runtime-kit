@@ -74,6 +74,14 @@ class FinishReason(str, Enum):
     ``== "failed"`` both hold) instead of matching bare string literals.
     """
 
+    # StrEnum semantics on every supported Python: without this, Python >= 3.11
+    # renders f"{FinishReason.FAILED}" as "FinishReason.FAILED" instead of
+    # "failed", leaking the enum name into event summaries and logs. Same
+    # assignments CPython's own StrEnum uses; typeshed's str.__format__
+    # self-type does not line up with Enum's, hence the ignore.
+    __str__ = str.__str__
+    __format__ = str.__format__  # type: ignore[assignment]
+
     DONE = "done"
     FAILED = "failed"
     MAX_TURNS = "max_turns"
