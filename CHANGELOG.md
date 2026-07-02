@@ -62,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Vendor SDK dependencies now carry pre-1.0 upper bounds (`claude-agent-sdk<0.3`,
   `openai-codex<0.2`, `google-antigravity<0.2`) so a breaking upstream minor
   cannot reach fresh installs before adapters are revalidated.
+- BREAKING: permission-critical SDK options fail closed under vendor drift. If
+  the installed SDK cannot accept Claude's `permission_mode` (or a requested
+  tool allow/deny list), Codex's `sandbox`/`approval_mode`, or Antigravity's
+  `capabilities`/`policies`/workspace scoping, `run()` raises
+  `UnsupportedTaskInputError` instead of silently running under the SDK's
+  default (more permissive) posture. Non-security drift is still tolerated and
+  recorded in `AgentResult.metadata["dropped_options"]`.
 
 - Installation docs now lead with `agent-runtime-kit[all]` for the easiest
   full-provider setup and explain provider extras as dependency isolation, not a
