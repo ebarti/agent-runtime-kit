@@ -27,7 +27,9 @@ import the names from the top-level package instead.
   for forward-compatibility, so new reasons can be added without a type break;
   compare against `FinishReason` members rather than bare literals.
 - **Result/task mappings are read-only.** `AgentTask`/`AgentResult` copy `Mapping`
-  fields into read-only proxies; treat them as immutable and compare by value.
+  fields into read-only dicts at construction; treat them as immutable and compare
+  by value. They remain plain `dict` subclasses, so `dataclasses.asdict`, `pickle`,
+  `copy.deepcopy`, and JSON serialization keep working.
 - **Unsupported inputs raise, they are not dropped.** An adapter that cannot honor
   a task field raises `UnsupportedTaskInputError`; the one exception is
   vendor-option drift, which is recorded in
@@ -40,7 +42,10 @@ The vendor SDK extras are pinned with cautious upper bounds (e.g.
 have shipped breaking changes within a minor series. The bounds are raised
 deliberately — after the contract tests and the SDK-evolution agent verify a new
 version — rather than left unbounded. A weekly CI lane installs the latest vendor
-SDKs so upstream drift surfaces before it reaches installed users.
+SDKs *within the declared caps*, so drift inside an allowed range surfaces before
+it reaches installed users; a release above a cap is by design invisible to that
+lane until the cap is raised. A separate lane installs every direct dependency at
+its declared floor so a stale minimum cannot sit undetected in the metadata.
 
 ## Deprecation
 
