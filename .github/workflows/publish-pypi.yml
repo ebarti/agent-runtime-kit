@@ -18,60 +18,60 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  test:
-    name: test (py${{ matrix.python-version }}, ${{ matrix.extras }})
+  build:
+    name: Verify and build distributions
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     env:
       RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # Re-run the full CI matrix at the release ref, not a 2-combo subset, so a
-        # release cannot ship a combination that main CI would have failed.
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-        extras: [core, all]
 
     steps:
-      - name: Check out release tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Sync dependencies
-        # --locked: a release must be tested against exactly the committed lockfile.
+      - name: Verify the tag exists (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ matrix.extras }}" = "all" ]; then
-            uv sync --locked --all-extras
-          else
-            uv sync --locked
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --silent; then
+            echo "::error::tag ${RELEASE_TAG} does not exist; create the release first:"
+            echo "::error::  gh release create ${RELEASE_TAG} --target main --generate-notes"
+            exit 1
           fi
 
-      - name: Ruff
-        run: uv run ruff check .
-
-      - name: Mypy
-        run: uv run mypy
-
-      - name: Pytest
-        run: uv run pytest -q
-
-  build:
-    name: Build distributions
-    needs: test
-    runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
-
-    steps:
       - name: Check out release tag
         uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      # The full test matrix is deliberately NOT re-run here. Releases may only
+      # be cut from commits on main, and main's CI already ran the exact matrix
+      # at that commit — re-running it on publish doubles the Actions spend for
+      # zero new signal. The two checks below encode that gate; the smoke test
+      # afterward validates the one thing main CI never sees: the built wheel.
+      - name: Require the release commit to be on main
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::${RELEASE_TAG} points at a commit that is not on main;" \
+              "releases are cut from main because its CI is the release gate"
+            exit 1
+          fi
+
+      - name: Require green CI on the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          conclusion=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=10" \
+            --jq '[.workflow_runs[] | select(.status == "completed")][0].conclusion // "missing"')
+          if [ "${conclusion}" != "success" ]; then
+            echo "::error::CI at ${sha} is '${conclusion}', not 'success'." \
+              "Wait for CI on main to finish (or fix it) before releasing."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -97,11 +97,30 @@ jobs:
               )
           PY
 
-      - name: Install build backend
-        run: python -m pip install --upgrade build
+      - name: Install build tools
+        run: python -m pip install --upgrade build twine
 
       - name: Build wheel and sdist
         run: python -m build
+
+      - name: Check distribution metadata
+        run: python -m twine check --strict dist/*
+
+      - name: Smoke test the built wheel
+        # The dependency-free core promise, checked on the artifact itself: the
+        # wheel installs into a bare venv and imports with zero dependencies.
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          /tmp/smoke/bin/python - <<'PY'
+          import importlib.metadata
+
+          import agent_runtime_kit as ark
+
+          task = ark.AgentTask(goal="smoke")
+          assert task.permissions.mode is ark.PermissionMode.DEFAULT
+          print("wheel imports ok:", importlib.metadata.version("agent-runtime-kit"))
+          PY
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4
