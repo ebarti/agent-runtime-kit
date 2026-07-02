@@ -96,8 +96,9 @@ jobs:
           python-version: "3.10"
 
       - name: Install at floor resolution and run tests
-        # --clear: setup-uv pre-creates .venv when python-version is set, and a
-        # bare `uv venv` refuses to overwrite it.
+        # --clear: harmless when .venv is absent (setup-uv >= 6 no longer
+        # pre-creates one for python-version=), and still guards against any
+        # pre-existing venv left behind by a cache restore.
         run: |
           uv venv --clear
           uv pip install --resolution lowest-direct --prerelease=allow ".[all]"
