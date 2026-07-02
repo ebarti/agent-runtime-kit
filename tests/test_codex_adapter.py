@@ -541,6 +541,29 @@ async def test_codex_interrupted_status_maps_to_interrupted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_codex_in_progress_status_fails_closed() -> None:
+    # The real SDK's TurnStatus includes the non-terminal "inProgress"; a run that
+    # ends in it must not report success with partial output.
+    runtime = make_runtime({"status": "inProgress", "final_response": "partial"})
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.finish_reason == "failed"
+    assert "inProgress" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_codex_unknown_status_fails_closed() -> None:
+    # A status value added by a future SDK must fail closed, not read as success.
+    runtime = make_runtime({"status": "cancelled", "final_response": "partial"})
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.finish_reason == "failed"
+    assert "cancelled" in (result.error or "")
+
+
+@pytest.mark.asyncio
 async def test_codex_builds_tool_audits_from_items() -> None:
     run_result = {
         "status": "completed",

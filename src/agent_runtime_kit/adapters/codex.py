@@ -441,6 +441,20 @@ def _translate_run_result(
             rounds=1,
             metadata=metadata,
         )
+    if status not in (None, "", "completed"):
+        # Fail closed on any other status: the SDK's non-terminal "inProgress" and
+        # whatever statuses a future SDK adds must not read as success with partial
+        # output (mirrors Antigravity, where unknown stop reasons map to failed).
+        return AgentResult(
+            output=output,
+            finish_reason="failed",
+            error=_turn_error(raw_result) or f"Codex turn ended with unexpected status {status!r}",
+            usage=usage,
+            tool_calls=tool_calls,
+            session_id=session_id,
+            rounds=1,
+            metadata=metadata,
+        )
 
     # status is "completed" or missing (dict-based fakes): treat as success and keep
     # the empty-output and schema-parse-failure branches.
