@@ -294,6 +294,67 @@ async def test_codex_runtime_evicts_reused_process_after_cancellation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_codex_queued_run_cancel_does_not_evict_in_flight_client() -> None:
+    # Regression for the run-lock/eviction ordering: a run() cancelled while it is
+    # still QUEUED on the run lock must not evict the client the in-flight holder is
+    # using. This fails if the try/except that evicts on cancellation wraps the lock
+    # acquisition (a queued waiter's CancelledError would then close the holder's
+    # shared app-server); it passes when eviction happens inside the held lock.
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingThread(FakeThread):
+        async def run(self, prompt: str, **kwargs: Any) -> Any:
+            entered.set()
+            await release.wait()
+            return {"status": "completed", "final_response": f"done: {prompt}"}
+
+    class BlockingCodex(FakeCodex):
+        async def thread_start(self, **kwargs: Any) -> FakeThread:
+            return BlockingThread("thread-new")
+
+        async def thread_resume(self, thread_id: str, **kwargs: Any) -> FakeThread:
+            return BlockingThread(thread_id)
+
+    def codex_factory(*, config: FakeCodexConfig) -> FakeCodex:
+        return BlockingCodex(config)
+
+    runtime = CodexAgentRuntime(
+        codex_cls=codex_factory,
+        config_cls=FakeCodexConfig,
+        sandbox_cls=FakeSandbox,
+        approval_mode_cls=FakeApprovalMode,
+        reuse_process=True,
+    )
+
+    task_a = asyncio.create_task(runtime.run(AgentTask(goal="A")))
+    await asyncio.wait_for(entered.wait(), timeout=1.0)  # A holds the run lock, mid-run
+
+    task_b = asyncio.create_task(runtime.run(AgentTask(goal="B")))
+    for _ in range(1000):
+        await asyncio.sleep(0)
+        if runtime._codex_run_lock.locked() and runtime._codex_run_lock._waiters:
+            break
+    assert runtime._codex_run_lock._waiters, "precondition: B must be queued on the run lock"
+
+    task_b.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task_b
+
+    # B's queued cancellation must not have touched A's shared client.
+    assert len(FakeCodex.instances) == 1, "B must not have started a second app-server"
+    assert FakeCodex.instances[0].closed is False
+
+    release.set()
+    result = await asyncio.wait_for(task_a, timeout=1.0)
+    assert result.error is None
+    assert result.output == "done: A"
+    assert FakeCodex.instances[0].closed is False
+
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
 async def test_codex_runtime_closes_context_after_enter_failure() -> None:
     FakeCodex.enter_errors = [RuntimeError("enter failed"), None]
     runtime = make_runtime(reuse_process=True)
