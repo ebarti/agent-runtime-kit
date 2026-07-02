@@ -41,15 +41,19 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-claude = ["claude-agent-sdk>=0.2.87"]
+# Cautious upper bounds on the pre-1.0 vendor SDKs: they move fast and have shipped
+# breaking changes within a minor series, so cap each at the next minor to protect
+# already-installed users from a surprise vendor release. The sdk-evolution agent
+# raises these deliberately after verifying a new version.
+claude = ["claude-agent-sdk>=0.2.87,<0.3"]
 # 0.1.0b3 floor: earlier betas pin a codex binary with no manylinux wheels,
 # making the extra uninstallable on glibc Linux.
-codex = ["openai-codex>=0.1.0b3"]
-antigravity = ["google-antigravity>=0.1.2"]
+codex = ["openai-codex>=0.1.0b3,<0.2"]
+antigravity = ["google-antigravity>=0.1.2,<0.2"]
 all = [
-    "claude-agent-sdk>=0.2.87",
-    "google-antigravity>=0.1.2",
-    "openai-codex>=0.1.0b3",
+    "claude-agent-sdk>=0.2.87,<0.3",
+    "google-antigravity>=0.1.2,<0.2",
+    "openai-codex>=0.1.0b3,<0.2",
 ]
 
 [project.urls]
@@ -87,6 +91,7 @@ include = [
     "tests",
     "examples",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "pyproject.toml",
     "docs/capability-matrix.md",
