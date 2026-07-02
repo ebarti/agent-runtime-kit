@@ -111,6 +111,34 @@ def test_events_redact_camelcase_secret_keys() -> None:
     assert metadata["session_id"] == "sess-1"
 
 
+def test_events_redact_smashed_case_token_keys() -> None:
+    event = task_started_event(
+        AgentTask(
+            goal="x",
+            metadata={
+                # No separator and no camelCase boundary: these never split into a
+                # bare "token" segment, so they slipped through before the suffix rule.
+                "accesstoken": "a",
+                "ACCESSTOKEN": "b",
+                "sessiontoken": "c",
+                "token": "d",
+                # Smashed plural counts stay visible ("...tokens", not "token").
+                "inputtokens": 11,
+                "totaltokens": 22,
+            },
+        ),
+        "fake",
+    )
+
+    metadata = event["attributes"]["metadata"]
+    assert metadata["accesstoken"] == "[redacted]"
+    assert metadata["ACCESSTOKEN"] == "[redacted]"
+    assert metadata["sessiontoken"] == "[redacted]"
+    assert metadata["token"] == "[redacted]"
+    assert metadata["inputtokens"] == 11
+    assert metadata["totaltokens"] == 22
+
+
 def test_event_construction_survives_cyclic_metadata() -> None:
     cyclic: dict[str, object] = {"self": None}
     cyclic["self"] = cyclic

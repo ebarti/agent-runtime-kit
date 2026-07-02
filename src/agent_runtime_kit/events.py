@@ -266,4 +266,10 @@ def _is_sensitive_key(key: str) -> bool:
     if any(part in normalized for part in SENSITIVE_KEY_SUBSTRINGS):
         return True
     segments = normalized.split("_")
-    return any(segment in segments for segment in SENSITIVE_KEY_SEGMENTS)
+    if any(segment in segments for segment in SENSITIVE_KEY_SEGMENTS):
+        return True
+    # Smashed-case keys with no separator (e.g. "accesstoken", "ACCESSTOKEN") never
+    # split into a bare segment, so also match a sensitive segment as a trailing
+    # suffix. This still keeps plural usage counters visible ("inputtokens" ends with
+    # "tokens", not "token").
+    return any(normalized.endswith(segment) for segment in SENSITIVE_KEY_SEGMENTS)
