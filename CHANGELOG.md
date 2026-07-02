@@ -59,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   combining a `READ_ONLY` filesystem with non-read-only `allowed_tools` is
   rejected instead of silently granted, and vendor stop reasons map to
   `max_tokens`/`failed` finish reasons.
+- BREAKING: Antigravity deny-lists can no longer re-enable write tools under a
+  `READ_ONLY` filesystem or `STRICT` mode. `disabled_tools` means "enable
+  everything else", so those postures now combine both constraints instead:
+  the read-only toolset minus the denied tools.
 - Vendor SDK dependencies now carry pre-1.0 upper bounds (`claude-agent-sdk<0.3`,
   `openai-codex<0.2`, `google-antigravity<0.2`) so a breaking upstream minor
   cannot reach fresh installs before adapters are revalidated.
