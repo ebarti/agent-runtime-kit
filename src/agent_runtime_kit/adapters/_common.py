@@ -106,13 +106,15 @@ def parse_json_output(output: str) -> Any | None:
 
 
 def structured_output_unsatisfied_error(sdk_label: str) -> str:
-    """Uniform error text when a requested ``output_schema`` was not satisfied.
+    """Uniform error text when a requested ``output_schema`` produced no JSON.
 
-    Kept in one place so all three adapters fail identically instead of each
-    inventing its own message (and, previously, its own success/failure verdict).
+    The adapters verify JSON-parseability, not schema conformance (validation
+    stays with the vendor SDK and the caller), so the message claims exactly
+    that. Kept in one place so all three adapters fail identically instead of
+    each inventing its own message (and, previously, its own verdict).
     """
 
-    return f"{sdk_label} returned output that did not satisfy the requested output_schema"
+    return f"{sdk_label} returned no parseable JSON for the requested output_schema"
 
 
 def empty_completion_error(sdk_label: str) -> str:
