@@ -171,14 +171,26 @@ def reject_unsupported_inputs(
 
 
 def filter_supported_kwargs(
-    factory: Any, kwargs: Mapping[str, Any]
+    factory: Any,
+    kwargs: Mapping[str, Any],
+    *,
+    required: Iterable[str] = (),
+    kind: AgentRuntimeKind | str | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Split kwargs into those the constructor accepts and those it does not.
+    """Split kwargs into those the callable accepts and those it does not.
 
     This exists to tolerate vendor option drift: a future SDK version may rename or
     remove an option this adapter builds. Rather than crash, unsupported keys are
     dropped, but drops must be observable, so the dropped key names are returned
     alongside the accepted kwargs and surfaced in ``AgentResult.metadata``.
+
+    ``required`` names the kwargs that carry the task's requested security posture
+    (sandbox, approval/permission mode, tool filters). Best-effort dropping is the
+    wrong failure mode there — the run would silently proceed with MORE access
+    than the caller asked for — so drift on a required key fails closed with
+    ``UnsupportedTaskInputError`` (``kind`` is needed for that error). Signatures
+    that cannot be introspected pass everything through, which also fails closed:
+    a truly unsupported kwarg then raises ``TypeError`` inside the SDK call.
     """
 
     try:
@@ -194,6 +206,17 @@ def filter_supported_kwargs(
             supported[key] = value
         else:
             dropped.append(key)
+    required_dropped = sorted(set(required) & set(dropped))
+    if required_dropped:
+        if kind is None:
+            raise TypeError("filter_supported_kwargs(required=...) also requires kind")
+        raise UnsupportedTaskInputError(
+            kind,
+            "permissions",
+            "the installed SDK does not accept "
+            + ", ".join(required_dropped)
+            + "; refusing to run with a weaker security posture than the task requested",
+        )
     return supported, dropped
 
 

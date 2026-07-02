@@ -67,7 +67,9 @@ Two task fields are informational only and not enforced by any built-in adapter:
 
 Claude additionally records any vendor-option kwargs it had to drop due to SDK
 drift in `AgentResult.metadata["dropped_options"]`, so silent omission stays
-observable.
+observable. Permission-critical options are exempt from that drift tolerance:
+when the installed SDK cannot accept them, the run fails with a typed error
+rather than running with weaker permissions than requested.
 
 ## Session storage (Antigravity)
 

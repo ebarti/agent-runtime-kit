@@ -51,6 +51,9 @@ _DYNAMIC_ITEM = "dynamicToolCall"
 _WEB_SEARCH_ITEM = "webSearch"
 # Vendor status values (camelCase) that mean the invocation did not succeed.
 _TOOL_ERROR_STATUSES = frozenset({"failed", "declined"})
+# Kwargs that carry the task's requested security posture. Vendor drift on these
+# must fail closed rather than silently run under the SDK's default sandbox.
+_SECURITY_KWARGS = ("approval_mode", "sandbox")
 
 logger = logging.getLogger(__name__)
 
@@ -350,7 +353,9 @@ class CodexAgentRuntime:
         effort = metadata_str(task.metadata, "reasoning_effort")
         if effort:
             run_kwargs["effort"] = effort
-        run_supported, run_dropped = filter_supported_kwargs(thread.run, run_kwargs)
+        run_supported, run_dropped = filter_supported_kwargs(
+            thread.run, run_kwargs, required=_SECURITY_KWARGS, kind=self.kind
+        )
         raw_result = await thread.run(task.goal, **run_supported)
         return thread, raw_result, dropped + [k for k in run_dropped if k not in dropped]
 
@@ -420,9 +425,13 @@ class CodexAgentRuntime:
         }
         thread_id = task.resume_from.session_id if task.resume_from is not None else task.session_id
         if thread_id:
-            supported, dropped = filter_supported_kwargs(codex.thread_resume, kwargs)
+            supported, dropped = filter_supported_kwargs(
+                codex.thread_resume, kwargs, required=_SECURITY_KWARGS, kind=self.kind
+            )
             return await codex.thread_resume(thread_id, **supported), dropped
-        supported, dropped = filter_supported_kwargs(codex.thread_start, kwargs)
+        supported, dropped = filter_supported_kwargs(
+            codex.thread_start, kwargs, required=_SECURITY_KWARGS, kind=self.kind
+        )
         return await codex.thread_start(**supported), dropped
 
     def _model(self, task: AgentTask) -> str:

@@ -499,6 +499,80 @@ async def test_codex_tolerates_config_option_drift() -> None:
     assert "config_overrides" in result.metadata["dropped_options"]
 
 
+class RestrictedRunThread:
+    """Thread whose run() signature lost the sandbox/approval_mode params."""
+
+    def __init__(self) -> None:
+        self.id = "thread-restricted"
+
+    async def run(self, prompt: str, *, cwd: str | None = None, model: str | None = None) -> Any:
+        raise AssertionError("run() must not be reached when the sandbox cannot be honored")
+
+
+class RestrictedRunCodex(FakeCodex):
+    async def thread_start(self, **kwargs: Any) -> Any:
+        FakeCodex.last_started_kwargs = kwargs
+        return RestrictedRunThread()
+
+
+@pytest.mark.asyncio
+async def test_codex_fails_closed_when_sdk_drops_sandbox_from_run() -> None:
+    # Security posture must never be best-effort: if the installed SDK's
+    # thread.run() no longer accepts sandbox/approval_mode, refuse to run
+    # instead of silently executing under the SDK default sandbox.
+    def codex_factory(*, config: FakeCodexConfig) -> FakeCodex:
+        return RestrictedRunCodex(config)
+
+    runtime = CodexAgentRuntime(
+        codex_cls=codex_factory,
+        config_cls=FakeCodexConfig,
+        sandbox_cls=FakeSandbox,
+        approval_mode_cls=FakeApprovalMode,
+    )
+
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(
+            AgentTask(
+                goal="restricted",
+                permissions=PermissionProfile(
+                    mode=PermissionMode.STRICT,
+                    filesystem=FilesystemAccess.READ_ONLY,
+                ),
+            )
+        )
+
+    assert exc_info.value.field == "permissions"
+
+
+class RestrictedStartCodex(FakeCodex):
+    async def thread_start(
+        self,
+        *,
+        cwd: str | None = None,
+        developer_instructions: str | None = None,
+        model: str | None = None,
+    ) -> Any:
+        raise AssertionError("thread_start() must not be reached without a sandbox")
+
+
+@pytest.mark.asyncio
+async def test_codex_fails_closed_when_sdk_drops_sandbox_from_thread_start() -> None:
+    def codex_factory(*, config: FakeCodexConfig) -> FakeCodex:
+        return RestrictedStartCodex(config)
+
+    runtime = CodexAgentRuntime(
+        codex_cls=codex_factory,
+        config_cls=FakeCodexConfig,
+        sandbox_cls=FakeSandbox,
+        approval_mode_cls=FakeApprovalMode,
+    )
+
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(AgentTask(goal="restricted"))
+
+    assert exc_info.value.field == "permissions"
+
+
 @pytest.mark.asyncio
 async def test_codex_emits_tool_events() -> None:
     run_result = {

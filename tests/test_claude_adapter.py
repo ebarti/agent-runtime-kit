@@ -504,6 +504,51 @@ async def test_claude_records_dropped_options() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_fails_closed_when_sdk_drops_permission_mode() -> None:
+    # The permission mode is the security posture: an options class that no
+    # longer accepts it must fail the run, not silently use the SDK default.
+    @dataclass
+    class NoPermissionModeOptions:
+        model: str | None = None
+        allowed_tools: list[str] = field(default_factory=list)
+        disallowed_tools: list[str] = field(default_factory=list)
+
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant("ok"), result_message()]),
+        options_cls=NoPermissionModeOptions,
+    )
+
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(AgentTask(goal="x"))
+
+    assert exc_info.value.field == "permissions"
+
+
+@pytest.mark.asyncio
+async def test_claude_tool_filter_drop_fails_closed_only_when_requested() -> None:
+    @dataclass
+    class NoToolFilterOptions:
+        model: str | None = None
+        permission_mode: str | None = None
+        # Intentionally missing allowed_tools/disallowed_tools.
+
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant("ok"), result_message()]),
+        options_cls=NoToolFilterOptions,
+    )
+
+    # No tool filters requested: dropping the empty lists is harmless, recorded.
+    result = await runtime.run(AgentTask(goal="x"))
+    assert "allowed_tools" in result.metadata["dropped_options"]
+
+    # An actual allow-list request must not be silently widened to all tools.
+    with pytest.raises(UnsupportedTaskInputError):
+        await runtime.run(
+            AgentTask(goal="x", permissions=PermissionProfile(allowed_tools=("Read",)))
+        )
+
+
+@pytest.mark.asyncio
 async def test_claude_streams_events_before_completion() -> None:
     sink = RecordingEventSink()
     messages = [

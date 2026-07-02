@@ -269,8 +269,15 @@ class AntigravityAgentRuntime:
             ],
         }
         # Tolerate vendor option drift like Claude/Codex: drop kwargs the installed
-        # LocalAgentConfig no longer accepts (instead of a TypeError) and record them.
-        supported, dropped = filter_supported_kwargs(sdk.config_cls, config_kwargs)
+        # LocalAgentConfig no longer accepts (instead of a TypeError) and record
+        # them — except the tool posture (and workspace scoping when requested),
+        # which must fail closed rather than run with the SDK's default access.
+        required = ["capabilities", "policies"]
+        if config_kwargs["workspaces"]:
+            required.append("workspaces")
+        supported, dropped = filter_supported_kwargs(
+            sdk.config_cls, config_kwargs, required=required, kind=self.kind
+        )
         return sdk.config_cls(**supported), dropped
 
     async def _invoke(

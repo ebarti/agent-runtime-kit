@@ -39,7 +39,13 @@ third-party provider modes through Claude Code environment/settings such as
 `ClaudeAgentRuntime(env=...)` passes those provider-specific environment values
 to the SDK subprocess without scraping credential files. Any option kwargs
 dropped because a future SDK renamed or removed them are recorded in
-`AgentResult.metadata["dropped_options"]` rather than discarded silently. By
+`AgentResult.metadata["dropped_options"]` rather than discarded silently.
+Permission-critical options are exempt from that tolerance and fail closed: if
+the installed SDK cannot accept Claude's `permission_mode` (or a requested tool
+allow/deny list), Codex's `sandbox`/`approval_mode`, or Antigravity's
+`capabilities`/`policies`/workspace scoping, the run raises
+`UnsupportedTaskInputError` instead of proceeding with weaker permissions than
+the task requested. By
 default each `run()` uses the one-shot SDK `query()` path. Long-lived callers can
 pass `ClaudeAgentRuntime(reuse_process=True)` to keep a compatible
 `ClaudeSDKClient` process open across tasks, then call `await runtime.aclose()`

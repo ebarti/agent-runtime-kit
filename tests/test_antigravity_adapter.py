@@ -220,13 +220,25 @@ async def test_antigravity_runtime_runs_with_injected_sdk(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_antigravity_tolerates_config_option_drift(tmp_path: Path) -> None:
-    # A config class that only accepts a subset of kwargs must not crash the run;
+    # A config class that lost NON-security kwargs must not crash the run;
     # dropped options are recorded like the Claude/Codex adapters.
     class NarrowConfig:
-        def __init__(self, *, model: str, api_key: str | None = None) -> None:
+        def __init__(
+            self,
+            *,
+            model: str,
+            api_key: str | None = None,
+            capabilities: Any = None,
+            policies: Any = None,
+        ) -> None:
             self.model = model
             self.api_key = api_key
-            self.kwargs = {"model": model, "api_key": api_key}
+            self.kwargs = {
+                "model": model,
+                "api_key": api_key,
+                "capabilities": capabilities,
+                "policies": policies,
+            }
 
     runtime = AntigravityAgentRuntime(
         api_key="key",
@@ -240,7 +252,32 @@ async def test_antigravity_tolerates_config_option_drift(tmp_path: Path) -> None
     result = await runtime.run(AgentTask(goal="x"))
 
     assert result.finish_reason == "done"
-    assert "capabilities" in result.metadata["dropped_options"]
+    assert "save_dir" in result.metadata["dropped_options"]
+
+
+@pytest.mark.asyncio
+async def test_antigravity_fails_closed_when_sdk_drops_tool_posture(tmp_path: Path) -> None:
+    # capabilities/policies ARE the tool posture: a config class that no longer
+    # accepts them must fail the run, not silently grant the SDK default access.
+    class NoPostureConfig:
+        def __init__(self, *, model: str, api_key: str | None = None) -> None:
+            self.model = model
+            self.api_key = api_key
+            self.kwargs = {"model": model, "api_key": api_key}
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=FakeAgent,
+        config_cls=NoPostureConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(AgentTask(goal="x"))
+
+    assert exc_info.value.field == "permissions"
 
 
 @pytest.mark.asyncio

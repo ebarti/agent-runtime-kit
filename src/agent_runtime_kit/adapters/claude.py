@@ -352,7 +352,16 @@ class ClaudeAgentRuntime:
         setting_sources = metadata.get("setting_sources")
         if isinstance(setting_sources, list):
             kwargs["setting_sources"] = [str(item) for item in setting_sources]
-        supported, dropped = filter_supported_kwargs(options_cls, kwargs)
+        # Security posture must fail closed under vendor drift: the permission
+        # mode always, and the tool filters whenever the task requested any.
+        required = ["permission_mode"]
+        if task.permissions.allowed_tools:
+            required.append("allowed_tools")
+        if task.permissions.disallowed_tools:
+            required.append("disallowed_tools")
+        supported, dropped = filter_supported_kwargs(
+            options_cls, kwargs, required=required, kind=self.kind
+        )
         return options_cls(**supported), dropped
 
     def _model(self, task: AgentTask) -> str:
