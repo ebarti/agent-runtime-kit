@@ -236,9 +236,9 @@ class CodexAgentRuntime:
         if self._env is not None:
             config_kwargs["env"] = dict(self._env)
         process_reused = False
-        try:
-            if self._reuse_process:
-                async with self._codex_run_lock:
+        if self._reuse_process:
+            async with self._codex_run_lock:
+                try:
                     key = _codex_client_key(
                         config_kwargs,
                         model=model,
@@ -260,31 +260,32 @@ class CodexAgentRuntime:
                         sandbox_cls=sandbox_cls,
                         approval_mode_cls=approval_mode_cls,
                     )
-            else:
-                config = config_cls(**config_kwargs)
-                async with codex_cls(config=config) as codex:
-                    thread, raw_result = await self._invoke_codex(
-                        codex,
-                        task,
-                        model=model,
-                        cwd=cwd,
-                        sandbox_cls=sandbox_cls,
-                        approval_mode_cls=approval_mode_cls,
-                    )
-        except BaseException:
-            # Evict the reused app-server on any non-normal exit — including
-            # cancellation (CancelledError is a BaseException) — so the next
-            # run() never reuses a poisoned process. The reuse branch holds the
-            # run lock, so close under the client lock only and never let
-            # cleanup mask the original error.
-            if self._reuse_process:
-                try:
-                    await self._close_codex_client()
-                except Exception as close_exc:
-                    logger.warning(
-                        "failed to close Codex app-server after run failure: %s", close_exc
-                    )
-            raise
+                except BaseException:
+                    # Evict the reused app-server on any non-normal exit —
+                    # including cancellation (CancelledError is a BaseException)
+                    # — so the next run() never reuses a poisoned process. Runs
+                    # inside the run lock so a queued run cannot observe the
+                    # doomed client between failure and eviction; close under
+                    # the client lock only and never mask the original error.
+                    try:
+                        await self._close_codex_client()
+                    except Exception as close_exc:
+                        logger.warning(
+                            "failed to close Codex app-server after run failure: %s", close_exc
+                        )
+                    raise
+        else:
+            # Per-call isolation: the context manager owns the process teardown.
+            config = config_cls(**config_kwargs)
+            async with codex_cls(config=config) as codex:
+                thread, raw_result = await self._invoke_codex(
+                    codex,
+                    task,
+                    model=model,
+                    cwd=cwd,
+                    sandbox_cls=sandbox_cls,
+                    approval_mode_cls=approval_mode_cls,
+                )
         return _translate_run_result(
             task,
             raw_result,

@@ -186,6 +186,23 @@ async def test_codex_runtime_can_reuse_process_until_closed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_codex_aclose_waits_for_in_flight_run() -> None:
+    runtime = make_runtime(reuse_process=True)
+
+    # Holding the run lock simulates an in-flight run(); aclose() must block on it
+    # rather than racing in and closing the shared app-server mid-turn.
+    await runtime._codex_run_lock.acquire()
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(runtime.aclose(), timeout=0.05)
+    finally:
+        runtime._codex_run_lock.release()
+
+    # Once the run releases the lock, aclose() proceeds.
+    await asyncio.wait_for(runtime.aclose(), timeout=1.0)
+
+
+@pytest.mark.asyncio
 async def test_codex_runtime_restarts_reused_process_on_policy_key_change(tmp_path) -> None:
     runtime = make_runtime(reuse_process=True)
 
