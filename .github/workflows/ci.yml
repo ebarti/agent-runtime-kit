@@ -38,11 +38,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Sync dependencies
+        # --locked: fail if uv.lock is stale instead of silently re-resolving,
+        # so these lanes really test the pinned versions they claim to.
         run: |
           if [ "${{ matrix.extras }}" = "all" ]; then
-            uv sync --all-extras
+            uv sync --locked --all-extras
           else
-            uv sync
+            uv sync --locked
           fi
 
       - name: Ruff

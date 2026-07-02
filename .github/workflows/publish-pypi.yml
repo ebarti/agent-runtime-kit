@@ -43,11 +43,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Sync dependencies
+        # --locked: a release must be tested against exactly the committed lockfile.
         run: |
           if [ "${{ matrix.extras }}" = "all" ]; then
-            uv sync --all-extras
+            uv sync --locked --all-extras
           else
-            uv sync
+            uv sync --locked
           fi
 
       - name: Ruff
