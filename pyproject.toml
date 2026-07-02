@@ -94,6 +94,7 @@ include = [
     "CHANGELOG.md",
     "LICENSE",
     "pyproject.toml",
+    "docs/api-stability.md",
     "docs/capability-matrix.md",
     "docs/live-smoke.md",
     "docs/mestre-migration.md",

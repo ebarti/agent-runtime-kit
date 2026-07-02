@@ -9,10 +9,11 @@
 | Structured output | Native `output_format` when available | Native output schema / JSON parse fallback | Native response schema / JSON parse fallback |
 | MCP stdio servers | Yes | No per-task MCP config | Yes, without per-server env |
 | Permission mapping | `permission_mode` | approval mode + sandbox | capabilities + policies |
-| Streaming output events | Yes — incremental output/tool events while the SDK runs | Not enabled in v1 adapter | Yes — from response chunks |
-| Tool audit events | Yes — from streamed message blocks | Yes — parsed from `TurnResult` items | Yes — from tool chunks |
+| Streaming output events | Yes — incremental `output.delta` while the SDK runs | No — a single `output.delta` at the end (non-streaming SDK) | Yes — from response chunks |
+| Tool audit events | Yes — streamed from message blocks | Yes — emitted from parsed `TurnResult` items after the turn | Yes — from tool chunks |
+| `vendor.turn` events | No | No | Yes — from thought/unknown chunks |
 | Missing package diagnostics | Yes (`AgentRuntimeUnavailableError`) | Yes (`AgentRuntimeUnavailableError`) | Yes (`AgentRuntimeUnavailableError`) |
-| Missing credential diagnostics | Provider-owned/local auth, including API key, Bedrock, Vertex, AWS, and Azure modes | Provider-owned/local auth, including ChatGPT/API key/custom providers/Bedrock | API key or Google ADC / Vertex config |
+| Missing credential diagnostics | No — `availability()` reports available with an `auth_source` label; auth failures surface at `run()` | No — same as Claude (`auth_source` label; deferred) | Yes — `availability()` returns `MISSING_CREDENTIALS` when no API key / ADC-Vertex project is configured |
 | Live smoke test | Opt-in | Opt-in | Opt-in |
 
 The matrix is intentionally not a lowest-common-denominator contract. Adapters
