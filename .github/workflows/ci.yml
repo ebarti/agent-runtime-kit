@@ -13,7 +13,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Scoped by event too: schedule and push both run on refs/heads/main, and a
+  # weekly cron must not cancel (or be cancelled by) an in-flight push run.
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
