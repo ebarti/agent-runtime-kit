@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, NoReturn, Protocol, TypeVar, runtime_checkable
+from typing import Any, Generic, NoReturn, Protocol, TypeVar, cast, runtime_checkable
 from uuid import uuid4
 
 _EnumT = TypeVar("_EnumT", bound=Enum)
@@ -403,6 +403,26 @@ class AgentResult:
         """Return the reported task cost in USD."""
 
         return self.usage.cost_usd
+
+
+_ParsedT = TypeVar("_ParsedT")
+
+
+@dataclass(frozen=True)
+class ParsedResult(AgentResult, Generic[_ParsedT]):
+    """An ``AgentResult`` whose ``parsed_output`` was validated as ``output_type``.
+
+    Produced by ``AgentKit.run(..., output_type=T)``. Runtime-identical to
+    ``AgentResult`` — it only adds the typed accessor. ``AgentResult`` itself
+    stays non-generic so existing bare ``AgentResult`` annotations remain valid
+    under downstream ``disallow_any_generics`` strictness.
+    """
+
+    @property
+    def parsed(self) -> _ParsedT | None:
+        """The validated instance, or ``None`` when the run failed."""
+
+        return cast("_ParsedT | None", self.parsed_output)
 
 
 @runtime_checkable

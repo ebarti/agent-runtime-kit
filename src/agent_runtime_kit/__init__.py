@@ -7,6 +7,7 @@ from agent_runtime_kit._errors import (
     RuntimeNotRegisteredError,
     UnsupportedTaskInputError,
 )
+from agent_runtime_kit._kit import KIND_ALIASES, AgentKit
 from agent_runtime_kit._runtime import FakeAgentRuntime
 from agent_runtime_kit._types import (
     AgentCapabilities,
@@ -20,6 +21,7 @@ from agent_runtime_kit._types import (
     FilesystemAccess,
     FinishReason,
     McpServerConfig,
+    ParsedResult,
     PermissionMode,
     PermissionProfile,
     RuntimeAvailability,
@@ -42,6 +44,7 @@ from agent_runtime_kit.registry import RuntimeRegistry, create_default_registry
 
 __all__ = [
     "AgentCapabilities",
+    "AgentKit",
     "AgentResult",
     "AgentRuntime",
     "AgentRuntimeError",
@@ -54,8 +57,10 @@ __all__ = [
     "FakeAgentRuntime",
     "FilesystemAccess",
     "FinishReason",
+    "KIND_ALIASES",
     "McpServerConfig",
     "OutputTypeError",
+    "ParsedResult",
     "PermissionMode",
     "PermissionProfile",
     "RuntimeAvailability",
