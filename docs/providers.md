@@ -88,7 +88,11 @@ constructor, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`. Without an API key, the
 adapter uses Vertex AI config with Google ADC when a project can be discovered
 from ADC, `GOOGLE_CLOUD_PROJECT`, or `GCLOUD_PROJECT`; location defaults to
 `global` unless `GOOGLE_CLOUD_LOCATION`, `GOOGLE_CLOUD_REGION`, or
-`CLOUD_ML_REGION` is set. `disallowed_tools` maps to
+`CLOUD_ML_REGION` is set. Precedence: an explicit constructor `api_key` is the
+most specific request and wins; otherwise an explicit
+`AntigravityAgentRuntime(vertex=True, ...)` takes precedence over an ambient
+`GEMINI_API_KEY`/`GOOGLE_API_KEY`, so a Vertex-configured runtime is never
+silently redirected to the Gemini API by an exported environment key. `disallowed_tools` maps to
 `CapabilitiesConfig.disabled_tools`, and an allow-list and a deny-list are
 mutually exclusive (the SDK forbids combining enabled and disabled tool lists),
 so supplying both is rejected. Tool names are validated against the

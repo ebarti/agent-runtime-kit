@@ -701,7 +701,15 @@ def _validate_tools(
 def _reject_non_read_only_tools(kind: AgentRuntimeKind, tools: list[Any], builtin: Any) -> None:
     read_only = getattr(builtin, "read_only", None)
     if not callable(read_only):
-        return
+        # The installed SDK exposes no read-only toolset to verify against
+        # (vendor drift). Refusing is the only option that cannot silently
+        # widen access under a READ_ONLY filesystem.
+        raise UnsupportedTaskInputError(
+            kind,
+            "permissions.allowed_tools",
+            "the installed SDK exposes no read-only toolset to verify the "
+            "allow-list against; refusing allowed_tools with a READ_ONLY filesystem",
+        )
     allowed = {getattr(tool, "value", tool) for tool in read_only()}
     for tool in tools:
         value = getattr(tool, "value", tool)

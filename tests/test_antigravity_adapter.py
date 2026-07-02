@@ -579,6 +579,44 @@ async def test_antigravity_read_only_rejects_write_allowed_tool(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_antigravity_read_only_allowlist_fails_closed_without_readonly_toolset(
+    tmp_path: Path,
+) -> None:
+    # If a future SDK drops the read-only toolset helper, the READ_ONLY +
+    # allowed_tools check cannot be verified — so it must refuse, not silently
+    # skip verification and pass write tools through.
+    class DriftedBuiltinTools(str, enum.Enum):
+        VIEW_FILE = "view_file"
+        RUN_COMMAND = "run_command"
+        # No read_only()/nondestructive()/all_tools() helpers.
+
+    class DriftedTypes(FakeTypes):
+        BuiltinTools = DriftedBuiltinTools
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=FakeAgent,
+        config_cls=FakeConfig,
+        types_module=DriftedTypes,
+        policy_module=FakePolicy,
+    )
+
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(
+            AgentTask(
+                goal="task",
+                permissions=PermissionProfile(
+                    filesystem=FilesystemAccess.READ_ONLY,
+                    allowed_tools=("view_file",),
+                ),
+            )
+        )
+
+    assert exc_info.value.field == "permissions.allowed_tools"
+
+
+@pytest.mark.asyncio
 async def test_antigravity_explicit_vertex_beats_ambient_api_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
