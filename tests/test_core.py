@@ -13,9 +13,13 @@ from agent_runtime_kit import (
     AgentRuntime,
     AgentRuntimeKind,
     AgentTask,
+    ArtifactRef,
     FakeAgentRuntime,
     FinishReason,
+    McpServerConfig,
+    RuntimeAvailability,
     RuntimeNotRegisteredError,
+    ToolCallAudit,
     UnsupportedTaskInputError,
     create_default_registry,
     runtime_kind_value,
@@ -89,22 +93,58 @@ def test_agent_task_does_not_leak_caller_mapping() -> None:
         task.metadata["model"] = "nope"  # type: ignore[index]
 
 
-def test_frozen_models_stay_serializable() -> None:
-    # Freezing must not break the standard object plumbing embedding applications
-    # rely on: asdict for logging, pickle for multiprocessing, deepcopy, json.
-    task = AgentTask(goal="g", metadata={"model": "x"}, output_schema={"type": "object"})
-    result = AgentResult(output="ok", metadata={"turns": 1})
+@pytest.mark.parametrize(
+    ("instance", "field_name"),
+    [
+        (AgentTask(goal="g", metadata={"k": "v"}), "metadata"),
+        (AgentResult(output="ok", metadata={"k": "v"}), "metadata"),
+        (AgentTask(goal="g", output_schema={"k": "v"}), "output_schema"),
+        (RuntimeAvailability(kind="fake", available=True, metadata={"k": "v"}), "metadata"),
+        (McpServerConfig(name="n", command="c", env={"k": "v"}), "env"),
+        (ToolCallAudit(tool_name="t", arguments={"k": "v"}), "arguments"),
+        (ArtifactRef(uri="u", metadata={"k": "v"}), "metadata"),
+    ],
+    ids=[
+        "AgentTask.metadata",
+        "AgentResult.metadata",
+        "AgentTask.output_schema",
+        "RuntimeAvailability.metadata",
+        "McpServerConfig.env",
+        "ToolCallAudit.arguments",
+        "ArtifactRef.metadata",
+    ],
+)
+def test_frozen_models_stay_serializable(instance: object, field_name: str) -> None:
+    # Every wrapped mapping field, on every frozen model: freezing must not break
+    # the standard object plumbing embedding applications rely on (asdict for
+    # logging, pickle for multiprocessing, deepcopy, json), and the read-only
+    # behavior must survive each of those round-trips' construction paths.
+    mapping = getattr(instance, field_name)
 
-    assert asdict(task)["metadata"] == {"model": "x"}
-    assert asdict(result)["metadata"] == {"turns": 1}
-    assert copy.deepcopy(result).metadata == {"turns": 1}
-    assert pickle.loads(pickle.dumps(result)).metadata == {"turns": 1}
-    assert pickle.loads(pickle.dumps(task)).output_schema == {"type": "object"}
-    assert json.dumps(result.metadata) == '{"turns": 1}'
+    assert asdict(instance)[field_name] == {"k": "v"}  # type: ignore[call-overload]
+    assert getattr(copy.deepcopy(instance), field_name) == {"k": "v"}
+    assert json.dumps(mapping) == '{"k": "v"}'
 
-    restored = pickle.loads(pickle.dumps(result))
+    restored = pickle.loads(pickle.dumps(instance))
+    assert getattr(restored, field_name) == {"k": "v"}
     with pytest.raises(TypeError):
-        restored.metadata["turns"] = 2  # a pickle round-trip stays read-only
+        mapping["k"] = "w"
+    with pytest.raises(TypeError):
+        getattr(restored, field_name)["k"] = "w"  # a pickle round-trip stays read-only
+
+
+def test_frozen_mapping_is_shallow() -> None:
+    # The freeze is intentionally shallow: only the top-level mapping rejects
+    # writes, while nested containers keep their original types and mutability
+    # (deep-freezing would surprise asdict/deepcopy/json consumers). Docs and
+    # CHANGELOG scope their read-only claims to the top level; if this ever
+    # becomes a deep freeze, update those claims together with this test.
+    task = AgentTask(goal="g", metadata={"nested": {"a": 1}})
+
+    with pytest.raises(TypeError):
+        task.metadata["nested"] = {}  # type: ignore[index]
+    task.metadata["nested"]["a"] = 2
+    assert task.metadata["nested"]["a"] == 2
 
 
 def test_finish_reason_enum_compares_as_string() -> None:
