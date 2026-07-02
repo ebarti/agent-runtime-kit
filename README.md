@@ -76,6 +76,41 @@ are added through optional extras.
 
 ## Real Providers
 
+`AgentKit` is the keyword-native hub: it registers the built-in runtimes,
+caches them per kind, and turns Python types into structured output.
+
+```python
+import asyncio
+from dataclasses import dataclass
+
+from agent_runtime_kit import AgentKit
+
+
+@dataclass
+class RepoSummary:
+    name: str
+    languages: list[str]
+
+
+async def main() -> None:
+    async with AgentKit() as kit:
+        diagnostic = kit.availability_for("claude")
+        if not diagnostic.available:
+            raise RuntimeError(diagnostic.message)
+        result = await kit.run(
+            "claude",
+            goal="Summarize this repository",
+            permissions="strict",
+            output_type=RepoSummary,
+        )
+        print(result.parsed.languages if result.parsed else result.error)
+
+
+asyncio.run(main())
+```
+
+Adapters also work standalone when you need vendor-specific configuration:
+
 ```python
 import asyncio
 

@@ -37,6 +37,14 @@ import the names from the top-level package instead.
   a task field raises `UnsupportedTaskInputError`; the one exception is
   vendor-option drift, which is recorded in
   `AgentResult.metadata["dropped_options"]` instead.
+- **`AgentKit` is sugar, not a second API.** The hub assembles the same frozen
+  `AgentTask` and returns the same `AgentResult` the runtimes produce
+  (`ParsedResult` is a runtime-identical subclass adding only the typed
+  `parsed` accessor). Kind aliases are limited to the documented
+  `KIND_ALIASES` mapping; exact kind strings always work. `output_type=`
+  supports a bounded, documented subset of the typing system and raises
+  `OutputTypeError` on anything outside it (Pydantic-style models are used
+  through their own `model_json_schema`/`model_validate` when present).
 
 ## Vendor SDK version policy
 

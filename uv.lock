@@ -12,7 +12,7 @@ required-markers = [
 ]
 
 [options]
-exclude-newer = "2026-06-24T15:20:56.671469Z"
+exclude-newer = "2026-06-24T17:18:14.378186Z"
 exclude-newer-span = "P8D"
 
 [manifest]
@@ -29,7 +29,7 @@ wheels = [
 
 [[package]]
 name = "agent-runtime-kit"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 
 [package.optional-dependencies]

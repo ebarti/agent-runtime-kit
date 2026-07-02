@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0 - 2026-07-02
+
+### Added
+
+- `AgentKit`, a FastAPI-flavored hub over the registry: keyword-native
+  `await kit.run("claude", goal=..., permissions="strict", ...)` assembling
+  the frozen `AgentTask` internally (a prebuilt `task=` still passes through),
+  short aliases for the built-in kinds via the documented `KIND_ALIASES`
+  mapping, per-kind runtime caching closed by `aclose()`/`async with`,
+  `@kit.on(...)` sync/async event handlers that tee alongside a task's own
+  sink and can never break a run, and `@kit.runtime(...)` decorator
+  registration for third-party kinds.
+- Typed structured output: `kit.run(..., output_type=SomeType)` derives the
+  wire schema from a dataclass/`TypedDict` (dependency-free, bounded subset,
+  fail-closed via the new `OutputTypeError`) or from a Pydantic-style model's
+  own `model_json_schema`, and validates `parsed_output` back into the type.
+  The result is `ParsedResult[T]` — a runtime-identical `AgentResult`
+  subclass with a typed `parsed` accessor; `AgentResult` itself stays
+  non-generic. Non-conforming payloads yield `finish_reason="failed"`, the
+  adapters' own structured-output convention.
+- `PermissionProfile` accepts string literals for `mode`/`filesystem`
+  ("strict", "read-only", ...) and coerces them to real enum members at
+  construction; unknown values raise `ValueError` listing the vocabulary.
+  Previously a bare string silently matched none of the adapters' identity
+  checks and ran at the default posture.
+
 ## 0.3.0 - 2026-07-02
 
 ### Added
