@@ -497,10 +497,11 @@ def test_snapshot_and_diff_public_api(monkeypatch: pytest.MonkeyPatch) -> None:
     assert diff.changed == ("run",)
 
 
-def test_parse_args_inspects_candidates_by_default() -> None:
-    options = parse_args(["--runtime", "fake"])
-
-    assert options.inspect_candidates is True
+def test_parse_args_candidate_inspection_is_opt_in() -> None:
+    # Candidate inspection pip-installs+imports upstream code, so it is off by
+    # default and only enabled with the explicit flag.
+    assert parse_args(["--runtime", "fake"]).inspect_candidates is False
+    assert parse_args(["--runtime", "fake", "--inspect-candidates"]).inspect_candidates is True
 
 
 def test_collect_snapshots_uses_lockfile_baseline_for_candidates(
@@ -541,7 +542,7 @@ def test_collect_snapshots_uses_lockfile_baseline_for_candidates(
                 }
             ]
         },
-        inspect_candidates=False,
+        inspect_candidates=True,
     )
 
     assert len(snapshots) == 2
@@ -596,6 +597,7 @@ def test_collect_snapshots_uses_refresh_preview_update_targets(
                 "stderr": "Update claude-agent-sdk v0.2.96 -> v0.2.106\n",
             },
         },
+        inspect_candidates=True,
     )
 
     assert len(snapshots) == 3
@@ -643,6 +645,7 @@ def test_collect_snapshots_uses_locked_baseline_when_environment_drifted(
                 "stderr": "Update claude-agent-sdk v0.2.96 -> v0.2.106\n",
             },
         },
+        inspect_candidates=True,
     )
 
     assert calls == [
@@ -931,7 +934,7 @@ claude = ["claude-agent-sdk>=0.2"]
             packages=("claude-agent-sdk",),
             report_dir=Path("reports"),
             implementation_enabled=False,
-            inspect_candidates=False,
+            inspect_candidates=True,
         ),
         pypi_client=_fake_pypi,
         runtime=FixtureEvolutionRuntime(),
@@ -953,6 +956,79 @@ claude = ["claude-agent-sdk>=0.2"]
         encoding="utf-8"
     )
     assert "Recursive self-adaptation impact" in report_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_run_agent_does_not_install_candidates_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project.optional-dependencies]\nclaude = ["claude-agent-sdk>=0.2"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "uv.lock").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        lambda package, *, version=None: ApiSnapshot(
+            package=package, version=version, module=package.replace("-", "_")
+        ),
+    )
+
+    def forbidden_candidate(package: str, version: str) -> ApiSnapshot:
+        raise AssertionError("candidate install must not run without --inspect-candidates")
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv", forbidden_candidate
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.collect_release_notes", lambda packages, updates: []
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.collect_behavior_evidence",
+        lambda packages, updates: {"results": [], "diffs": [], "summary": {"status": "pass"}},
+    )
+
+    # Default run (no inspect_candidates) must never pip-install/import upstream code.
+    report_path = await run_agent(
+        RunOptions(workspace=tmp_path, runtime="fake", packages=("claude-agent-sdk",)),
+        pypi_client=_fake_pypi,
+        runtime=FixtureEvolutionRuntime(),
+    )
+
+    assert report_path.exists()
+
+
+def test_finalize_report_skips_when_report_dir_is_gitignored(tmp_path: Path) -> None:
+    from examples.sdk_evolution_agent.cli import _commit_final_autonomous_pr_report
+
+    commands: list[tuple[str, ...]] = []
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandResult:
+        del cwd, env
+        commands.append(command)
+        # check-ignore exits 0 => path IS ignored (the default report dir).
+        return CommandResult(command=command, returncode=0)
+
+    report_path = tmp_path / "reports" / "sdk-evolution" / "run" / "report.md"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("x", encoding="utf-8")
+
+    # Must skip cleanly (no add/commit of a gitignored path) instead of raising.
+    _commit_final_autonomous_pr_report(
+        tmp_path,
+        report_path=report_path,
+        options=RunOptions(workspace=tmp_path, runtime="fake"),
+        command_runner=runner,
+    )
+
+    assert not any(command[:2] == ("git", "commit") for command in commands)
+    assert not any(command[:2] == ("git", "add") for command in commands)
 
 
 @pytest.mark.asyncio
@@ -1018,6 +1094,9 @@ version = "0.2.1"
             )
         if command[:2] == ("uv", "lock"):
             return CommandResult(command=command, returncode=0, stdout="updated")
+        if command[:2] == ("git", "check-ignore"):
+            # Report dir is tracked in this scenario -> not ignored (exit 1).
+            return CommandResult(command=command, returncode=1, stdout="")
         return CommandResult(command=command, returncode=0, stdout="ok")
 
     report_path = await run_agent(
@@ -1026,6 +1105,7 @@ version = "0.2.1"
             runtime="fake",
             packages=("claude-agent-sdk",),
             report_dir=Path("reports"),
+            inspect_candidates=True,
             implementation_enabled=True,
             refresh_preview=True,
             create_branch=True,
@@ -1129,7 +1209,7 @@ def test_parse_args_and_pr_body() -> None:
 
     assert options.runtime == "claude-agent-sdk"
     assert options.packages == ("claude-agent-sdk",)
-    assert options.inspect_candidates is True
+    assert options.inspect_candidates is False
     assert options.implementation_enabled is True
     assert options.draft_pr is True
     assert "No auto-merge" in body

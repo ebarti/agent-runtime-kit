@@ -148,7 +148,9 @@ class RunOptions:
     report_dir: Path = Path("reports/sdk-evolution")
     implementation_enabled: bool = False
     refresh_preview: bool = False
-    inspect_candidates: bool = True
+    # Off by default: candidate inspection pip-installs and imports freshly
+    # downloaded upstream code (see _collect_snapshots / --inspect-candidates).
+    inspect_candidates: bool = False
     create_branch: bool = False
     branch_name: str | None = None
     draft_pr: bool = False
