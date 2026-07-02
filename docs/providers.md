@@ -127,7 +127,12 @@ the approval policy still follows the mode (only `STRICT` omits `allow_all`).
 
 Session and app-data directories are written under
 `$XDG_CACHE_HOME/agent-runtime-kit` (default `~/.cache/agent-runtime-kit`,
-`0o700`), overridable via `AntigravityAgentRuntime(data_dir=...)`. By default
+`0o700`), overridable via `AntigravityAgentRuntime(data_dir=...)`. That
+placement depends on the installed SDK accepting the `save_dir`/`app_data_dir`
+kwargs; if a future SDK renames them the drop is recorded in
+`dropped_options` and transcripts land in the SDK's own default location —
+data placement, unlike the tool posture, is tolerated rather than failed
+closed. By default
 each `run()` uses a fresh `Agent` context. Long-lived callers can pass
 `AntigravityAgentRuntime(reuse_process=True)` and close it with
 `await runtime.aclose()` or an async context manager. The Antigravity SDK ties

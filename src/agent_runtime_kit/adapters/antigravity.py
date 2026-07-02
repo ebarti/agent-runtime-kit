@@ -111,7 +111,12 @@ class AntigravityAgentRuntime:
         await self.aclose()
 
     def availability(self) -> RuntimeAvailability:
-        """Report Antigravity package and credential availability."""
+        """Report Antigravity package and credential availability.
+
+        Synchronous by design (a setup diagnostic), but ADC discovery may read
+        files or hit the GCE metadata server — from async code, call it via
+        ``asyncio.to_thread`` like ``run()`` does internally.
+        """
 
         if self._agent_cls is not None:
             return RuntimeAvailability.ok(self.kind, package="google-antigravity")

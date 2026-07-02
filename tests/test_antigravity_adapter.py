@@ -281,6 +281,79 @@ async def test_antigravity_fails_closed_when_sdk_drops_tool_posture(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_antigravity_fails_closed_when_sdk_drops_only_policies(tmp_path: Path) -> None:
+    # Dropping EITHER posture key alone must fail closed — a config accepting
+    # capabilities but not policies would otherwise run under SDK-default
+    # approval policies with only the drop recorded.
+    class NoPoliciesConfig:
+        def __init__(
+            self, *, model: str, api_key: str | None = None, capabilities: Any = None
+        ) -> None:
+            self.model = model
+            self.api_key = api_key
+            self.kwargs = {"model": model, "api_key": api_key, "capabilities": capabilities}
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=FakeAgent,
+        config_cls=NoPoliciesConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(AgentTask(goal="x"))
+
+    assert exc_info.value.field == "permissions"
+    assert "policies" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_antigravity_fails_closed_when_sdk_drops_workspaces(tmp_path: Path) -> None:
+    # Workspace scoping is requested via working_directory; a config class that
+    # cannot accept `workspaces` must not silently run unscoped.
+    class NoWorkspacesConfig:
+        def __init__(
+            self,
+            *,
+            model: str,
+            api_key: str | None = None,
+            capabilities: Any = None,
+            policies: Any = None,
+        ) -> None:
+            self.model = model
+            self.api_key = api_key
+            self.kwargs = {
+                "model": model,
+                "api_key": api_key,
+                "capabilities": capabilities,
+                "policies": policies,
+            }
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=FakeAgent,
+        config_cls=NoWorkspacesConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    # Without a working_directory nothing requests scoping: the drop is benign.
+    benign = await runtime.run(AgentTask(goal="x"))
+    assert benign.finish_reason == "done"
+    assert "workspaces" in benign.metadata["dropped_options"]
+
+    # With a working_directory, dropping `workspaces` must fail closed.
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(AgentTask(goal="x", working_directory=tmp_path))
+
+    assert exc_info.value.field == "permissions"
+    assert "workspaces" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_antigravity_counts_requested_tool_call_without_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
