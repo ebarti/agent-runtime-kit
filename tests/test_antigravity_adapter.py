@@ -541,6 +541,60 @@ async def test_antigravity_disallowed_tools_map_to_disabled(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_antigravity_read_only_deny_list_cannot_reenable_write_tools(
+    tmp_path: Path,
+) -> None:
+    # disabled_tools means "enable everything else": under READ_ONLY that would
+    # leave every unnamed write tool enabled — the deny-list twin of the
+    # allow-list backdoor. Both constraints must combine: read-only toolset
+    # minus the denied tools, expressed as an allow-list.
+    runtime = make_runtime(data_dir=tmp_path)
+
+    await runtime.run(
+        AgentTask(
+            goal="task",
+            permissions=PermissionProfile(
+                filesystem=FilesystemAccess.READ_ONLY,
+                disallowed_tools=("run_command",),
+            ),
+        )
+    )
+
+    capabilities = FakeAgent.last_config.kwargs["capabilities"]  # type: ignore[union-attr]
+    assert capabilities.disabled_tools is None
+    assert capabilities.enabled_tools == FakeBuiltinTools.read_only()
+    assert capabilities.enable_subagents is False
+
+
+@pytest.mark.asyncio
+async def test_antigravity_strict_deny_list_constrains_to_read_only_minus_denied(
+    tmp_path: Path,
+) -> None:
+    runtime = make_runtime(data_dir=tmp_path)
+
+    await runtime.run(
+        AgentTask(
+            goal="task",
+            permissions=PermissionProfile(
+                mode=PermissionMode.STRICT,
+                disallowed_tools=("view_file",),
+            ),
+        )
+    )
+
+    config = FakeAgent.last_config
+    assert config is not None
+    capabilities = config.kwargs["capabilities"]
+    assert capabilities.disabled_tools is None
+    assert capabilities.enabled_tools == [
+        FakeBuiltinTools.LIST_DIR,
+        FakeBuiltinTools.FINISH,
+    ]
+    # STRICT still carries no allow-all policy.
+    assert config.kwargs["policies"] == []
+
+
+@pytest.mark.asyncio
 async def test_antigravity_allowed_subagent_enables_subagents_outside_permissive(
     tmp_path: Path,
 ) -> None:

@@ -107,6 +107,12 @@ not accept per-server env values. The default tool posture with no
 | `CAUTIOUS`, `DEFAULT` | nondestructive (no `run_command`) | `allow_all` |
 | `PERMISSIVE` | all tools | `allow_all` |
 
+A deny-list under a `READ_ONLY` filesystem (or `STRICT`) is honored by enabling
+the read-only toolset minus the denied tools — `disabled_tools` alone would
+re-enable every unnamed write tool. An `allowed_tools` list containing
+`start_subagent` enables subagents in any mode; the approval policy still
+follows the mode (only `STRICT` omits `allow_all`).
+
 Session and app-data directories are written under
 `$XDG_CACHE_HOME/agent-runtime-kit` (default `~/.cache/agent-runtime-kit`,
 `0o700`), overridable via `AntigravityAgentRuntime(data_dir=...)`. By default

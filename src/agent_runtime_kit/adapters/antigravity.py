@@ -614,11 +614,32 @@ def _capability_policy(
         disabled = _validate_tools(
             kind, "disallowed_tools", task.permissions.disallowed_tools, builtin
         )
-        enable_subagents = is_permissive and not _contains_tool(disabled, subagent)
-        capabilities = sdk.types.CapabilitiesConfig(
-            disabled_tools=disabled,
-            enable_subagents=enable_subagents,
-        )
+        if (
+            task.permissions.filesystem is FilesystemAccess.READ_ONLY
+            or task.permissions.mode is PermissionMode.STRICT
+        ):
+            # disabled_tools means "enable everything else", which under a
+            # READ_ONLY filesystem (or STRICT's read-only posture) would leave
+            # every unnamed write tool enabled — the deny-list twin of the
+            # allow-list backdoor rejected below. Both constraints are
+            # simultaneously expressible instead: enable the read-only toolset
+            # minus the denied tools.
+            denied = {getattr(tool, "value", tool) for tool in disabled}
+            tools = [
+                tool
+                for tool in _read_only_tools(kind, "permissions.disallowed_tools", builtin)
+                if getattr(tool, "value", tool) not in denied
+            ]
+            capabilities = sdk.types.CapabilitiesConfig(
+                enabled_tools=tools,
+                enable_subagents=_contains_tool(tools, subagent),
+            )
+        else:
+            enable_subagents = is_permissive and not _contains_tool(disabled, subagent)
+            capabilities = sdk.types.CapabilitiesConfig(
+                disabled_tools=disabled,
+                enable_subagents=enable_subagents,
+            )
     else:
         if task.permissions.allowed_tools == ():
             tools = _default_tools(task, builtin)
@@ -698,19 +719,30 @@ def _validate_tools(
     return resolved
 
 
-def _reject_non_read_only_tools(kind: AgentRuntimeKind, tools: list[Any], builtin: Any) -> None:
+def _read_only_tools(kind: AgentRuntimeKind, field: str, builtin: Any) -> list[Any]:
+    """The SDK's read-only toolset, or a typed refusal when it cannot be resolved.
+
+    Both the allow-list guard and the deny-list conversion depend on this set to
+    enforce a READ_ONLY filesystem; if the installed SDK no longer exposes it
+    (vendor drift), refusing is the only option that cannot widen access.
+    """
+
     read_only = getattr(builtin, "read_only", None)
     if not callable(read_only):
-        # The installed SDK exposes no read-only toolset to verify against
-        # (vendor drift). Refusing is the only option that cannot silently
-        # widen access under a READ_ONLY filesystem.
         raise UnsupportedTaskInputError(
             kind,
-            "permissions.allowed_tools",
-            "the installed SDK exposes no read-only toolset to verify the "
-            "allow-list against; refusing allowed_tools with a READ_ONLY filesystem",
+            field,
+            "the installed SDK exposes no read-only toolset to enforce a "
+            "READ_ONLY filesystem against; refusing rather than widening access",
         )
-    allowed = {getattr(tool, "value", tool) for tool in read_only()}
+    return list(read_only())
+
+
+def _reject_non_read_only_tools(kind: AgentRuntimeKind, tools: list[Any], builtin: Any) -> None:
+    allowed = {
+        getattr(tool, "value", tool)
+        for tool in _read_only_tools(kind, "permissions.allowed_tools", builtin)
+    }
     for tool in tools:
         value = getattr(tool, "value", tool)
         if value not in allowed:
