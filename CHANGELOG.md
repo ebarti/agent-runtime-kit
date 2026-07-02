@@ -118,8 +118,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metadata cannot abort a run.
 - SDK evolution example: inspecting candidate SDK versions (which pip-installs
   and imports freshly downloaded upstream code) is now opt-in via
-  `--inspect-candidates` and runs in a credential-scrubbed environment, and
-  `--draft-pr` no longer fails when the report directory is gitignored.
+  `--inspect-candidates` and runs in a credential-scrubbed environment — and
+  the behavior probes now honor the same gate and scrub instead of installing
+  candidates unconditionally with the caller's full environment (skipped
+  candidates are recorded explicitly). `--draft-pr` no longer fails when the
+  report directory is gitignored.
+- SDK evolution example: release-note links extracted from fetched pages are
+  only followed when they resolve to `https://github.com` (a protocol-relative
+  href in user-generated discussion markup could otherwise trigger an off-site
+  request), and a configured-but-failing GitHub GraphQL token now surfaces on
+  the source instead of silently downgrading to the unauthenticated scrape.
 
 ## 0.2.0 - 2026-06-23
 

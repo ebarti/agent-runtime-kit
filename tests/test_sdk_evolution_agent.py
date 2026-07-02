@@ -30,6 +30,7 @@ from examples.sdk_evolution_agent.auth import CodexAuthResult, ensure_codex_sdk_
 from examples.sdk_evolution_agent.behavior import (
     collect_behavior_evidence,
     diff_behavior_results,
+    probe_candidate_in_venv,
 )
 from examples.sdk_evolution_agent.cli import RunOptions, _collect_snapshots, parse_args, run_agent
 from examples.sdk_evolution_agent.collectors import (
@@ -40,9 +41,10 @@ from examples.sdk_evolution_agent.collectors import (
     run_refresh_preview,
 )
 from examples.sdk_evolution_agent.current_state import build_current_state
-from examples.sdk_evolution_agent.models import ApiSnapshot, CommandResult, RunContext
+from examples.sdk_evolution_agent.models import ApiSnapshot, CommandResult, RunContext, SourceRef
 from examples.sdk_evolution_agent.pr import build_draft_pr_body
 from examples.sdk_evolution_agent.release_notes import (
+    _fetch_source_text,
     _format_github_discussions_index,
     collect_release_notes,
 )
@@ -246,6 +248,85 @@ def test_antigravity_release_notes_fetches_matching_discussion_from_announcement
     assert any("Python 3.14" in summary for summary in notes[0].summaries)
 
 
+def test_release_note_links_only_follow_github_https_urls() -> None:
+    # The discussion-index markup can carry user-generated hrefs. A
+    # protocol-relative path would urljoin into an off-site host and the blind
+    # follow-up GET would become SSRF; only https://github.com links may be
+    # followed.
+    def fetcher(url: str) -> str:
+        if url.endswith("/discussions/categories/announcements"):
+            return (
+                '<a href="//evil.example/x/discussions/87">v0.1.5</a>\n'
+                '<a href="https://github.com/google-antigravity/antigravity-sdk-python/'
+                'discussions/88">v0.1.5 release notes</a>'
+            )
+        if "evil.example" in url:
+            raise AssertionError("off-site link must not be fetched")
+        if url.endswith("/discussions/88"):
+            return "## v0.1.5\n- Real release note\n"
+        return "no matching release note"
+
+    notes = collect_release_notes(
+        [
+            {
+                "name": "google-antigravity",
+                "locked_version": "0.1.4",
+                "installed_version": "0.1.4",
+            }
+        ],
+        {"google-antigravity": "0.1.5"},
+        fetcher=fetcher,
+    )
+
+    assert all("evil.example" not in url for url in notes[0].checked_urls)
+    assert any(url.endswith("/discussions/88") for url in notes[0].checked_urls)
+
+
+def test_fetch_source_text_surfaces_graphql_failure_when_token_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A configured token that fails must surface (the caller records it on the
+    # source), not silently downgrade to the unauthenticated HTML scrape — that
+    # would hide an expired/insufficient token behind lower-quality evidence.
+    monkeypatch.setenv("GITHUB_TOKEN", "configured-but-broken")
+
+    def graphql_fails(url: str, *, token: str) -> str:
+        raise RuntimeError("GraphQL: Bad credentials")
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.release_notes._fetch_github_discussions_index",
+        graphql_fails,
+    )
+    source = SourceRef(
+        kind="github-discussions",
+        label="announcements",
+        url="https://github.com/o/r/discussions/categories/announcements",
+    )
+
+    with pytest.raises(RuntimeError, match="Bad credentials"):
+        _fetch_source_text(source, fetcher=lambda url: "html", use_github_graphql=True)
+
+
+def test_fetch_source_text_uses_plain_fetch_without_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Tokenless operation is legitimate: without GITHUB_TOKEN/GH_TOKEN the HTML
+    # fetch is the normal path, not a downgrade.
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    source = SourceRef(
+        kind="github-discussions",
+        label="announcements",
+        url="https://github.com/o/r/discussions/categories/announcements",
+    )
+
+    text = _fetch_source_text(
+        source, fetcher=lambda url: "html fallback", use_github_graphql=True
+    )
+
+    assert text == "html fallback"
+
+
 def test_github_discussions_graphql_index_filters_discussion_category() -> None:
     index = _format_github_discussions_index(
         {
@@ -401,6 +482,7 @@ def test_behavior_evidence_uses_locked_baseline_when_environment_drifted(
             }
         ],
         {"claude-agent-sdk": "0.2.106"},
+        inspect_candidates=True,
     )
 
     assert calls == [
@@ -408,6 +490,73 @@ def test_behavior_evidence_uses_locked_baseline_when_environment_drifted(
         ("claude-agent-sdk", "0.2.106", "candidate"),
     ]
     assert behavior["diffs"][0].severity == "changed"
+
+
+def test_behavior_candidate_probes_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Probing a candidate pip-installs and imports freshly downloaded upstream
+    # code; without --inspect-candidates that must never happen, and the gap
+    # must be an explicit skip record rather than a silent evidence hole or a
+    # phantom "breaking" diff.
+    def explode(package: str, version: str, *, scope: str = "candidate") -> tuple[Any, ...]:
+        raise AssertionError("venv probe must not run without --inspect-candidates")
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_candidate_in_venv",
+        explode,
+    )
+
+    behavior = collect_behavior_evidence(
+        [
+            {
+                "name": "claude-agent-sdk",
+                "locked_version": "0.2.96",
+                "installed_version": "0.2.106",
+            }
+        ],
+        {"claude-agent-sdk": "0.2.106"},
+    )
+
+    candidate_results = [r for r in behavior["results"] if r.scope == "candidate"]
+    assert [r.status for r in candidate_results] == ["skip"]
+    assert "--inspect-candidates" in candidate_results[0].summary
+    # The drifted lockfile baseline falls back to the installed environment.
+    assert any(r.scope == "current-environment" for r in behavior["results"])
+    assert behavior["summary"]["breaking_count"] == 0
+
+
+def test_behavior_diffs_ignore_one_sided_skip() -> None:
+    diffs = diff_behavior_results(
+        [
+            _probe("claude-agent-sdk", "0.2.96", "current-environment", "pass", {"fields": ["a"]}),
+            _probe("claude-agent-sdk", "0.2.106", "candidate", "skip", {"reason": "opt-in"}),
+        ]
+    )
+
+    assert diffs == ()
+
+
+def test_candidate_behavior_probe_scrubs_subprocess_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_envs: list[dict[str, str] | None] = []
+
+    def fake_run(args: Any, **kwargs: Any) -> Any:
+        captured_envs.append(kwargs.get("env"))
+        return types.SimpleNamespace(stdout="[]", returncode=0)
+
+    monkeypatch.setenv("ARK_FAKE_SECRET", "not-for-candidates")
+    monkeypatch.setattr("examples.sdk_evolution_agent.behavior.subprocess.run", fake_run)
+
+    results = probe_candidate_in_venv("claude-agent-sdk", "9.9.9")
+
+    assert results == ()
+    # venv create, pip install, probe script: every subprocess that touches the
+    # freshly downloaded candidate runs with the scrubbed environment.
+    assert len(captured_envs) == 3
+    for env in captured_envs:
+        assert env is not None
+        assert "ARK_FAKE_SECRET" not in env
+        assert env.get("HOME") != os.environ.get("HOME")
 
 
 def test_behavior_probe_guard_blocks_breaking_candidate_diff() -> None:
@@ -1033,7 +1182,11 @@ async def test_run_agent_does_not_install_candidates_by_default(
     )
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.cli.collect_behavior_evidence",
-        lambda packages, updates: {"results": [], "diffs": [], "summary": {"status": "pass"}},
+        lambda packages, updates, *, inspect_candidates=False: {
+            "results": [],
+            "diffs": [],
+            "summary": {"status": "pass"},
+        },
     )
 
     # Default run (no inspect_candidates) must never pip-install/import upstream code.
@@ -1156,7 +1309,11 @@ version = "0.2.1"
     )
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.cli.collect_behavior_evidence",
-        lambda packages, updates: {"results": [], "diffs": [], "summary": {"status": "pass"}},
+        lambda packages, updates, *, inspect_candidates=False: {
+            "results": [],
+            "diffs": [],
+            "summary": {"status": "pass"},
+        },
     )
     commands: list[tuple[str, ...]] = []
 

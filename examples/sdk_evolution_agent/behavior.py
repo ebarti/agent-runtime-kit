@@ -15,14 +15,24 @@ from pathlib import Path
 from typing import Any
 
 from examples.sdk_evolution_agent.models import BehaviorDiff, BehaviorProbeResult
-from examples.sdk_evolution_agent.snapshots import DEFAULT_MODULES
+from examples.sdk_evolution_agent.snapshots import DEFAULT_MODULES, isolated_env
 
 
 def collect_behavior_evidence(
     packages: Sequence[Mapping[str, object]],
     update_versions: Mapping[str, str],
+    *,
+    inspect_candidates: bool = False,
 ) -> dict[str, Any]:
-    """Collect current/candidate behavior probes and compare them."""
+    """Collect current/candidate behavior probes and compare them.
+
+    Probing a version that is not installed means pip-installing and importing
+    freshly downloaded upstream code, so those venv probes run only when the
+    caller opted in via ``inspect_candidates`` (the ``--inspect-candidates`` CLI
+    flag) — the same gate the API snapshots use. Without the opt-in, candidates
+    get an explicit ``skip`` record instead of a silent evidence hole, and a
+    drifted lockfile baseline falls back to probing the installed environment.
+    """
 
     results: list[BehaviorProbeResult] = []
     for package in packages:
@@ -32,13 +42,21 @@ def collect_behavior_evidence(
         locked_version = _string_or_none(package.get("locked_version"))
         installed_version = _string_or_none(package.get("installed_version"))
         current_version = locked_version or installed_version
-        if locked_version and installed_version and locked_version != installed_version:
+        if (
+            inspect_candidates
+            and locked_version
+            and installed_version
+            and locked_version != installed_version
+        ):
             results.extend(probe_candidate_in_venv(name, locked_version, scope="current-baseline"))
         else:
             results.extend(probe_current_package(name, version=current_version))
         candidate = update_versions.get(name)
         if candidate:
-            results.extend(probe_candidate_in_venv(name, candidate, scope="candidate"))
+            if inspect_candidates:
+                results.extend(probe_candidate_in_venv(name, candidate, scope="candidate"))
+            else:
+                results.append(_skipped_candidate_probe(name, candidate))
     diffs = diff_behavior_results(results)
     return {
         "results": [result for result in results],
@@ -69,7 +87,12 @@ def probe_candidate_in_venv(
 
     with tempfile.TemporaryDirectory(prefix="ark-sdk-behavior-") as directory:
         venv = Path(directory) / ".venv"
-        subprocess.run((python, "-m", "venv", str(venv)), check=True, timeout=timeout)
+        # Scrub the environment for every subprocess that touches freshly
+        # downloaded upstream code (same scrub as the API snapshots): a
+        # throwaway HOME and only PATH, so a malicious or buggy candidate
+        # package cannot read the caller's credentials/config.
+        env = isolated_env(Path(directory))
+        subprocess.run((python, "-m", "venv", str(venv)), check=True, timeout=timeout, env=env)
         bin_dir = "Scripts" if sys.platform == "win32" else "bin"
         venv_python = venv / bin_dir / "python"
         subprocess.run(
@@ -78,6 +101,7 @@ def probe_candidate_in_venv(
             text=True,
             capture_output=True,
             timeout=timeout,
+            env=env,
         )
         completed = subprocess.run(
             (str(venv_python), "-c", _PROBE_SCRIPT, package, version, scope),
@@ -85,6 +109,7 @@ def probe_candidate_in_venv(
             text=True,
             capture_output=True,
             timeout=timeout,
+            env=env,
         )
     raw = json.loads(completed.stdout)
     return tuple(BehaviorProbeResult(**item) for item in raw)
@@ -101,6 +126,10 @@ def diff_behavior_results(results: Sequence[BehaviorProbeResult]) -> tuple[Behav
         before = scopes.get("current-baseline") or scopes.get("current-environment")
         after = scopes.get("candidate") or scopes.get("isolated-venv")
         if before is None or after is None:
+            continue
+        if (before.status == "skip") != (after.status == "skip"):
+            # One side was not probed (candidate installs are opt-in): absence
+            # of evidence is not a behavior change and must not read as one.
             continue
         if before.status == after.status and _contract_details(before) == _contract_details(after):
             severity = "none"
@@ -344,6 +373,22 @@ def _failed(
         status="fail",
         summary=str(exc),
         details={"error": str(exc)},
+    )
+
+
+def _skipped_candidate_probe(package: str, version: str) -> BehaviorProbeResult:
+    return BehaviorProbeResult(
+        package=package,
+        version=version,
+        scope="candidate",
+        probe="adapter-contract",
+        status="skip",
+        summary=(
+            "Candidate behavior probe skipped: probing a candidate installs and "
+            "imports freshly downloaded upstream code, which is opt-in. Rerun "
+            "with --inspect-candidates to collect this evidence."
+        ),
+        details={"reason": "candidate installs are opt-in (--inspect-candidates)"},
     )
 
 

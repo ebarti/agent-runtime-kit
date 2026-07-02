@@ -191,7 +191,11 @@ async def run_agent(
             for item in collect_release_notes(evidence.get("packages", []), update_versions)
         ]
         behavior = to_jsonable(
-            collect_behavior_evidence(evidence.get("packages", []), update_versions)
+            collect_behavior_evidence(
+                evidence.get("packages", []),
+                update_versions,
+                inspect_candidates=options.inspect_candidates,
+            )
         )
         direction, architecture, review = await run_analysis_pipeline(
             selected_runtime,

@@ -117,12 +117,15 @@ contains a different installed version, the agent inspects the locked baseline
 in a temporary isolated virtualenv instead of trusting the drifted environment.
 When a refresh preview is available, package update candidates come from the
 resolver's `uv lock --dry-run -P ...` output, not only from PyPI's `latest`
-metadata. For each resolver update candidate, the agent installs the target
-version in a temporary isolated virtualenv and writes an API snapshot plus
-`api_diffs.json` entry. This avoids false downgrade diffs for packages whose
-locked prerelease is newer than PyPI's stable latest field. Candidate inspection
-is always enabled for update candidates; `--inspect-candidates` remains accepted
-only for CLI compatibility.
+metadata. With `--inspect-candidates`, the agent installs each resolver update
+candidate in a temporary isolated virtualenv — with a credential-scrubbed
+environment (throwaway `HOME`, `PATH` only) — and writes an API snapshot plus
+`api_diffs.json` entry, and runs the behavior probes against the candidate the
+same way. This avoids false downgrade diffs for packages whose locked
+prerelease is newer than PyPI's stable latest field. Candidate inspection is
+opt-in because it executes freshly downloaded upstream code; without the flag,
+candidates are recorded as explicit `skip` entries rather than silently
+missing evidence.
 
 If `uv lock --dry-run -P ...` reports an SDK update but the run cannot produce a
 candidate-version API diff for that package, implementation is blocked and the

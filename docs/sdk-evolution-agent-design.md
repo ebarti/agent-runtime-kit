@@ -197,9 +197,12 @@ python -m examples.sdk_evolution_agent \
   --package google-antigravity
 ```
 
-`--inspect-candidates` should be effectively always on. The CLI can keep the
-flag for compatibility, but update candidates without candidate API snapshots
-are not actionable.
+`--inspect-candidates` was originally envisioned as effectively always on,
+since update candidates without candidate API snapshots are not actionable.
+The shipped behavior deliberately inverts that default: candidate inspection
+installs and imports freshly downloaded upstream code, so it is opt-in and
+runs in a credential-scrubbed environment, with explicit `skip` records when
+it is off.
 
 Implementation mode should remain explicitly gated:
 

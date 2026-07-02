@@ -247,19 +247,25 @@ def _fetch_source_text(
     use_github_graphql: bool,
 ) -> str:
     if use_github_graphql and source.kind == "github-discussions" and source.url:
-        try:
-            return _fetch_github_discussions_index(source.url)
-        except Exception:
-            pass
+        token = _github_token()
+        if token:
+            # With a token configured, a GraphQL failure (expired/insufficient
+            # credentials, API errors) must surface — the caller records it on
+            # the source — instead of silently downgrading to the
+            # unauthenticated HTML scrape, which would hide a broken token
+            # behind lower-quality evidence. Without a token, the HTML path is
+            # simply the tokenless mode of operation.
+            return _fetch_github_discussions_index(source.url, token=token)
     if not source.url:
         return ""
     return fetcher(source.url)
 
 
-def _fetch_github_discussions_index(url: str) -> str:
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if not token:
-        raise RuntimeError("GITHUB_TOKEN or GH_TOKEN is required for GitHub Discussions GraphQL")
+def _github_token() -> str | None:
+    return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+
+
+def _fetch_github_discussions_index(url: str, *, token: str) -> str:
     owner, repo, category_slug = _parse_github_discussion_category_url(url)
     query = """
     query($owner: String!, $repo: String!) {
@@ -384,7 +390,15 @@ def _release_note_links_for_version(source_url: str, text: str, to_version: str)
         window = text[match.end() : match.end() + 1200]
         if not any(marker in window for marker in markers):
             continue
-        links.append(urllib.parse.urljoin(source_url, match.group("path")))
+        resolved = urllib.parse.urljoin(source_url, match.group("path"))
+        parsed = urllib.parse.urlparse(resolved)
+        # These hrefs come from fetched content that can carry user-generated
+        # markup (discussion bodies). Only follow https URLs on github.com
+        # itself: a protocol-relative path ("//evil.example/x/discussions/1")
+        # would otherwise urljoin into an off-site request.
+        if parsed.scheme != "https" or parsed.netloc != "github.com":
+            continue
+        links.append(resolved)
     return tuple(_dedupe(links))
 
 

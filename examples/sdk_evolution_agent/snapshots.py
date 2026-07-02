@@ -97,14 +97,15 @@ def diff_snapshot_groups(snapshots: Sequence[ApiSnapshot]) -> tuple[ApiDiff, ...
     return tuple(diffs)
 
 
-def _isolated_env(home: Path) -> dict[str, str]:
+def isolated_env(home: Path) -> dict[str, str]:
     """A minimal environment for candidate subprocesses: PATH + a throwaway HOME.
 
     Deliberately omits the caller's credentials/config so freshly downloaded
     upstream code executed during inspection cannot read them. That scrub also
     drops proxy and CA overrides (HTTPS_PROXY, SSL_CERT_FILE, PIP_INDEX_URL...),
     so behind a corporate TLS-intercepting proxy or private mirror the candidate
-    install may fail — an accepted trade-off of the isolation.
+    install may fail — an accepted trade-off of the isolation. Shared with the
+    behavior probes, which install candidates the same way.
     """
 
     env = {"PATH": os.environ.get("PATH", ""), "HOME": str(home)}
@@ -132,7 +133,7 @@ def snapshot_candidate_in_venv(
         # Scrub the environment for every subprocess that touches freshly downloaded
         # upstream code: give it a throwaway HOME and only PATH, so a malicious or
         # buggy candidate package cannot read the caller's credentials/config.
-        env = _isolated_env(Path(directory))
+        env = isolated_env(Path(directory))
         subprocess.run(
             (python, "-m", "venv", str(venv)), check=True, timeout=timeout, env=env
         )
