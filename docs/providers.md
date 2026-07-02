@@ -25,11 +25,19 @@ to the exact missing extra.
 
 ## Runtime Notes
 
+All three adapters map the task's system prompt (Claude `system_prompt`, Codex
+`developer_instructions`, Antigravity `system_instructions`) and the `model` /
+`reasoning_effort` fields (falling back to the `metadata` aliases of the same
+names).
+
 Claude uses the `claude-agent-sdk` package and maps working directory,
-permissions, MCP servers, sessions, structured output, tool allow/deny lists,
-runtime environment, and budget where supported by the installed SDK. It
-streams incremental output and tool events while the SDK runs, and sets
+permissions, filesystem access (a `READ_ONLY` filesystem forces `plan` mode),
+MCP servers, sessions, structured output, tool allow/deny lists, runtime
+environment, and budget where supported by the installed SDK. It streams
+incremental output and tool events while the SDK runs, and sets
 `finish_reason="max_turns"` when a turn is truncated by the max-turns limit.
+The effective vendor `permission_mode` is reported in
+`AgentResult.metadata["permission_mode"]`.
 `permissions.network` has no SDK surface and is rejected with a typed error.
 Claude auth is provider-owned: use Anthropic API key auth, or configure
 third-party provider modes through Claude Code environment/settings such as
@@ -111,11 +119,17 @@ names are validated against the
 not accept per-server env values. The default tool posture with no
 `allowed_tools` is:
 
-| `PermissionMode` (or `READ_ONLY` filesystem) | Toolset | Policy |
-|----------------------------------------------|---------|--------|
-| `STRICT`, or any `READ_ONLY` filesystem | read-only | none (no `allow_all`) |
-| `CAUTIOUS`, `DEFAULT` | nondestructive (no `run_command`) | `allow_all` |
-| `PERMISSIVE` | all tools | `allow_all` |
+| `PermissionMode` / filesystem | Toolset | Policy |
+|-------------------------------|---------|--------|
+| `STRICT` (any filesystem) | read-only | none (no `allow_all`) |
+| any mode with `READ_ONLY` filesystem | read-only | `allow_all` (policy follows the mode; only `STRICT` drops it) |
+| `CAUTIOUS`, `DEFAULT` (writable filesystem) | nondestructive (no `run_command`) | `allow_all` |
+| `PERMISSIVE` (writable filesystem) | all tools | `allow_all` |
+
+A `READ_ONLY` filesystem forces the read-only toolset; the `allow_all` policy is
+dropped only for `STRICT`. When an explicit `allowed_tools` list is combined with
+a `READ_ONLY` filesystem, any non-read-only tool in it is rejected rather than
+silently granted.
 
 A deny-list under a `READ_ONLY` filesystem (or `STRICT`) subtracts from the
 read-only toolset, and under `DEFAULT`/`CAUTIOUS` from the nondestructive
