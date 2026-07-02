@@ -21,8 +21,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because its SDK process is conversation-scoped.
 - The SDK evolution agent now enables vendor process reuse for multi-stage
   SDK-backed runs and closes internally owned runtimes when the run exits.
+- `FinishReason` enum of the canonical `finish_reason` values, plus first-class
+  `AgentTask.model` and `AgentTask.reasoning_effort` fields (the
+  `metadata["model"]`/`metadata["reasoning_effort"]` aliases keep working).
+- Third-party runtime kinds: `AgentRuntimeKind.coerce` and the registry accept
+  namespaced strings (e.g. `"x-myorg-agent"`), and `runtime_kind_value()`
+  returns the wire form of either shape.
+- Tool observability parity: the Codex adapter emits `agent.tool.requested` /
+  `agent.tool.completed` events, Claude tool audits carry `result_preview`, and
+  Antigravity audits are recorded per call rather than collapsed by tool name.
+- Claude reports the effective vendor permission mode in
+  `AgentResult.metadata["permission_mode"]`, and the Codex/Antigravity adapters
+  record SDK kwargs dropped for compatibility in
+  `AgentResult.metadata["dropped_options"]`.
+- `docs/api-stability.md` documents the public surface, the 0.x compatibility
+  policy, and the vendor SDK pinning policy.
 
 ### Changed
+
+- BREAKING: the `AgentRuntime` protocol now requires `aclose()` and async
+  context-manager support, and `kind` is typed `AgentRuntimeKind | str` so
+  third-party runtimes can conform without forking the enum.
+- BREAKING: mapping fields on `AgentTask`, `AgentResult`, and related models are
+  copied at construction and read-only afterwards (in-place mutation raises
+  `TypeError`); `dataclasses.asdict`, `copy.deepcopy`, `pickle`, and JSON
+  serialization keep working.
+- Claude: `CAUTIOUS` now maps to the vendor `default` permission mode instead of
+  `acceptEdits` (it was looser than `DEFAULT`), and a `READ_ONLY` filesystem
+  forces `plan` mode.
+- Claude: an unsatisfied `output_schema` or an empty completion now returns
+  `finish_reason="failed"` instead of silent success.
+- Codex: `Usage` reports the executed turn rather than cumulative
+  across-the-thread totals when resuming sessions.
+- All adapters: `AgentResult.session_id` falls back to the task-supplied session
+  handle when the SDK response omits one.
+- Antigravity: explicit `vertex=True` takes precedence over ambient API keys,
+  combining a `READ_ONLY` filesystem with non-read-only `allowed_tools` is
+  rejected instead of silently granted, and vendor stop reasons map to
+  `max_tokens`/`failed` finish reasons.
+- Vendor SDK dependencies now carry pre-1.0 upper bounds (`claude-agent-sdk<0.3`,
+  `openai-codex<0.2`, `google-antigravity<0.2`) so a breaking upstream minor
+  cannot reach fresh installs before adapters are revalidated.
 
 - Installation docs now lead with `agent-runtime-kit[all]` for the easiest
   full-provider setup and explain provider extras as dependency isolation, not a
@@ -36,6 +75,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - Removed the stale internal publish checklist from public documentation.
+- BREAKING: removed the dead `AgentCapabilities.sdk_turn_limit` field (no
+  adapter ever read it).
+
+### Fixed
+
+- Reused vendor SDK clients are evicted when a run is interrupted or cancelled
+  mid-flight, and `aclose()` no longer races an in-flight run on the same
+  runtime instance.
+- Event redaction now covers camelCase secret keys (e.g. `accessToken`), and
+  the event sanitizer bounds recursion depth and detects reference cycles so
+  pathological metadata cannot abort a run.
+- SDK evolution example: inspecting candidate SDK versions (which pip-installs
+  and imports freshly downloaded upstream code) is now opt-in via
+  `--inspect-candidates` and runs in a credential-scrubbed environment, and
+  `--draft-pr` no longer fails when the report directory is gitignored.
 
 ## 0.2.0 - 2026-06-23
 
