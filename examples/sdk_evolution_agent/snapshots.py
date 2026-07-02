@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -96,6 +97,23 @@ def diff_snapshot_groups(snapshots: Sequence[ApiSnapshot]) -> tuple[ApiDiff, ...
     return tuple(diffs)
 
 
+def _isolated_env(home: Path) -> dict[str, str]:
+    """A minimal environment for candidate subprocesses: PATH + a throwaway HOME.
+
+    Deliberately omits the caller's credentials/config so freshly downloaded
+    upstream code executed during inspection cannot read them.
+    """
+
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(home)}
+    if sys.platform == "win32":
+        env["USERPROFILE"] = str(home)
+        for key in ("SYSTEMROOT", "SystemRoot", "COMSPEC", "PATHEXT", "TEMP", "TMP"):
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
+    return env
+
+
 def snapshot_candidate_in_venv(
     package: str,
     version: str,
@@ -108,7 +126,13 @@ def snapshot_candidate_in_venv(
     module_name = DEFAULT_MODULES.get(package, package.replace("-", "_"))
     with tempfile.TemporaryDirectory(prefix="ark-sdk-snapshot-") as directory:
         venv = Path(directory) / ".venv"
-        subprocess.run((python, "-m", "venv", str(venv)), check=True, timeout=timeout)
+        # Scrub the environment for every subprocess that touches freshly downloaded
+        # upstream code: give it a throwaway HOME and only PATH, so a malicious or
+        # buggy candidate package cannot read the caller's credentials/config.
+        env = _isolated_env(Path(directory))
+        subprocess.run(
+            (python, "-m", "venv", str(venv)), check=True, timeout=timeout, env=env
+        )
         bin_dir = "Scripts" if sys.platform == "win32" else "bin"
         venv_python = venv / bin_dir / "python"
         subprocess.run(
@@ -117,6 +141,7 @@ def snapshot_candidate_in_venv(
             text=True,
             capture_output=True,
             timeout=timeout,
+            env=env,
         )
         completed = subprocess.run(
             (
@@ -131,6 +156,7 @@ def snapshot_candidate_in_venv(
             text=True,
             capture_output=True,
             timeout=timeout,
+            env=env,
         )
     raw = json.loads(completed.stdout)
     return ApiSnapshot(
