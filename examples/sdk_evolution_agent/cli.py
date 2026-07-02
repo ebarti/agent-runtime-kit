@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import re
-from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -98,10 +97,12 @@ def parse_args(argv: list[str] | None = None) -> RunOptions:
     parser.add_argument(
         "--inspect-candidates",
         action="store_true",
-        default=True,
+        default=False,
         help=(
-            "Inspect latest candidate SDK versions in temporary virtualenvs. "
-            "Always enabled for update candidates; accepted for compatibility."
+            "Opt in to inspecting candidate SDK versions by pip-installing and "
+            "importing them in a temporary, credential-scrubbed virtualenv. This "
+            "executes freshly downloaded upstream code, so it is OFF by default; "
+            "without it, snapshots use the already-installed versions only."
         ),
     )
     parser.add_argument("--create-branch", action="store_true", help="Create a local branch first.")
@@ -146,7 +147,6 @@ async def run_agent(
 ) -> Path:
     """Run the full local SDK evolution workflow."""
 
-    options = replace(options, inspect_candidates=True)
     run_id = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     report_root = (options.workspace / options.report_dir / run_id).resolve()
     event_log_path = report_root / "events.jsonl"
@@ -184,7 +184,7 @@ async def run_agent(
             command_runner=command_runner,
         )
         update_versions = _refresh_update_versions(evidence)
-        snapshots = _collect_snapshots(evidence)
+        snapshots = _collect_snapshots(evidence, inspect_candidates=options.inspect_candidates)
         api_diffs = [to_jsonable(diff) for diff in diff_snapshot_groups(snapshots)]
         release_notes = [
             to_jsonable(item)
@@ -412,8 +412,10 @@ def _create_autonomous_pr(
 ) -> list[dict[str, Any]]:
     branch_name = options.branch_name or _current_branch(root, command_runner=command_runner)
     body = build_draft_pr_body(report_path.read_text(encoding="utf-8"))
-    relative_report = _relative_path(root, report_path.parent)
-    paths = ("uv.lock", relative_report)
+    # Only stage the lockfile. The report lives under the gitignored default
+    # report dir, so `git add`-ing it returned rc=1 and previously broke the
+    # --draft-pr flow; its content is already embedded in the PR body above.
+    paths = ("uv.lock",)
     results = [
         to_jsonable(stage_paths(root, paths, command_runner=command_runner)),
         to_jsonable(
@@ -452,6 +454,11 @@ def _commit_final_autonomous_pr_report(
 ) -> None:
     branch_name = options.branch_name or _current_branch(root, command_runner=command_runner)
     relative_report = _relative_path(root, report_path.parent)
+    if _path_is_git_ignored(root, relative_report, command_runner=command_runner):
+        # The default report dir is gitignored; its content is already embedded in
+        # the draft PR body, so there is nothing to commit. Previously this staged
+        # an ignored path (rc=1) and then raised. Skip cleanly instead.
+        return
     results = [
         stage_paths(root, (relative_report,), command_runner=command_runner),
         commit_staged(
@@ -466,6 +473,18 @@ def _commit_final_autonomous_pr_report(
     if failed:
         detail = failed[0].stderr or failed[0].stdout
         raise RuntimeError(f"failed to commit final autonomous PR report: {detail}")
+
+
+def _path_is_git_ignored(
+    root: Path, path: str, *, command_runner: CommandRunner | None
+) -> bool:
+    runner = command_runner
+    if runner is None:
+        from examples.sdk_evolution_agent.collectors import run_command
+
+        runner = run_command
+    # `git check-ignore` exits 0 when the path is ignored, 1 when it is tracked.
+    return runner(("git", "check-ignore", path), cwd=root).returncode == 0
 
 
 def _current_branch(root: Path, *, command_runner: CommandRunner | None) -> str:
@@ -485,8 +504,11 @@ def _relative_path(root: Path, path: Path) -> str:
         return str(path)
 
 
-def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = True) -> list[Any]:
-    del inspect_candidates  # Candidate inspection is mandatory for update candidates.
+def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = False) -> list[Any]:
+    # Candidate inspection pip-installs and imports freshly downloaded upstream
+    # code, so it only runs when explicitly opted in (--inspect-candidates). When
+    # off, every snapshot uses the already-installed version via snapshot_current_api,
+    # which imports nothing new.
     snapshots = []
     update_versions = _refresh_update_versions(evidence)
     refresh_preview_seen = evidence.get("refresh_preview") is not None
@@ -497,10 +519,12 @@ def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = T
         locked = package.get("locked_version")
         installed = package.get("installed_version")
         baseline = locked or installed
-        if locked and installed and locked != installed:
+        if inspect_candidates and locked and installed and locked != installed:
             snapshots.append(snapshot_candidate_in_venv(name, str(locked)))
         else:
             snapshots.append(snapshot_current_api(name, version=baseline))
+        if not inspect_candidates:
+            continue
         candidate = update_versions.get(name)
         if candidate is None and not refresh_preview_seen:
             latest = package.get("latest_version")
