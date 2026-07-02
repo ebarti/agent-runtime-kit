@@ -26,6 +26,18 @@ class UnsupportedTaskInputError(AgentRuntimeError, ValueError):
         super().__init__(f"{runtime_kind_value(self.kind)} cannot honor {field}: {message}")
 
 
+class OutputTypeError(AgentRuntimeError, TypeError):
+    """A structured ``output_type`` cannot be honored.
+
+    Raised when a Python type cannot be converted to a JSON schema (unsupported
+    annotation — the stdlib bridge deliberately supports a bounded subset and
+    fails closed on everything else), or when a returned payload does not
+    conform to the requested type. Schema-generation failures surface at call
+    time; payload mismatches are converted by ``AgentKit`` into a failed
+    ``AgentResult`` instead of raising.
+    """
+
+
 class RuntimeNotRegisteredError(AgentRuntimeError, LookupError):
     """No runtime factory is registered for the requested runtime kind."""
 

@@ -3,6 +3,7 @@
 from agent_runtime_kit._errors import (
     AgentRuntimeError,
     AgentRuntimeUnavailableError,
+    OutputTypeError,
     RuntimeNotRegisteredError,
     UnsupportedTaskInputError,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "FilesystemAccess",
     "FinishReason",
     "McpServerConfig",
+    "OutputTypeError",
     "PermissionMode",
     "PermissionProfile",
     "RuntimeAvailability",
