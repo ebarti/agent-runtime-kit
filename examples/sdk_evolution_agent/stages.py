@@ -243,7 +243,10 @@ async def run_analysis_pipeline(
         schema=ARCHITECTURE_DECISION_SCHEMA,
         context=context,
     )
-    architecture = with_kit_version_impact(architecture)
+    architecture = with_kit_version_impact(
+        architecture,
+        implementation_enabled=context.implementation_enabled,
+    )
     architecture = with_recursive_impact(
         architecture,
         api_diffs,
@@ -417,7 +420,11 @@ def with_recursive_impact(
     return result
 
 
-def with_kit_version_impact(architecture: Mapping[str, Any]) -> dict[str, Any]:
+def with_kit_version_impact(
+    architecture: Mapping[str, Any],
+    *,
+    implementation_enabled: bool = False,
+) -> dict[str, Any]:
     """Flag the example when the installed kit version moves past its adaptation marker."""
 
     try:
@@ -428,6 +435,12 @@ def with_kit_version_impact(architecture: Mapping[str, Any]) -> dict[str, Any]:
         return dict(architecture)
     result = dict(architecture)
     result["recursive_self_adaptation_impact"] = True
+    plan = [str(item) for item in result.get("self_adaptation_plan") or []]
+    has_executable_plan = implementation_enabled and any(
+        item.startswith("examples/sdk_evolution_agent/") for item in plan
+    )
+    if not has_executable_plan:
+        result["manual_design_required"] = True
     findings = list(result.get("findings") or [])
     findings.append(
         {

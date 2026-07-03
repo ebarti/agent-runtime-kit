@@ -81,26 +81,41 @@ def promote_baseline(
         snapshot
         for snapshot in snapshots
         if snapshot.get("package") in versions
+        and snapshot.get("requested_version")
         and snapshot.get("observed_version")
-        and snapshot.get("observed_version") != versions[snapshot["package"]]
+        and snapshot.get("observed_version") != snapshot.get("requested_version")
     ]
     if mismatched:
         return {
             "promoted": False,
             "status": "baseline-promotion-refused",
-            "blocked_reason": "snapshot observed_version does not match locked version",
+            "blocked_reason": "snapshot observed_version does not match requested_version",
+        }
+    selected_snapshots: dict[str, dict[str, Any]] = {}
+    snapshot_packages: set[str] = set()
+    for snapshot in snapshots:
+        package = str(snapshot.get("package") or "")
+        if not package or package not in versions or snapshot.get("import_error"):
+            continue
+        snapshot_packages.add(package)
+        if snapshot.get("observed_version") == versions[package]:
+            selected_snapshots[package] = snapshot
+    missing_promoted = sorted(snapshot_packages - set(selected_snapshots))
+    if missing_promoted:
+        return {
+            "promoted": False,
+            "status": "baseline-promotion-refused",
+            "blocked_reason": (
+                "no snapshot observed_version matches locked version for "
+                + ", ".join(missing_promoted)
+            ),
         }
 
     root = workspace / BASELINE_DIR
     snapshots_dir = root / "snapshots"
     snapshots_dir.mkdir(parents=True, exist_ok=True)
     package_snapshots: dict[str, str] = {}
-    for snapshot in snapshots:
-        package = str(snapshot.get("package") or "")
-        if not package or snapshot.get("import_error"):
-            continue
-        if package not in versions:
-            continue
+    for package, snapshot in selected_snapshots.items():
         path = snapshots_dir / f"{package}.json"
         write_json(path, snapshot)
         package_snapshots[package] = _sha256(path)

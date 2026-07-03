@@ -14,6 +14,7 @@ from examples.sdk_evolution_agent.collectors import (
     CommandRunner,
     PypiClient,
     collect_evidence,
+    read_uv_lock_versions,
     run_lock_update,
     run_verification_commands,
 )
@@ -183,6 +184,7 @@ def parse_args(argv: list[str] | None = None) -> RunOptions:
         allow_cap_raise=allow_cap_raise,
         commit_message=args.commit_message,
         pr_title=args.pr_title,
+        run_id=run_id,
     )
 
 
@@ -196,7 +198,7 @@ async def run_agent(
 ) -> Path:
     """Run the full local SDK evolution workflow."""
 
-    run_id = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_id = options.run_id or datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     violations = validate_run_plan(options, options.workspace, command_runner=command_runner)
     if violations:
         raise PreflightError(violations)
@@ -344,8 +346,9 @@ async def run_agent(
             }
             if not promotion.get("promoted"):
                 promoted = False
-                implementation["applied"] = False
-                implementation["blocked_reason"] = str(promotion.get("blocked_reason") or "")
+                implementation["promotion_blocked_reason"] = str(
+                    promotion.get("blocked_reason") or ""
+                )
         report_path = _write_full_report(
             context,
             config=config,
@@ -363,6 +366,7 @@ async def run_agent(
 
         if (
             options.draft_pr
+            and promoted
             and implementation.get("applied")
             and _verification_passed(implementation)
         ):
@@ -371,6 +375,7 @@ async def run_agent(
                 report_path=report_path,
                 options=options,
                 package_versions={**update_versions, **_applied_cap_raise_versions(implementation)},
+                changed_paths=_applied_changed_paths(implementation),
                 run_id=run_id,
                 command_runner=command_runner,
             )
@@ -399,9 +404,12 @@ async def run_agent(
                 command_runner=command_runner,
             )
         elif options.draft_pr:
-            implementation["pr_skipped_reason"] = (
-                "implementation was not applied or verification did not pass"
-            )
+            if implementation.get("applied") and _verification_passed(implementation):
+                implementation["pr_skipped_reason"] = "baseline promotion did not pass"
+            else:
+                implementation["pr_skipped_reason"] = (
+                    "implementation was not applied or verification did not pass"
+                )
             report_path = _write_full_report(
                 context,
                 config=config,
@@ -448,7 +456,7 @@ async def _run_local_sdk_update(
 ) -> dict[str, Any]:
     root = options.workspace
     transaction_files = _snapshot_transaction_files(root)
-    allowed_file_snapshot = _snapshot_allowed_files(root)
+    rollback_file_snapshot = _snapshot_rollback_files(root)
     apply_results = list(implementation.get("apply_results") or [])
     verification_results: list[dict[str, Any]] = []
     changes = list(implementation.get("changes") or [])
@@ -472,12 +480,22 @@ async def _run_local_sdk_update(
             package = str(candidate["package"])
             version = str(candidate["to_version"])
             raised = raise_package_cap_in_workspace(root, package, version)
-            if raised is not None:
-                cap_raise_versions[package] = version
-                packages.add(package)
-                changes.append(
-                    f"Raised {package} upper bound {raised.current} -> {raised.replacement}"
+            if raised is None:
+                apply_results.append(
+                    to_jsonable(
+                        CommandResult(
+                            command=("raise-cap", package, version),
+                            returncode=1,
+                            stderr="cap raise gate passed but no upper bound was changed",
+                        )
+                    )
                 )
+                continue
+            cap_raise_versions[package] = version
+            packages.add(package)
+            changes.append(
+                f"Raised {package} upper bound {raised.current} -> {raised.replacement}"
+            )
 
     if not packages:
         return {
@@ -491,7 +509,12 @@ async def _run_local_sdk_update(
         )
         apply_results.append(to_jsonable(update_result))
         if update_result.returncode != 0:
-            _restore_transaction(root, transaction_files, allowed_file_snapshot)
+            _restore_transaction(
+                root,
+                transaction_files,
+                rollback_file_snapshot,
+                command_runner=command_runner,
+            )
             return {
                 **implementation,
                 "applied": False,
@@ -501,6 +524,27 @@ async def _run_local_sdk_update(
                 "verification_results": verification_results,
                 "cap_raise_versions": cap_raise_versions,
                 "blocked_reason": update_result.stderr or update_result.stdout,
+            }
+        cap_raise_mismatches = _cap_raise_lock_mismatches(root, cap_raise_versions)
+        if cap_raise_mismatches:
+            _restore_transaction(
+                root,
+                transaction_files,
+                rollback_file_snapshot,
+                command_runner=command_runner,
+            )
+            return {
+                **implementation,
+                "applied": False,
+                "rolled_back": True,
+                "changes": changes,
+                "apply_results": apply_results,
+                "verification_results": verification_results,
+                "cap_raise_versions": cap_raise_versions,
+                "blocked_reason": (
+                    "cap raise did not resolve requested versions: "
+                    + ", ".join(cap_raise_mismatches)
+                ),
             }
 
         changes.append(
@@ -519,7 +563,12 @@ async def _run_local_sdk_update(
             )
             changes.extend(str(item) for item in stage_output.get("changes", []))
             if stage_output.get("blocked_reason"):
-                _restore_transaction(root, transaction_files, allowed_file_snapshot)
+                _restore_transaction(
+                    root,
+                    transaction_files,
+                    rollback_file_snapshot,
+                    command_runner=command_runner,
+                )
                 return {
                     **implementation,
                     "applied": False,
@@ -537,7 +586,12 @@ async def _run_local_sdk_update(
             path for path in changed_paths if not _implementation_path_allowed(path)
         ]
         if out_of_scope:
-            _restore_transaction(root, transaction_files, allowed_file_snapshot)
+            _restore_transaction(
+                root,
+                transaction_files,
+                rollback_file_snapshot,
+                command_runner=command_runner,
+            )
             return {
                 **implementation,
                 "applied": False,
@@ -576,10 +630,16 @@ async def _run_local_sdk_update(
             "apply_results": apply_results,
             "verification_results": verification_results,
             "cap_raise_versions": cap_raise_versions,
+            "changed_paths": changed_paths,
             "blocked_reason": "",
         }
         if not _verification_passed(candidate):
-            _restore_transaction(root, transaction_files, allowed_file_snapshot)
+            _restore_transaction(
+                root,
+                transaction_files,
+                rollback_file_snapshot,
+                command_runner=command_runner,
+            )
             return {
                 **candidate,
                 "applied": False,
@@ -599,7 +659,12 @@ async def _run_local_sdk_update(
         )
         candidate["implementation_review"] = implementation_review
         if implementation_review.get("status") != "pass":
-            _restore_transaction(root, transaction_files, allowed_file_snapshot)
+            _restore_transaction(
+                root,
+                transaction_files,
+                rollback_file_snapshot,
+                command_runner=command_runner,
+            )
             return {
                 **candidate,
                 "applied": False,
@@ -608,7 +673,12 @@ async def _run_local_sdk_update(
             }
         return candidate
     except Exception as exc:
-        _restore_transaction(root, transaction_files, allowed_file_snapshot)
+        _restore_transaction(
+            root,
+            transaction_files,
+            rollback_file_snapshot,
+            command_runner=command_runner,
+        )
         return {
             **implementation,
             "applied": False,
@@ -625,9 +695,9 @@ _ALLOWED_IMPLEMENTATION_PREFIXES = (
     "examples/sdk_evolution_agent/",
     "tests/test_sdk_evolution_",
     "docs/sdk-evolution-agent",
-    ".sdk-evolution/",
 )
 _ALLOWED_IMPLEMENTATION_FILES = {"uv.lock", "pyproject.toml"}
+_ROLLBACK_PROTECTED_PREFIXES = ("reports/", ".sdk-evolution/")
 
 
 def _verification_commands(architecture: dict[str, Any]) -> tuple[str, ...]:
@@ -646,15 +716,20 @@ def _snapshot_transaction_files(root: Path) -> dict[str, bytes | None]:
     return snapshot
 
 
-def _snapshot_allowed_files(root: Path) -> dict[str, bytes]:
+def _snapshot_rollback_files(root: Path) -> dict[str, bytes]:
     snapshot: dict[str, bytes] = {}
-    for base in (root / "examples" / "sdk_evolution_agent", root / "docs", root / "tests"):
+    for base in (
+        root / "examples" / "sdk_evolution_agent",
+        root / "docs",
+        root / "tests",
+        root / ".sdk-evolution",
+    ):
         if not base.exists():
             continue
         for path in base.rglob("*"):
             if path.is_file():
                 rel = _relative_path(root, path)
-                if _implementation_path_allowed(rel):
+                if _implementation_path_allowed(rel) or rel.startswith(".sdk-evolution/"):
                     snapshot[rel] = path.read_bytes()
     return snapshot
 
@@ -662,7 +737,9 @@ def _snapshot_allowed_files(root: Path) -> dict[str, bytes]:
 def _restore_transaction(
     root: Path,
     transaction_files: dict[str, bytes | None],
-    allowed_file_snapshot: dict[str, bytes],
+    rollback_file_snapshot: dict[str, bytes],
+    *,
+    command_runner: CommandRunner | None,
 ) -> None:
     for relative, data in transaction_files.items():
         path = root / relative
@@ -670,17 +747,17 @@ def _restore_transaction(
             path.unlink(missing_ok=True)
         else:
             path.write_bytes(data)
-    for relative, data in allowed_file_snapshot.items():
+    for relative, data in rollback_file_snapshot.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-    for relative in _changed_paths(_git_status(root, command_runner=None)):
-        if relative.startswith("reports/"):
+    for relative in _changed_paths(_git_status(root, command_runner=command_runner)):
+        if _rollback_delete_protected(relative):
             continue
-        if relative in transaction_files or relative in allowed_file_snapshot:
+        if relative in transaction_files or relative in rollback_file_snapshot:
             continue
         path = root / relative
-        if path.exists() and _implementation_path_allowed(relative):
+        if path.exists():
             if path.is_dir():
                 for child in sorted(path.rglob("*"), reverse=True):
                     if child.is_file() or child.is_symlink():
@@ -690,6 +767,10 @@ def _restore_transaction(
                 path.rmdir()
             else:
                 path.unlink(missing_ok=True)
+
+
+def _rollback_delete_protected(relative: str) -> bool:
+    return any(relative.startswith(prefix) for prefix in _ROLLBACK_PROTECTED_PREFIXES)
 
 
 def _git_status(root: Path, *, command_runner: CommandRunner | None) -> str:
@@ -744,6 +825,24 @@ def _applied_cap_raise_versions(implementation: dict[str, Any]) -> dict[str, str
     return {str(package): str(version) for package, version in versions.items()}
 
 
+def _applied_changed_paths(implementation: dict[str, Any]) -> tuple[str, ...]:
+    paths = implementation.get("changed_paths")
+    if not isinstance(paths, list | tuple):
+        return ()
+    return tuple(str(path) for path in paths if path)
+
+
+def _cap_raise_lock_mismatches(root: Path, cap_raise_versions: dict[str, str]) -> tuple[str, ...]:
+    if not cap_raise_versions:
+        return ()
+    locked = read_uv_lock_versions(root / "uv.lock")
+    return tuple(
+        f"{package} locked {locked.get(package) or 'missing'} != requested {version}"
+        for package, version in sorted(cap_raise_versions.items())
+        if locked.get(package) != version
+    )
+
+
 def _write_full_report(
     context: RunContext,
     *,
@@ -793,6 +892,7 @@ def _create_autonomous_pr(
     report_path: Path,
     options: RunOptions,
     package_versions: dict[str, str],
+    changed_paths: tuple[str, ...] = (),
     run_id: str,
     command_runner: CommandRunner | None,
 ) -> list[dict[str, Any]]:
@@ -824,7 +924,7 @@ def _create_autonomous_pr(
         if number:
             superseded.append(number)
 
-    paths = ("uv.lock", "pyproject.toml", ".sdk-evolution")
+    paths = tuple(dict.fromkeys(("uv.lock", "pyproject.toml", ".sdk-evolution", *changed_paths)))
     results.extend(
         [
             to_jsonable(stage_paths(root, paths, command_runner=command_runner)),

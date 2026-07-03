@@ -166,6 +166,7 @@ class RunOptions:
     allow_cap_raise: bool = False
     commit_message: str = "Run SDK evolution update"
     pr_title: str = "Adapt agent-runtime-kit to upstream SDK evolution"
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)

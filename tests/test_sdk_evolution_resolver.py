@@ -10,6 +10,7 @@ from examples.sdk_evolution_agent.collectors import (
 from examples.sdk_evolution_agent.models import CommandResult
 from examples.sdk_evolution_agent.resolver import (
     raise_upper_bounds_in_pyproject_text,
+    resolve_constraint_horizon_candidates,
     resolve_update_candidates,
 )
 
@@ -123,11 +124,94 @@ version = "0.2.2"
 
 
 def test_cap_rewrite_touches_only_upper_bound() -> None:
-    text = 'claude = ["claude-agent-sdk>=0.2.87,<0.3"]\n'
+    text = (
+        '[project.optional-dependencies]\n'
+        'claude = ["claude-agent-sdk>=0.2.87,<0.3"]\n'
+        'all = ["claude-agent-sdk>=0.2.87,<0.3"]\n'
+        '[tool.uv]\n'
+        'exclude-newer = "2026-01-01T00:00:00Z"\n'
+    )
 
     updated, raised = raise_upper_bounds_in_pyproject_text(
         text, ("claude-agent-sdk",), versions={"claude-agent-sdk": "0.3.0"}
     )
 
-    assert updated == 'claude = ["claude-agent-sdk>=0.2.87,<0.4"]\n'
+    assert updated.count("claude-agent-sdk>=0.2.87,<0.4") == 2
+    assert "exclude-newer" in updated
     assert raised["claude-agent-sdk"].current == "<0.3"
+
+
+def test_horizon_candidates_distinguish_cap_blocked_from_cutoff_delayed(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text("# x\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project]
+name = "x"
+version = "0.0.0"
+[project.optional-dependencies]
+claude = ["claude-agent-sdk>=0.2,<0.3"]
+codex = ["openai-codex>=0.1.0b3,<0.2"]
+[tool.uv]
+exclude-newer = "2026-01-01T00:00:00Z"
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "uv.lock").write_text(
+        """
+[[package]]
+name = "claude-agent-sdk"
+version = "0.2.1"
+
+[[package]]
+name = "openai-codex"
+version = "0.1.0b3"
+""",
+        encoding="utf-8",
+    )
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        timeout: int,
+    ) -> CommandResult:
+        del command, env, timeout
+        (cwd / "uv.lock").write_text(
+            """
+[[package]]
+name = "claude-agent-sdk"
+version = "0.3.0"
+
+[[package]]
+name = "openai-codex"
+version = "0.1.1"
+""",
+            encoding="utf-8",
+        )
+        return CommandResult(command=("uv", "lock"), returncode=0)
+
+    candidates = resolve_constraint_horizon_candidates(
+        tmp_path,
+        ("claude-agent-sdk", "openai-codex"),
+        pypi_metadata={
+            "openai-codex": {
+                "releases": {
+                    "0.1.1": [
+                        {
+                            "upload_time_iso_8601": "2026-01-03T00:00:00.000Z",
+                        }
+                    ]
+                }
+            }
+        },
+        command_runner=runner,
+    )
+
+    by_package = {candidate.package: candidate for candidate in candidates}
+    assert by_package["claude-agent-sdk"].blocked_by_cap == "<0.3"
+    assert by_package["claude-agent-sdk"].cutoff_delayed_until is None
+    assert by_package["openai-codex"].blocked_by_cap is None
+    assert by_package["openai-codex"].cutoff_delayed_until == "2026-01-11"

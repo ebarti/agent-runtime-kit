@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -125,12 +126,25 @@ def create_draft_pr(
     """Open a draft PR with gh when authenticated."""
 
     command_runner = command_runner or run_command
-    command = ["gh", "pr", "create", "--draft", "--title", title, "--body", body]
-    if base:
-        command.extend(("--base", base))
-    if head:
-        command.extend(("--head", head))
-    return _call_runner(command_runner, tuple(command), cwd=root, timeout=120)
+    body_path = _write_temp_pr_body(root, body)
+    try:
+        command = [
+            "gh",
+            "pr",
+            "create",
+            "--draft",
+            "--title",
+            title,
+            "--body-file",
+            str(body_path),
+        ]
+        if base:
+            command.extend(("--base", base))
+        if head:
+            command.extend(("--head", head))
+        return _call_runner(command_runner, tuple(command), cwd=root, timeout=120)
+    finally:
+        body_path.unlink(missing_ok=True)
 
 
 def list_open_sdk_evolution_prs(
@@ -154,7 +168,7 @@ def list_open_sdk_evolution_prs(
         timeout=120,
     )
     if result.returncode != 0:
-        return ()
+        raise RuntimeError(result.stderr or result.stdout or "failed to list SDK evolution PRs")
     try:
         payload = json.loads(result.stdout or "[]")
     except json.JSONDecodeError:
@@ -220,3 +234,16 @@ def _is_sdk_evolution_pr(item: dict[str, Any]) -> bool:
         return True
     labels = item.get("labels") or []
     return any(isinstance(label, dict) and label.get("name") == "sdk-evolution" for label in labels)
+
+
+def _write_temp_pr_body(root: Path, body: str) -> Path:
+    del root
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        prefix=".sdk-evolution-pr-",
+        suffix=".md",
+        delete=False,
+    ) as handle:
+        handle.write(body)
+        return Path(handle.name)

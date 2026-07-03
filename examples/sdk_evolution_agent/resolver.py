@@ -18,6 +18,7 @@ from pathlib import Path
 from examples.sdk_evolution_agent.collectors import (
     CommandRunner,
     _call_runner,
+    _version_key,
     cutoff_free_env,
     read_pyproject_dependency_specs,
     read_uv_lock_versions,
@@ -81,7 +82,12 @@ def resolve_constraint_horizon_candidates(
         if (candidate.package, candidate.to_version) in adoptable_keys:
             continue
         cap = raised_caps.get(candidate.package)
-        blocked_by_cap = cap.current if cap else _upper_bound(original_specs.get(candidate.package))
+        original_cap = cap.current if cap else _upper_bound(original_specs.get(candidate.package))
+        blocked_by_cap = (
+            original_cap
+            if original_cap and _violates_upper_bound(candidate.to_version, original_cap)
+            else None
+        )
         cutoff_delayed_until = None
         if blocked_by_cap is None:
             upload = upload_time_for_version(
@@ -109,7 +115,11 @@ class RaisedCap:
 
 
 def raise_upper_bounds_in_pyproject_text(
-    text: str, packages: Sequence[str], *, versions: Mapping[str, str] | None = None
+    text: str,
+    packages: Sequence[str],
+    *,
+    versions: Mapping[str, str] | None = None,
+    remove_exclude_newer: bool = False,
 ) -> tuple[str, dict[str, RaisedCap]]:
     """Raise only tracked package upper bounds enough to admit candidate versions."""
 
@@ -119,16 +129,26 @@ def raise_upper_bounds_in_pyproject_text(
         pattern = re.compile(
             rf"(?P<prefix>{re.escape(package)}[^\"']*?,)(?P<cap><\s*\d+(?:\.\d+)*)"
         )
-        match = pattern.search(result)
-        if not match:
-            continue
-        current = match.group("cap").replace(" ", "")
-        replacement = _raised_upper_bound(current, versions.get(package) if versions else None)
-        if replacement == current:
-            continue
-        result = result[: match.start("cap")] + replacement + result[match.end("cap") :]
-        raised[package] = RaisedCap(package=package, current=current, replacement=replacement)
-    result = _remove_tool_uv_exclude_newer(result)
+        target_version = versions.get(package) if versions else None
+
+        def replace(
+            match: re.Match[str],
+            package: str = package,
+            target_version: str | None = target_version,
+        ) -> str:
+            current = match.group("cap").replace(" ", "")
+            replacement = _raised_upper_bound(current, target_version)
+            if replacement == current:
+                return match.group(0)
+            raised.setdefault(
+                package,
+                RaisedCap(package=package, current=current, replacement=replacement),
+            )
+            return match.group("prefix") + replacement
+
+        result = pattern.sub(replace, result)
+    if remove_exclude_newer:
+        result = _remove_tool_uv_exclude_newer(result)
     return result, raised
 
 
@@ -242,6 +262,10 @@ def _upper_bound(spec: str | None) -> str | None:
         return None
     match = re.search(r"<\s*\d+(?:\.\d+)*", spec)
     return match.group(0).replace(" ", "") if match else None
+
+
+def _violates_upper_bound(version: str, upper_bound: str) -> bool:
+    return _version_key(version) >= _version_key(upper_bound.removeprefix("<"))
 
 
 def _remove_tool_uv_exclude_newer(text: str) -> str:
