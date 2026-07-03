@@ -57,6 +57,15 @@ _SECURITY_KWARGS = ("approval_mode", "sandbox")
 
 logger = logging.getLogger(__name__)
 
+VENDOR_CONTRACT = {
+    "run_params": frozenset(
+        {"cwd", "model", "approval_mode", "sandbox", "output_schema", "effort"}
+    ),
+    "thread_start_params": frozenset(
+        {"developer_instructions", "cwd", "model", "approval_mode", "sandbox"}
+    ),
+}
+
 
 class CodexAgentRuntime:
     """Run tasks through the official ``openai_codex`` Python SDK."""
@@ -737,4 +746,3 @@ def _uses_bedrock_provider(config_overrides: tuple[str, ...]) -> bool:
         if normalized_key == "model_provider" and normalized_value == "amazon-bedrock":
             return True
     return False
-

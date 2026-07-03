@@ -150,6 +150,13 @@ def collect_release_notes(
                     url=source.url,
                     version=to_version,
                     available=True,
+                    note=(
+                        "html-fallback (degraded)"
+                        if source.kind == "github-discussions"
+                        and use_default_fetcher
+                        and not _github_token()
+                        else ""
+                    ),
                 )
             )
             if source.kind != "github-discussions":
@@ -237,7 +244,7 @@ def fetch_url_text(url: str) -> str:
         raw = response.read()
     if raw.startswith(b"\x1f\x8b"):
         raw = gzip.decompress(raw)
-    return raw.decode("utf-8", errors="replace")
+    return str(raw.decode("utf-8", errors="replace"))
 
 
 def _fetch_source_text(
@@ -320,7 +327,10 @@ def _format_github_discussions_index(payload: Mapping[str, object], *, category_
     repository = _mapping_or_empty(_mapping_or_empty(payload.get("data")).get("repository"))
     discussions = _mapping_or_empty(repository.get("discussions"))
     lines: list[str] = []
-    for item in discussions.get("nodes") or ():
+    nodes = discussions.get("nodes")
+    if not isinstance(nodes, list):
+        return ""
+    for item in nodes:
         if not isinstance(item, Mapping):
             continue
         category = _mapping_or_empty(item.get("category"))
@@ -346,14 +356,14 @@ def _summaries_for_interval(
 ) -> list[str]:
     text = _prefer_github_discussion_body(text)
     lines = [line.strip() for line in text.splitlines()]
-    version_patterns = [to_version]
+    version_patterns = [_version_pattern(to_version)]
     if from_version:
-        version_patterns.append(from_version)
+        version_patterns.append(_version_pattern(from_version))
     matches: list[str] = []
     for index, line in enumerate(lines):
         if not line:
             continue
-        if any(pattern and pattern in line for pattern in version_patterns):
+        if any(pattern.search(line) for pattern in version_patterns):
             matches.append(_clean_summary(line))
             for nearby in lines[index + 1 : index + 9]:
                 cleaned = _clean_summary(nearby)
@@ -361,12 +371,16 @@ def _summaries_for_interval(
                     matches.append(cleaned)
     if not matches and to_version:
         compact = re.sub(r"\s+", " ", text)
-        version_index = compact.find(to_version)
-        if version_index >= 0:
-            start = max(0, version_index - 160)
-            end = min(len(compact), version_index + 320)
+        match = _version_pattern(to_version).search(compact)
+        if match:
+            start = max(0, match.start() - 160)
+            end = min(len(compact), match.end() + 320)
             matches.append(_clean_summary(compact[start:end]))
     return [match for match in matches if match]
+
+
+def _version_pattern(version: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![\w.])v?{re.escape(version)}(?![\w.])")
 
 
 def _prefer_github_discussion_body(text: str) -> str:

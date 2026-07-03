@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import inspect
 import json
 import os
@@ -28,6 +29,7 @@ def snapshot_current_api(package: str, *, version: str | None = None) -> ApiSnap
     """Capture public API for a package importable in the current environment."""
 
     module_name = DEFAULT_MODULES.get(package, package.replace("-", "_"))
+    observed = _observed_version(package)
     try:
         module = importlib.import_module(module_name)
     except Exception as exc:
@@ -35,6 +37,9 @@ def snapshot_current_api(package: str, *, version: str | None = None) -> ApiSnap
             package=package,
             version=version,
             module=module_name,
+            requested_version=version,
+            observed_version=observed,
+            provenance=_provenance(version, observed),
             import_error=str(exc),
         )
     members: list[ApiMember] = []
@@ -51,8 +56,11 @@ def snapshot_current_api(package: str, *, version: str | None = None) -> ApiSnap
         )
     return ApiSnapshot(
         package=package,
-        version=version or str(getattr(module, "__version__", "") or ""),
+        version=version or observed or str(getattr(module, "__version__", "") or ""),
         module=module_name,
+        requested_version=version,
+        observed_version=observed,
+        provenance=_provenance(version, observed),
         members=tuple(sorted(members, key=lambda item: item.name)),
     )
 
@@ -134,19 +142,26 @@ def snapshot_candidate_in_venv(
         # upstream code: give it a throwaway HOME and only PATH, so a malicious or
         # buggy candidate package cannot read the caller's credentials/config.
         env = isolated_env(Path(directory))
-        subprocess.run(
-            (python, "-m", "venv", str(venv)), check=True, timeout=timeout, env=env
+        venv_result = _run_snapshot_subprocess(
+            (python, "-m", "venv", str(venv)), env=env, timeout=timeout
         )
+        if venv_result is not None:
+            return _failed_snapshot(
+                package, version, module_name, venv_result, "venv creation failed"
+            )
         bin_dir = "Scripts" if sys.platform == "win32" else "bin"
         venv_python = venv / bin_dir / "python"
-        subprocess.run(
+        install_result = _run_snapshot_subprocess(
             (str(venv_python), "-m", "pip", "install", f"{package}=={version}"),
-            check=True,
             text=True,
             capture_output=True,
             timeout=timeout,
             env=env,
         )
+        if install_result is not None:
+            return _failed_snapshot(
+                package, version, module_name, install_result, "pip install failed"
+            )
         completed = subprocess.run(
             (
                 str(venv_python),
@@ -156,17 +171,28 @@ def snapshot_candidate_in_venv(
                 version,
                 module_name,
             ),
-            check=True,
             text=True,
             capture_output=True,
             timeout=timeout,
+            check=False,
             env=env,
         )
+        if completed.returncode != 0:
+            return _failed_snapshot(
+                package,
+                version,
+                module_name,
+                completed.stderr or completed.stdout,
+                "snapshot probe failed",
+            )
     raw = json.loads(completed.stdout)
     return ApiSnapshot(
         package=raw["package"],
         version=raw["version"],
         module=raw["module"],
+        requested_version=raw.get("requested_version"),
+        observed_version=raw.get("observed_version"),
+        provenance=raw.get("provenance", "observed"),
         members=tuple(ApiMember(**item) for item in raw.get("members", ())),
         import_error=raw.get("import_error"),
         source="isolated-venv",
@@ -190,14 +216,86 @@ def _signature(value: Any) -> str:
         return ""
 
 
+def _observed_version(package: str) -> str | None:
+    try:
+        return importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _provenance(requested: str | None, observed: str | None) -> str:
+    if requested and observed and requested != observed:
+        return "mismatched"
+    if observed is None:
+        return "not-observed"
+    return "observed"
+
+
+def _tail(text: str, *, limit: int = 500) -> str:
+    return text[-limit:]
+
+
+def _failed_snapshot(
+    package: str,
+    version: str,
+    module_name: str,
+    stderr: str,
+    reason: str,
+) -> ApiSnapshot:
+    return ApiSnapshot(
+        package=package,
+        version=version,
+        module=module_name,
+        requested_version=version,
+        observed_version=None,
+        provenance="not-observed",
+        import_error=f"{reason}: {_tail(stderr)}",
+        source="isolated-venv",
+    )
+
+
+def _run_snapshot_subprocess(
+    command: tuple[str, ...],
+    *,
+    env: dict[str, str],
+    timeout: int,
+    text: bool = True,
+    capture_output: bool = True,
+) -> str | None:
+    try:
+        completed = subprocess.run(
+            command,
+            text=text,
+            capture_output=capture_output,
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return f"timed out after {timeout}s"
+    if completed.returncode == 0:
+        return None
+    return _tail(completed.stderr or completed.stdout)
+
+
 _SNAPSHOT_SCRIPT = textwrap.dedent(
     """
     import importlib
+    import importlib.metadata
     import inspect
     import json
     import sys
 
     package, version, module_name = sys.argv[1:4]
+    try:
+        observed_version = importlib.metadata.version(package)
+    except Exception:
+        observed_version = None
+    provenance = (
+        "mismatched" if version and observed_version and version != observed_version
+        else "not-observed" if observed_version is None
+        else "observed"
+    )
     try:
         module = importlib.import_module(module_name)
         members = []
@@ -225,6 +323,9 @@ _SNAPSHOT_SCRIPT = textwrap.dedent(
         payload = {
             "package": package,
             "version": version,
+            "requested_version": version,
+            "observed_version": observed_version,
+            "provenance": provenance,
             "module": module_name,
             "members": sorted(members, key=lambda item: item["name"]),
             "import_error": None,
@@ -233,6 +334,9 @@ _SNAPSHOT_SCRIPT = textwrap.dedent(
         payload = {
             "package": package,
             "version": version,
+            "requested_version": version,
+            "observed_version": observed_version,
+            "provenance": provenance,
             "module": module_name,
             "members": [],
             "import_error": str(exc),

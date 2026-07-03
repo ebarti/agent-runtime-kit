@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
+from dataclasses import asdict, dataclass, field, is_dataclass
+from typing import Any, Literal, cast
+
+from agent_runtime_kit import OutputTypeError, json_schema_for, parse_as
 
 JsonSchema = dict[str, Any]
 
@@ -12,116 +14,155 @@ class SchemaValidationError(ValueError):
     """Raised when a runtime output does not satisfy the required shape."""
 
 
-DIRECTION_ANALYSIS_SCHEMA: JsonSchema = {
-    "type": "object",
-    "required": ["packages", "themes", "uncertainty"],
-    "additionalProperties": False,
-    "properties": {
-        "packages": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": ["name", "direction", "evidence"],
-                "additionalProperties": False,
-                "properties": {
-                    "name": {"type": "string"},
-                    "direction": {"type": "string"},
-                    "evidence": {"type": "array", "items": {"type": "string"}},
-                },
-            },
-        },
-        "themes": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": ["name", "summary"],
-                "additionalProperties": False,
-                "properties": {
-                    "name": {"type": "string"},
-                    "summary": {"type": "string"},
-                },
-            },
-        },
-        "uncertainty": {"type": "array", "items": {"type": "string"}},
-    },
+@dataclass(frozen=True)
+class DirectionPackage:
+    name: str
+    direction: str
+    evidence: list[str]
+
+
+@dataclass(frozen=True)
+class DirectionTheme:
+    name: str
+    summary: str
+
+
+@dataclass(frozen=True)
+class DirectionAnalysis:
+    packages: list[DirectionPackage]
+    themes: list[DirectionTheme]
+    uncertainty: list[str]
+
+
+@dataclass(frozen=True)
+class ArchitectureFinding:
+    classification: str
+    summary: str
+    evidence: list[str]
+
+
+@dataclass(frozen=True)
+class ArchitectureDecision:
+    findings: list[ArchitectureFinding]
+    safe_to_implement: bool
+    manual_design_required: bool
+    recursive_self_adaptation_impact: bool
+    self_adaptation_plan: list[str]
+    verification_commands: list[str]
+    uncertainty: list[str]
+    docs_test_changes: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ReviewerOutput:
+    status: Literal["pass", "reject"]
+    reasons: list[str]
+    required_changes: list[str]
+
+
+@dataclass(frozen=True)
+class ImplementationSummary:
+    applied: bool
+    changes: list[str]
+    blocked_reason: str
+
+
+DIRECTION_ANALYSIS_SCHEMA: JsonSchema = json_schema_for(DirectionAnalysis)
+ARCHITECTURE_DECISION_SCHEMA: JsonSchema = json_schema_for(ArchitectureDecision)
+IMPLEMENTATION_SUMMARY_SCHEMA: JsonSchema = json_schema_for(ImplementationSummary)
+REVIEWER_OUTPUT_SCHEMA: JsonSchema = json_schema_for(ReviewerOutput)
+
+_STAGE_OUTPUT_TYPES: dict[str, Any] = {
+    "direction-analysis": DirectionAnalysis,
+    "architecture-decision": ArchitectureDecision,
+    "review": ReviewerOutput,
+    "implementation": ImplementationSummary,
+    "review-implementation": ReviewerOutput,
 }
-
-ARCHITECTURE_DECISION_SCHEMA: JsonSchema = {
-    "type": "object",
-    "required": [
-        "findings",
-        "safe_to_implement",
-        "manual_design_required",
-        "recursive_self_adaptation_impact",
-        "self_adaptation_plan",
-        "verification_commands",
-        "uncertainty",
-    ],
-    "additionalProperties": False,
-    "properties": {
-        "findings": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": ["classification", "summary", "evidence"],
-                "additionalProperties": False,
-                "properties": {
-                    "classification": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "evidence": {"type": "array", "items": {"type": "string"}},
-                },
-            },
-        },
-        "safe_to_implement": {"type": "boolean"},
-        "manual_design_required": {"type": "boolean"},
-        "recursive_self_adaptation_impact": {"type": "boolean"},
-        "self_adaptation_plan": {"type": "array", "items": {"type": "string"}},
-        "verification_commands": {"type": "array", "items": {"type": "string"}},
-        "uncertainty": {"type": "array", "items": {"type": "string"}},
-    },
-}
-
-IMPLEMENTATION_SUMMARY_SCHEMA: JsonSchema = {
-    "type": "object",
-    "required": ["applied", "changes", "verification_results", "blocked_reason"],
-    "additionalProperties": False,
-    "properties": {
-        "applied": {"type": "boolean"},
-        "changes": {"type": "array", "items": {"type": "string"}},
-        "verification_results": {"type": "array", "items": {"type": "string"}},
-        "blocked_reason": {"type": "string"},
-    },
-}
-
-REVIEWER_OUTPUT_SCHEMA: JsonSchema = {
-    "type": "object",
-    "required": ["status", "reasons", "required_changes"],
-    "additionalProperties": False,
-    "properties": {
-        "status": {"type": "string", "enum": ["pass", "reject"]},
-        "reasons": {"type": "array", "items": {"type": "string"}},
-        "required_changes": {"type": "array", "items": {"type": "string"}},
-    },
-}
+_SCHEMA_OUTPUT_TYPES: tuple[tuple[JsonSchema, Any], ...] = (
+    (DIRECTION_ANALYSIS_SCHEMA, DirectionAnalysis),
+    (ARCHITECTURE_DECISION_SCHEMA, ArchitectureDecision),
+    (REVIEWER_OUTPUT_SCHEMA, ReviewerOutput),
+    (IMPLEMENTATION_SUMMARY_SCHEMA, ImplementationSummary),
+)
 
 
-def validate_mapping(data: Any, schema: Mapping[str, Any], *, name: str) -> dict[str, Any]:
-    """Validate the small schema subset used by this example."""
+def parse_stage_output(stage: str, data: Any) -> dict[str, Any]:
+    """Validate a stage payload through the kit's typed bridge."""
 
+    output_type = _STAGE_OUTPUT_TYPES.get(stage)
+    if output_type is None:
+        if not isinstance(data, dict):
+            raise SchemaValidationError(f"{stage} must be an object")
+        return dict(data)
+    try:
+        parsed = parse_as(output_type, data)
+    except OutputTypeError as exc:
+        raise SchemaValidationError(str(exc)) from exc
+    return _dataclass_to_dict(parsed)
+
+
+def validate_mapping(data: Any, schema: JsonSchema, *, name: str) -> dict[str, Any]:
+    """Validate the small schema subset used by this example.
+
+    The runtime stages use :func:`parse_stage_output`; this wrapper remains for
+    direct tests and for any future caller that only has a JSON schema object.
+    """
+
+    for known_schema, output_type in _SCHEMA_OUTPUT_TYPES:
+        if schema == known_schema:
+            try:
+                parsed = parse_as(output_type, data)
+            except OutputTypeError as exc:
+                raise SchemaValidationError(str(exc)) from exc
+            return _dataclass_to_dict(parsed)
+    _validate_schema_value(data, schema, path=name)
     if not isinstance(data, dict):
         raise SchemaValidationError(f"{name} must be an object")
-    for field in schema.get("required", ()):
-        if field not in data:
-            raise SchemaValidationError(f"{name} missing required field {field!r}")
-    properties = schema.get("properties", {})
-    for field, field_schema in properties.items():
-        if field not in data:
-            continue
-        expected = field_schema.get("type")
-        if expected == "array" and not isinstance(data[field], list):
-            raise SchemaValidationError(f"{name}.{field} must be an array")
-        if expected == "boolean" and not isinstance(data[field], bool):
-            raise SchemaValidationError(f"{name}.{field} must be a boolean")
-        if expected == "string" and not isinstance(data[field], str):
-            raise SchemaValidationError(f"{name}.{field} must be a string")
-    return data
+    return dict(data)
+
+
+def _dataclass_to_dict(value: Any) -> dict[str, Any]:
+    if not is_dataclass(value):
+        raise SchemaValidationError("validated stage output did not produce a dataclass")
+    return asdict(cast(Any, value))
+
+
+def _validate_schema_value(value: Any, schema: JsonSchema, *, path: str) -> None:
+    if "enum" in schema and value not in schema["enum"]:
+        raise SchemaValidationError(f"{path} must be one of {schema['enum']!r}")
+    expected = schema.get("type")
+    if expected == "object":
+        if not isinstance(value, dict):
+            raise SchemaValidationError(f"{path} must be an object")
+        properties = schema.get("properties", {})
+        required = schema.get("required", ())
+        for field in required:
+            if field not in value:
+                raise SchemaValidationError(f"{path} missing required field {field!r}")
+        if schema.get("additionalProperties") is False:
+            extra = sorted(set(value) - set(properties))
+            if extra:
+                raise SchemaValidationError(f"{path} has unknown field(s): {', '.join(extra)}")
+        for field, item in value.items():
+            if field in properties:
+                _validate_schema_value(item, properties[field], path=f"{path}.{field}")
+        return
+    if expected == "array":
+        if not isinstance(value, list):
+            raise SchemaValidationError(f"{path} must be an array")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                _validate_schema_value(item, item_schema, path=f"{path}[{index}]")
+        return
+    if expected == "boolean" and not isinstance(value, bool):
+        raise SchemaValidationError(f"{path} must be a boolean")
+    if expected == "string" and not isinstance(value, str):
+        raise SchemaValidationError(f"{path} must be a string")
+    if expected == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+        raise SchemaValidationError(f"{path} must be an integer")
+    if expected == "number" and (
+        not isinstance(value, int | float) or isinstance(value, bool)
+    ):
+        raise SchemaValidationError(f"{path} must be a number")

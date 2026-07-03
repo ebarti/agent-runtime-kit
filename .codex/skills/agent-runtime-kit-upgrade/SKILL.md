@@ -85,7 +85,7 @@ freshness cutoffs:
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
   uv run python -m examples.sdk_evolution_agent \
     --runtime codex-agent-sdk \
-    --refresh-preview \
+    --mode report \
     --package claude-agent-sdk \
     --package openai-codex \
     --package openai-codex-cli-bin \
@@ -132,11 +132,8 @@ BRANCH="sdk-evolution-upgrade-$(date +%Y%m%d-%H%M%S)"
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
   uv run python -m examples.sdk_evolution_agent \
     --runtime codex-agent-sdk \
-    --refresh-preview \
-    --implementation-enabled \
-    --create-branch \
+    --mode upgrade-pr \
     --branch-name "$BRANCH" \
-    --draft-pr \
     --pr-base main \
     --commit-message "Run SDK evolution update" \
     --pr-title "Run SDK evolution update across vendor packages" \
@@ -145,6 +142,11 @@ env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
     --package openai-codex-cli-bin \
     --package google-antigravity
 ```
+
+Successful upgrade PRs commit the mechanical update artifacts: `uv.lock`,
+`pyproject.toml` only when a cap raise was applied, and the tracked
+`.sdk-evolution/` baseline. The timestamped `reports/sdk-evolution/` directory
+is local and gitignored; its evidence is embedded in the PR body.
 
 ## Verification
 

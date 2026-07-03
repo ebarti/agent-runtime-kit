@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
 import sys
@@ -32,7 +33,15 @@ from examples.sdk_evolution_agent.behavior import (
     diff_behavior_results,
     probe_candidate_in_venv,
 )
-from examples.sdk_evolution_agent.cli import RunOptions, _collect_snapshots, parse_args, run_agent
+from examples.sdk_evolution_agent.cli import (
+    RunOptions,
+    _cap_raise_lock_mismatches,
+    _collect_snapshots,
+    _create_autonomous_pr,
+    _restore_transaction,
+    parse_args,
+    run_agent,
+)
 from examples.sdk_evolution_agent.collectors import (
     build_refresh_preview_command,
     collect_evidence,
@@ -40,7 +49,11 @@ from examples.sdk_evolution_agent.collectors import (
     run_lock_update,
     run_refresh_preview,
 )
-from examples.sdk_evolution_agent.current_state import build_current_state
+from examples.sdk_evolution_agent.current_state import (
+    build_current_state,
+    load_baseline,
+    promote_baseline,
+)
 from examples.sdk_evolution_agent.models import ApiSnapshot, CommandResult, RunContext, SourceRef
 from examples.sdk_evolution_agent.pr import build_draft_pr_body
 from examples.sdk_evolution_agent.release_notes import (
@@ -66,6 +79,7 @@ from examples.sdk_evolution_agent.stages import (
     run_stage,
     with_behavior_probe_guard,
     with_candidate_api_diff_guard,
+    with_kit_version_impact,
     with_manual_design_gate,
     with_recursive_impact,
     with_release_note_guard,
@@ -622,6 +636,167 @@ version = "0.2.106"
     assert all("/private/tmp" not in path and "/tmp/" not in path for path in paths)
 
 
+def test_promote_baseline_selects_snapshot_matching_updated_lock(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "uv.lock").write_text(
+        """
+[[package]]
+name = "claude-agent-sdk"
+version = "0.3.0"
+""",
+        encoding="utf-8",
+    )
+    report_root = tmp_path / "reports" / "run-1"
+    report_root.mkdir(parents=True)
+    context = RunContext(
+        run_id="run-1",
+        workspace=tmp_path,
+        report_root=report_root,
+        runtime="fake",
+        event_log_path=report_root / "events.jsonl",
+        implementation_enabled=True,
+        draft_pr=False,
+    )
+
+    promotion = promote_baseline(
+        context,
+        snapshots=[
+            {
+                "package": "claude-agent-sdk",
+                "requested_version": "0.2.1",
+                "observed_version": "0.2.1",
+                "members": [],
+            },
+            {
+                "package": "claude-agent-sdk",
+                "requested_version": "0.3.0",
+                "observed_version": "0.3.0",
+                "members": [],
+            },
+        ],
+        current_state={"artifacts": {"report.md": {"path": "reports/run-1/report.md"}}},
+    )
+
+    assert promotion["promoted"] is True
+    snapshot = json.loads(
+        (tmp_path / ".sdk-evolution" / "snapshots" / "claude-agent-sdk.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert snapshot["observed_version"] == "0.3.0"
+    assert load_baseline(tmp_path)["status"] == "current"
+
+
+def test_promote_baseline_refuses_snapshot_provenance_mismatch(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text(
+        """
+[[package]]
+name = "claude-agent-sdk"
+version = "0.3.0"
+""",
+        encoding="utf-8",
+    )
+    context = RunContext(
+        run_id="run-1",
+        workspace=tmp_path,
+        report_root=tmp_path / "reports",
+        runtime="fake",
+        event_log_path=tmp_path / "events.jsonl",
+        implementation_enabled=True,
+        draft_pr=False,
+    )
+
+    promotion = promote_baseline(
+        context,
+        snapshots=[
+            {
+                "package": "claude-agent-sdk",
+                "requested_version": "0.3.0",
+                "observed_version": "0.2.1",
+            }
+        ],
+        current_state={},
+    )
+
+    assert promotion["promoted"] is False
+    assert "requested_version" in promotion["blocked_reason"]
+
+
+def test_restore_transaction_deletes_out_of_scope_strays_with_injected_status(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "uv.lock").write_text("new lock", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("new project", encoding="utf-8")
+    allowed = tmp_path / "examples" / "sdk_evolution_agent" / "feature.py"
+    allowed.parent.mkdir(parents=True)
+    allowed.write_text("new feature", encoding="utf-8")
+    injected = tmp_path / "src" / "agent_runtime_kit" / "injected.py"
+    injected.parent.mkdir(parents=True)
+    injected.write_text("stray", encoding="utf-8")
+    baseline = tmp_path / ".sdk-evolution" / "README.md"
+    baseline.parent.mkdir(parents=True)
+    baseline.write_text("mutated baseline", encoding="utf-8")
+    generated_baseline = tmp_path / ".sdk-evolution" / "generated.json"
+    generated_baseline.write_text("new baseline artifact", encoding="utf-8")
+    report = tmp_path / "reports" / "sdk-evolution" / "run" / "report.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("report", encoding="utf-8")
+    commands: list[tuple[str, ...]] = []
+
+    def runner(command: tuple[str, ...], *, cwd: Path | None = None) -> CommandResult:
+        del cwd
+        commands.append(command)
+        assert command == ("git", "status", "--porcelain")
+        return CommandResult(
+            command=command,
+            returncode=0,
+            stdout="\n".join(
+                [
+                    " M uv.lock",
+                    " M examples/sdk_evolution_agent/feature.py",
+                    " M .sdk-evolution/README.md",
+                    "?? .sdk-evolution/generated.json",
+                    "?? reports/sdk-evolution/run/report.md",
+                    "?? src/agent_runtime_kit/injected.py",
+                ]
+            ),
+        )
+
+    _restore_transaction(
+        tmp_path,
+        {"uv.lock": b"old lock", "pyproject.toml": b"old project"},
+        {
+            "examples/sdk_evolution_agent/feature.py": b"old feature",
+            ".sdk-evolution/README.md": b"baseline",
+        },
+        command_runner=runner,
+    )
+
+    assert commands == [("git", "status", "--porcelain")]
+    assert (tmp_path / "uv.lock").read_text(encoding="utf-8") == "old lock"
+    assert allowed.read_text(encoding="utf-8") == "old feature"
+    assert baseline.read_text(encoding="utf-8") == "baseline"
+    assert not injected.exists()
+    assert report.exists()
+    assert generated_baseline.exists()
+
+
+def test_cap_raise_postcondition_detects_unapplied_lock_version(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text(
+        """
+[[package]]
+name = "claude-agent-sdk"
+version = "0.2.1"
+""",
+        encoding="utf-8",
+    )
+
+    assert _cap_raise_lock_mismatches(tmp_path, {"claude-agent-sdk": "0.3.0"}) == (
+        "claude-agent-sdk locked 0.2.1 != requested 0.3.0",
+    )
+
+
 def test_snapshot_and_diff_public_api(monkeypatch: pytest.MonkeyPatch) -> None:
     module = types.ModuleType("fake_sdk")
 
@@ -694,8 +869,8 @@ def test_collect_snapshots_uses_lockfile_baseline_for_candidates(
         inspect_candidates=True,
     )
 
-    assert len(snapshots) == 2
-    assert calls == [("candidate", "0.1.2"), ("candidate", "0.1.4")]
+    assert len(snapshots) == 1
+    assert calls == [("candidate", "0.1.2")]
 
 
 def test_collect_snapshots_uses_refresh_preview_update_targets(
@@ -741,10 +916,13 @@ def test_collect_snapshots_uses_refresh_preview_update_targets(
                     "latest_version": "0.136.0",
                 },
             ],
-            "refresh_preview": {
-                "stdout": "",
-                "stderr": "Update claude-agent-sdk v0.2.96 -> v0.2.106\n",
-            },
+            "update_candidates": [
+                {
+                    "package": "claude-agent-sdk",
+                    "from_version": "0.2.96",
+                    "to_version": "0.2.106",
+                }
+            ],
         },
         inspect_candidates=True,
     )
@@ -789,10 +967,13 @@ def test_collect_snapshots_uses_locked_baseline_when_environment_drifted(
                     "latest_version": "0.2.106",
                 },
             ],
-            "refresh_preview": {
-                "stdout": "",
-                "stderr": "Update claude-agent-sdk v0.2.96 -> v0.2.106\n",
-            },
+            "update_candidates": [
+                {
+                    "package": "claude-agent-sdk",
+                    "from_version": "0.2.96",
+                    "to_version": "0.2.106",
+                }
+            ],
         },
         inspect_candidates=True,
     )
@@ -849,6 +1030,51 @@ def test_collect_snapshots_without_opt_in_never_installs_even_when_lock_drifted(
     assert calls == [("current", "claude-agent-sdk", "0.2.96")]
 
 
+def test_collect_snapshots_ignores_refresh_preview_text_without_structured_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str | None]] = []
+
+    def current_snapshot(package: str, *, version: str | None = None) -> ApiSnapshot:
+        calls.append(("current", package, version))
+        return ApiSnapshot(package=package, version=version, module=package.replace("-", "_"))
+
+    def isolated_snapshot(package: str, version: str) -> ApiSnapshot:
+        raise AssertionError(
+            f"refresh preview text must not trigger candidate install: {package} {version}"
+        )
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        current_snapshot,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        isolated_snapshot,
+    )
+
+    snapshots = _collect_snapshots(
+        {
+            "packages": [
+                {
+                    "name": "claude-agent-sdk",
+                    "locked_version": "0.2.96",
+                    "installed_version": "0.2.96",
+                    "latest_version": "0.2.106",
+                }
+            ],
+            "refresh_preview": {
+                "stdout": "Update claude-agent-sdk v0.2.96 -> v0.2.106\n",
+                "stderr": "",
+            },
+        },
+        inspect_candidates=True,
+    )
+
+    assert len(snapshots) == 1
+    assert calls == [("current", "claude-agent-sdk", "0.2.96")]
+
+
 def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
     guarded = with_candidate_api_diff_guard(
         {
@@ -859,10 +1085,13 @@ def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
             "self_adaptation_plan": [],
         },
         {
-            "refresh_preview": {
-                "stdout": "",
-                "stderr": "Update google-antigravity v0.1.2 -> v0.1.4\n",
-            }
+            "update_candidates": [
+                {
+                    "package": "google-antigravity",
+                    "from_version": "0.1.2",
+                    "to_version": "0.1.4",
+                }
+            ]
         },
         [],
     )
@@ -880,10 +1109,13 @@ def test_candidate_api_diff_guard_accepts_empty_update_diff() -> None:
             "manual_design_required": False,
         },
         {
-            "refresh_preview": {
-                "stdout": "",
-                "stderr": "Update google-antigravity v0.1.2 -> v0.1.4\n",
-            }
+            "update_candidates": [
+                {
+                    "package": "google-antigravity",
+                    "from_version": "0.1.2",
+                    "to_version": "0.1.4",
+                }
+            ]
         },
         [
             {
@@ -1041,7 +1273,7 @@ def test_recursive_self_adaptation_detection_and_gates() -> None:
         [{"removed": ["AgentResult"]}],
     )
     assert architecture["recursive_self_adaptation_impact"] is True
-    assert architecture["self_adaptation_plan"]
+    assert architecture["manual_design_required"] is True
 
     blocked = evaluate_implementation_gate(
         {
@@ -1060,7 +1292,39 @@ def test_recursive_self_adaptation_detection_and_gates() -> None:
         {"status": "pass"},
         implementation_enabled=True,
     )
-    assert allowed.allowed is True
+    assert allowed.allowed is False
+
+
+def test_kit_version_impact_requires_executable_self_adaptation_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.stages.importlib.metadata.version",
+        lambda package: "9.0.0",
+    )
+
+    prose_only = with_kit_version_impact(
+        {
+            "findings": [],
+            "safe_to_implement": True,
+            "manual_design_required": False,
+            "self_adaptation_plan": ["Update the runtime usage to match the new kit."],
+        },
+        implementation_enabled=True,
+    )
+    executable = with_kit_version_impact(
+        {
+            "findings": [],
+            "safe_to_implement": True,
+            "manual_design_required": False,
+            "self_adaptation_plan": ["examples/sdk_evolution_agent/cli.py"],
+        },
+        implementation_enabled=True,
+    )
+
+    assert prose_only["recursive_self_adaptation_impact"] is True
+    assert prose_only["manual_design_required"] is True
+    assert executable["manual_design_required"] is False
 
 
 def test_reviewer_rejection_blocks_implementation() -> None:
@@ -1078,7 +1342,7 @@ def test_reviewer_rejection_blocks_implementation() -> None:
     assert "reviewer" in gate.reason
 
 
-def test_reviewer_approved_status_allows_implementation() -> None:
+def test_only_exact_reviewer_pass_allows_implementation() -> None:
     gate = evaluate_implementation_gate(
         {
             "safe_to_implement": True,
@@ -1089,7 +1353,7 @@ def test_reviewer_approved_status_allows_implementation() -> None:
         implementation_enabled=True,
     )
 
-    assert gate.allowed is True
+    assert gate.allowed is False
 
 
 @pytest.mark.asyncio
@@ -1105,22 +1369,32 @@ claude = ["claude-agent-sdk>=0.2"]
         encoding="utf-8",
     )
     (tmp_path / "uv.lock").write_text("", encoding="utf-8")
-    monkeypatch.setattr(
-        "examples.sdk_evolution_agent.cli.snapshot_current_api",
-        lambda package, *, version=None: ApiSnapshot(
+    def current_snapshot(package: str, *, version: str | None = None) -> ApiSnapshot:
+        return ApiSnapshot(
             package=package,
             version=version,
             module=package.replace("-", "_"),
-        ),
+            requested_version=version,
+            observed_version=version,
+        )
+
+    def candidate_snapshot(package: str, version: str) -> ApiSnapshot:
+        return ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+            requested_version=version,
+            observed_version=version,
+            source="isolated-venv",
+        )
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        current_snapshot,
     )
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
-        lambda package, version: ApiSnapshot(
-            package=package,
-            version=version,
-            module=package.replace("-", "_"),
-            source="isolated-venv",
-        ),
+        candidate_snapshot,
     )
 
     report_path = await run_agent(
@@ -1148,9 +1422,7 @@ claude = ["claude-agent-sdk>=0.2"]
     assert (report_path.parent / "implementation_summary.json").exists()
     assert (report_path.parent / "review.json").exists()
     assert (report_path.parent / "events.jsonl").exists()
-    assert '"package": "claude-agent-sdk"' in (report_path.parent / "api_diffs.json").read_text(
-        encoding="utf-8"
-    )
+    assert (report_path.parent / "api_diffs.json").read_text(encoding="utf-8") == "[]\n"
     assert "Recursive self-adaptation impact" in report_path.read_text(encoding="utf-8")
 
 
@@ -1266,6 +1538,61 @@ def test_finalize_report_skips_when_report_dir_is_outside_the_repo(tmp_path: Pat
     assert not any(command[:2] == ("git", "add") for command in commands)
 
 
+def test_create_autonomous_pr_stages_dynamic_in_scope_changes_and_body_file(
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "reports" / "run" / "report.md"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("# report\n", encoding="utf-8")
+    commands: list[tuple[str, ...]] = []
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        cwd: Path | None = None,
+        timeout: int | None = None,
+    ) -> CommandResult:
+        del cwd, timeout
+        commands.append(command)
+        if command[:3] == ("gh", "pr", "list"):
+            return CommandResult(command=command, returncode=0, stdout="[]")
+        if command[:3] == ("gh", "pr", "create"):
+            assert "--body-file" in command
+            assert "--body" not in command
+            body_path = Path(command[command.index("--body-file") + 1])
+            assert "# report" in body_path.read_text(encoding="utf-8")
+            return CommandResult(
+                command=command,
+                returncode=0,
+                stdout="https://github.com/ebarti/agent-runtime-kit/pull/99\n",
+            )
+        return CommandResult(command=command, returncode=0, stdout="ok")
+
+    _create_autonomous_pr(
+        tmp_path,
+        report_path=report_path,
+        options=RunOptions(
+            workspace=tmp_path,
+            runtime="fake",
+            branch_name="sdk-update-test",
+            pr_base="main",
+        ),
+        package_versions={"claude-agent-sdk": "0.3.0"},
+        changed_paths=(
+            "examples/sdk_evolution_agent/cli.py",
+            "tests/test_sdk_evolution_agent.py",
+            "docs/sdk-evolution-agent.md",
+        ),
+        run_id="run-1",
+        command_runner=runner,
+    )
+
+    add_command = next(command for command in commands if command[:2] == ("git", "add"))
+    assert "examples/sdk_evolution_agent/cli.py" in add_command
+    assert "tests/test_sdk_evolution_agent.py" in add_command
+    assert "docs/sdk-evolution-agent.md" in add_command
+
+
 @pytest.mark.asyncio
 async def test_run_agent_autonomous_pr_path(
     tmp_path: Path,
@@ -1286,22 +1613,32 @@ version = "0.2.1"
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        "examples.sdk_evolution_agent.cli.snapshot_current_api",
-        lambda package, *, version=None: ApiSnapshot(
+    def current_snapshot(package: str, *, version: str | None = None) -> ApiSnapshot:
+        return ApiSnapshot(
             package=package,
             version=version,
             module=package.replace("-", "_"),
-        ),
+            requested_version=version,
+            observed_version=version,
+        )
+
+    def candidate_snapshot(package: str, version: str) -> ApiSnapshot:
+        return ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+            requested_version=version,
+            observed_version=version,
+            source="isolated-venv",
+        )
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        current_snapshot,
     )
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
-        lambda package, version: ApiSnapshot(
-            package=package,
-            version=version,
-            module=package.replace("-", "_"),
-            source="isolated-venv",
-        ),
+        candidate_snapshot,
     )
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.cli.collect_release_notes",
@@ -1322,16 +1659,26 @@ version = "0.2.1"
         *,
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
+        timeout: int | None = None,
     ) -> CommandResult:
-        del cwd, env
+        del env, timeout
         commands.append(command)
-        if command[:3] == ("uv", "lock", "--dry-run"):
-            return CommandResult(
-                command=command,
-                returncode=0,
-                stderr="Update claude-agent-sdk v0.2.1 -> v0.3.0\n",
-            )
+        if command == ("git", "status", "--porcelain"):
+            return CommandResult(command=command, returncode=0, stdout="")
+        if command == ("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"):
+            return CommandResult(command=command, returncode=0, stdout="origin/main\n")
+        if command[:3] == ("gh", "pr", "list"):
+            return CommandResult(command=command, returncode=0, stdout="[]")
         if command[:2] == ("uv", "lock"):
+            if cwd is not None:
+                (cwd / "uv.lock").write_text(
+                    """
+[[package]]
+name = "claude-agent-sdk"
+version = "0.3.0"
+""",
+                    encoding="utf-8",
+                )
             return CommandResult(command=command, returncode=0, stdout="updated")
         if command[:2] == ("git", "check-ignore"):
             # Report dir is tracked in this scenario -> not ignored (exit 1).
@@ -1358,6 +1705,19 @@ version = "0.2.1"
     )
 
     assert report_path.exists()
+    current_state = json.loads((report_path.parent / "current_state.json").read_text())
+    implementation = json.loads((report_path.parent / "implementation_summary.json").read_text())
+    assert current_state["promotion"]["promoted"] is True
+    assert current_state["packages"]["claude-agent-sdk"] == "0.3.0"
+    assert implementation["applied"] is True
+    assert implementation["pr_results"]
+    assert load_baseline(tmp_path)["status"] == "current"
+    promoted_snapshot = json.loads(
+        (tmp_path / ".sdk-evolution" / "snapshots" / "claude-agent-sdk.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert promoted_snapshot["observed_version"] == "0.3.0"
     assert ("git", "switch", "-c", "sdk-update-test") in commands
     assert ("uv", "lock", "-P", "claude-agent-sdk") in commands
     assert any(command[:3] == ("git", "commit", "-m") for command in commands)
@@ -1690,7 +2050,7 @@ class PermissiveRuntime(RecordingRuntime):
                 "verification_commands": [],
                 "uncertainty": [],
             }
-        elif stage == "review":
+        elif stage in {"review", "review-implementation"}:
             payload = {"status": "pass", "reasons": [], "required_changes": []}
         else:
             payload = {

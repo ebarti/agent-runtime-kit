@@ -120,7 +120,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.10"
-packages = ["agent_runtime_kit"]
+packages = ["agent_runtime_kit", "examples.sdk_evolution_agent"]
 strict = true
 warn_unused_configs = true
 

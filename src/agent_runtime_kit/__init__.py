@@ -9,6 +9,7 @@ from agent_runtime_kit._errors import (
 )
 from agent_runtime_kit._kit import KIND_ALIASES, AgentKit
 from agent_runtime_kit._runtime import FakeAgentRuntime
+from agent_runtime_kit._schema import json_schema_for, parse_as
 from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentResult,
@@ -71,6 +72,8 @@ __all__ = [
     "UnsupportedTaskInputError",
     "Usage",
     "create_default_registry",
+    "json_schema_for",
+    "parse_as",
     "runtime_kind_value",
     "output_delta_event",
     "safe_emit",

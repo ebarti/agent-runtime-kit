@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from examples.sdk_evolution_agent.collectors import read_uv_lock_versions
 from examples.sdk_evolution_agent.models import RunContext
+from examples.sdk_evolution_agent.report import write_json
 
 CURRENT_STATE_SCHEMA_VERSION = "1"
+BASELINE_DIR = ".sdk-evolution"
 
 
 def build_current_state(
@@ -39,6 +42,95 @@ def build_current_state(
             "blocked_reason": str(implementation.get("blocked_reason") or ""),
         },
     }
+
+
+def load_baseline(workspace: Path) -> dict[str, Any]:
+    """Load and classify the tracked SDK evolution baseline."""
+
+    path = workspace / BASELINE_DIR / "baseline.json"
+    if not path.exists():
+        return {"status": "missing", "path": str(path)}
+    try:
+        baseline = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"status": "stale", "path": str(path), "reason": f"cannot read baseline: {exc}"}
+    lockfile = workspace / "uv.lock"
+    packages = read_uv_lock_versions(lockfile)
+    lock_hash = _sha256(lockfile)
+    if baseline.get("lockfile_sha256") == lock_hash and baseline.get("packages") == packages:
+        return {"status": "current", "path": str(path), "baseline": baseline}
+    return {
+        "status": "stale",
+        "path": str(path),
+        "baseline": baseline,
+        "reason": "lockfile hash or package versions differ",
+    }
+
+
+def promote_baseline(
+    context: RunContext,
+    *,
+    snapshots: list[dict[str, Any]],
+    current_state: dict[str, Any],
+) -> dict[str, Any]:
+    """Write the tracked baseline and promoted API snapshots."""
+
+    workspace = context.workspace
+    versions = read_uv_lock_versions(workspace / "uv.lock")
+    mismatched = [
+        snapshot
+        for snapshot in snapshots
+        if snapshot.get("package") in versions
+        and snapshot.get("requested_version")
+        and snapshot.get("observed_version")
+        and snapshot.get("observed_version") != snapshot.get("requested_version")
+    ]
+    if mismatched:
+        return {
+            "promoted": False,
+            "status": "baseline-promotion-refused",
+            "blocked_reason": "snapshot observed_version does not match requested_version",
+        }
+    selected_snapshots: dict[str, dict[str, Any]] = {}
+    snapshot_packages: set[str] = set()
+    for snapshot in snapshots:
+        package = str(snapshot.get("package") or "")
+        if not package or package not in versions or snapshot.get("import_error"):
+            continue
+        snapshot_packages.add(package)
+        if snapshot.get("observed_version") == versions[package]:
+            selected_snapshots[package] = snapshot
+    missing_promoted = sorted(snapshot_packages - set(selected_snapshots))
+    if missing_promoted:
+        return {
+            "promoted": False,
+            "status": "baseline-promotion-refused",
+            "blocked_reason": (
+                "no snapshot observed_version matches locked version for "
+                + ", ".join(missing_promoted)
+            ),
+        }
+
+    root = workspace / BASELINE_DIR
+    snapshots_dir = root / "snapshots"
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    package_snapshots: dict[str, str] = {}
+    for package, snapshot in selected_snapshots.items():
+        path = snapshots_dir / f"{package}.json"
+        write_json(path, snapshot)
+        package_snapshots[package] = _sha256(path)
+
+    baseline = {
+        "schema_version": CURRENT_STATE_SCHEMA_VERSION,
+        "source_run_id": context.run_id,
+        "commit": _git_output(workspace, ("git", "rev-parse", "HEAD")),
+        "lockfile_sha256": _sha256(workspace / "uv.lock"),
+        "packages": versions,
+        "artifacts": current_state.get("artifacts", {}),
+        "snapshot_sha256s": package_snapshots,
+    }
+    write_json(root / "baseline.json", baseline)
+    return {"promoted": True, "status": "promoted", "baseline": baseline}
 
 
 def _artifact_refs(report_root: Path, *, workspace: Path) -> dict[str, dict[str, str]]:

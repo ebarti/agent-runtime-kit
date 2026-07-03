@@ -14,8 +14,17 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from agent_runtime_kit.adapters.antigravity import VENDOR_CONTRACT as ANTIGRAVITY_CONTRACT
+from agent_runtime_kit.adapters.claude import VENDOR_CONTRACT as CLAUDE_CONTRACT
+from agent_runtime_kit.adapters.codex import VENDOR_CONTRACT as CODEX_CONTRACT
 from examples.sdk_evolution_agent.models import BehaviorDiff, BehaviorProbeResult
-from examples.sdk_evolution_agent.snapshots import DEFAULT_MODULES, isolated_env
+from examples.sdk_evolution_agent.snapshots import isolated_env
+
+_CONTRACTS = {
+    "claude-agent-sdk": {key: sorted(value) for key, value in CLAUDE_CONTRACT.items()},
+    "openai-codex": {key: sorted(value) for key, value in CODEX_CONTRACT.items()},
+    "google-antigravity": {key: sorted(value) for key, value in ANTIGRAVITY_CONTRACT.items()},
+}
 
 
 def collect_behavior_evidence(
@@ -92,25 +101,48 @@ def probe_candidate_in_venv(
         # throwaway HOME and only PATH, so a malicious or buggy candidate
         # package cannot read the caller's credentials/config.
         env = isolated_env(Path(directory))
-        subprocess.run((python, "-m", "venv", str(venv)), check=True, timeout=timeout, env=env)
+        venv_result = _run_probe_subprocess(
+            (python, "-m", "venv", str(venv)), env=env, timeout=timeout
+        )
+        if venv_result is not None:
+            return (venv_result(package, version, scope, "candidate-install"),)
         bin_dir = "Scripts" if sys.platform == "win32" else "bin"
         venv_python = venv / bin_dir / "python"
-        subprocess.run(
+        install_result = _run_probe_subprocess(
             (str(venv_python), "-m", "pip", "install", f"{package}=={version}"),
-            check=True,
             text=True,
             capture_output=True,
             timeout=timeout,
             env=env,
         )
+        if install_result is not None:
+            return (install_result(package, version, scope, "candidate-install"),)
         completed = subprocess.run(
-            (str(venv_python), "-c", _PROBE_SCRIPT, package, version, scope),
-            check=True,
+            (
+                str(venv_python),
+                "-c",
+                _PROBE_SCRIPT,
+                package,
+                version,
+                scope,
+                json.dumps(_CONTRACTS, sort_keys=True),
+            ),
             text=True,
             capture_output=True,
             timeout=timeout,
+            check=False,
             env=env,
         )
+        if completed.returncode != 0:
+            return (
+                _install_failed_probe(
+                    package,
+                    version,
+                    scope,
+                    "candidate-probe",
+                    _tail(completed.stderr or completed.stdout),
+                ),
+            )
     raw = json.loads(completed.stdout)
     return tuple(BehaviorProbeResult(**item) for item in raw)
 
@@ -199,25 +231,14 @@ def _probe_package(
 
 def _probe_claude(*, version: str | None, scope: str) -> BehaviorProbeResult:
     package = "claude-agent-sdk"
+    observed = _observed_version(package)
     try:
         module = importlib.import_module("claude_agent_sdk")
         options_cls = module.ClaudeAgentOptions
     except Exception as exc:
-        return _failed(package, version, scope, "adapter-contract", exc)
+        return _failed(package, version, scope, "adapter-contract", exc, observed_version=observed)
     fields = _fields(options_cls)
-    expected = {
-        "model",
-        "allowed_tools",
-        "disallowed_tools",
-        "permission_mode",
-        "system_prompt",
-        "cwd",
-        "mcp_servers",
-        "resume",
-        "env",
-        "max_budget_usd",
-        "output_format",
-    }
+    expected = set(CLAUDE_CONTRACT["options_fields"])
     missing = sorted(expected - fields)
     return BehaviorProbeResult(
         package=package,
@@ -231,19 +252,23 @@ def _probe_claude(*, version: str | None, scope: str) -> BehaviorProbeResult:
             else "ClaudeAgentOptions is missing required adapter fields."
         ),
         details={"fields": sorted(fields), "required_fields": sorted(expected), "missing": missing},
+        requested_version=version,
+        observed_version=observed,
+        provenance=_provenance(version, observed),
     )
 
 
 def _probe_codex(*, version: str | None, scope: str) -> BehaviorProbeResult:
     package = "openai-codex"
+    observed = _observed_version(package)
     try:
         module = importlib.import_module("openai_codex")
         run_params = set(inspect.signature(module.AsyncThread.run).parameters)
         start_params = set(inspect.signature(module.AsyncCodex.thread_start).parameters)
     except Exception as exc:
-        return _failed(package, version, scope, "adapter-contract", exc)
-    expected_run = {"cwd", "model", "approval_mode", "sandbox", "output_schema", "effort"}
-    expected_start = {"developer_instructions", "cwd", "model", "approval_mode", "sandbox"}
+        return _failed(package, version, scope, "adapter-contract", exc, observed_version=observed)
+    expected_run = set(CODEX_CONTRACT["run_params"])
+    expected_start = set(CODEX_CONTRACT["thread_start_params"])
     missing_run = sorted(expected_run - run_params)
     missing_start = sorted(expected_start - start_params)
     missing = missing_run + [f"thread_start.{item}" for item in missing_start]
@@ -265,6 +290,9 @@ def _probe_codex(*, version: str | None, scope: str) -> BehaviorProbeResult:
             "required_start_params": sorted(expected_start),
             "missing": missing,
         },
+        requested_version=version,
+        observed_version=observed,
+        provenance=_provenance(version, observed),
     )
 
 
@@ -282,39 +310,26 @@ def _probe_codex_cli_bin(*, version: str | None, scope: str) -> BehaviorProbeRes
         status="pass",
         summary="Codex CLI binary distribution metadata is available.",
         details={"installed_version": installed},
+        requested_version=version,
+        observed_version=installed,
+        provenance=_provenance(version, installed),
     )
 
 
 def _probe_antigravity(*, version: str | None, scope: str) -> BehaviorProbeResult:
     package = "google-antigravity"
+    observed = _observed_version(package)
     try:
-        importlib.import_module(DEFAULT_MODULES[package])
-        importlib.import_module("google.antigravity.types")
-        importlib.import_module("google.antigravity.agent")
-        importlib.import_module("google.antigravity.hooks.policy")
+        for module_name in ANTIGRAVITY_CONTRACT["required_imports"]:
+            importlib.import_module(module_name)
         config_module = importlib.import_module(
             "google.antigravity.connections.local.local_connection_config"
         )
         config_cls = config_module.LocalAgentConfig
     except Exception as exc:
-        return _failed(package, version, scope, "adapter-contract", exc)
+        return _failed(package, version, scope, "adapter-contract", exc, observed_version=observed)
     fields = _fields(config_cls)
-    expected = {
-        "model",
-        "api_key",
-        "vertex",
-        "project",
-        "location",
-        "system_instructions",
-        "capabilities",
-        "policies",
-        "workspaces",
-        "conversation_id",
-        "save_dir",
-        "app_data_dir",
-        "response_schema",
-        "mcp_servers",
-    }
+    expected = set(ANTIGRAVITY_CONTRACT["config_fields"])
     missing = sorted(expected - fields)
     return BehaviorProbeResult(
         package=package,
@@ -328,6 +343,9 @@ def _probe_antigravity(*, version: str | None, scope: str) -> BehaviorProbeResul
             else "Antigravity LocalAgentConfig is missing required adapter fields."
         ),
         details={"fields": sorted(fields), "required_fields": sorted(expected), "missing": missing},
+        requested_version=version,
+        observed_version=observed,
+        provenance=_provenance(version, observed),
     )
 
 
@@ -364,6 +382,7 @@ def _failed(
     scope: str,
     probe: str,
     exc: Exception,
+    observed_version: str | None = None,
 ) -> BehaviorProbeResult:
     return BehaviorProbeResult(
         package=package,
@@ -373,6 +392,9 @@ def _failed(
         status="fail",
         summary=str(exc),
         details={"error": str(exc)},
+        requested_version=version,
+        observed_version=observed_version,
+        provenance=_provenance(version, observed_version),
     )
 
 
@@ -389,6 +411,9 @@ def _skipped_candidate_probe(package: str, version: str) -> BehaviorProbeResult:
             "with --inspect-candidates to collect this evidence."
         ),
         details={"reason": "candidate installs are opt-in (--inspect-candidates)"},
+        requested_version=version,
+        observed_version=None,
+        provenance="not-observed",
     )
 
 
@@ -397,6 +422,78 @@ def _string_or_none(value: object) -> str | None:
         return None
     text = str(value)
     return text or None
+
+
+def _observed_version(package: str) -> str | None:
+    try:
+        return importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _provenance(requested: str | None, observed: str | None) -> str:
+    if requested and observed and requested != observed:
+        return "mismatched"
+    if observed is None:
+        return "not-observed"
+    return "observed"
+
+
+def _tail(text: str, *, limit: int = 500) -> str:
+    return text[-limit:]
+
+
+def _install_failed_probe(
+    package: str,
+    version: str,
+    scope: str,
+    probe: str,
+    summary: str,
+) -> BehaviorProbeResult:
+    return BehaviorProbeResult(
+        package=package,
+        version=version,
+        scope=scope,
+        probe=probe,
+        status="fail",
+        summary=summary,
+        details={"stderr": summary},
+        requested_version=version,
+        observed_version=None,
+        provenance="not-observed",
+    )
+
+
+def _run_probe_subprocess(
+    command: tuple[str, ...],
+    *,
+    env: dict[str, str],
+    timeout: int,
+    text: bool = True,
+    capture_output: bool = True,
+) -> Any:
+    try:
+        completed = subprocess.run(
+            command,
+            text=text,
+            capture_output=capture_output,
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return lambda package, version, scope, probe: _install_failed_probe(
+            package, version, scope, probe, f"timed out after {timeout}s"
+        )
+    if completed.returncode == 0:
+        return None
+    return lambda package, version, scope, probe: _install_failed_probe(
+        package,
+        version,
+        scope,
+        probe,
+        _tail(completed.stderr or completed.stdout),
+    )
 
 
 _PROBE_SCRIPT = textwrap.dedent(
@@ -408,6 +505,7 @@ _PROBE_SCRIPT = textwrap.dedent(
     import sys
 
     package, version, scope = sys.argv[1:4]
+    contracts = json.loads(sys.argv[4])
 
     def fields(cls):
         if hasattr(cls, "model_fields"):
@@ -420,6 +518,7 @@ _PROBE_SCRIPT = textwrap.dedent(
             return set()
 
     def failed(probe, exc):
+        observed = observed_version()
         return {
             "package": package,
             "version": version,
@@ -428,9 +527,26 @@ _PROBE_SCRIPT = textwrap.dedent(
             "status": "fail",
             "summary": str(exc),
             "details": {"error": str(exc)},
+            "requested_version": version,
+            "observed_version": observed,
+            "provenance": provenance(observed),
         }
 
+    def observed_version():
+        try:
+            return importlib.metadata.version(package)
+        except Exception:
+            return None
+
+    def provenance(observed):
+        if version and observed and version != observed:
+            return "mismatched"
+        if observed is None:
+            return "not-observed"
+        return "observed"
+
     def result(probe, status, summary, details):
+        observed = observed_version()
         return {
             "package": package,
             "version": version,
@@ -439,17 +555,16 @@ _PROBE_SCRIPT = textwrap.dedent(
             "status": status,
             "summary": summary,
             "details": details,
+            "requested_version": version,
+            "observed_version": observed,
+            "provenance": provenance(observed),
         }
 
     try:
         if package == "claude-agent-sdk":
             module = importlib.import_module("claude_agent_sdk")
             option_fields = fields(getattr(module, "ClaudeAgentOptions"))
-            expected = {
-                "model", "allowed_tools", "disallowed_tools", "permission_mode",
-                "system_prompt", "cwd", "mcp_servers", "resume", "env",
-                "max_budget_usd", "output_format",
-            }
+            expected = set(contracts[package]["options_fields"])
             missing = sorted(expected - option_fields)
             payload = [result(
                 "adapter-contract",
@@ -466,8 +581,8 @@ _PROBE_SCRIPT = textwrap.dedent(
             module = importlib.import_module("openai_codex")
             run_params = set(inspect.signature(module.AsyncThread.run).parameters)
             start_params = set(inspect.signature(module.AsyncCodex.thread_start).parameters)
-            expected_run = {"cwd", "model", "approval_mode", "sandbox", "output_schema", "effort"}
-            expected_start = {"developer_instructions", "cwd", "model", "approval_mode", "sandbox"}
+            expected_run = set(contracts[package]["run_params"])
+            expected_start = set(contracts[package]["thread_start_params"])
             missing_run = sorted(expected_run - run_params)
             missing_start = sorted(expected_start - start_params)
             missing = missing_run + [f"thread_start.{item}" for item in missing_start]
@@ -493,20 +608,13 @@ _PROBE_SCRIPT = textwrap.dedent(
                 {"installed_version": installed},
             )]
         elif package == "google-antigravity":
-            importlib.import_module("google.antigravity")
-            importlib.import_module("google.antigravity.types")
-            importlib.import_module("google.antigravity.agent")
-            importlib.import_module("google.antigravity.hooks.policy")
+            for module_name in contracts[package]["required_imports"]:
+                importlib.import_module(module_name)
             config_module = importlib.import_module(
                 "google.antigravity.connections.local.local_connection_config"
             )
             config_fields = fields(getattr(config_module, "LocalAgentConfig"))
-            expected = {
-                "model", "api_key", "vertex", "project", "location",
-                "system_instructions", "capabilities", "policies", "workspaces",
-                "conversation_id", "save_dir", "app_data_dir", "response_schema",
-                "mcp_servers",
-            }
+            expected = set(contracts[package]["config_fields"])
             missing = sorted(expected - config_fields)
             payload = [result(
                 "adapter-contract",

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
-import re
+import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -39,10 +40,11 @@ from examples.sdk_evolution_agent.models import (
 from examples.sdk_evolution_agent.schemas import (
     ARCHITECTURE_DECISION_SCHEMA,
     DIRECTION_ANALYSIS_SCHEMA,
+    IMPLEMENTATION_SUMMARY_SCHEMA,
     REVIEWER_OUTPUT_SCHEMA,
     JsonSchema,
     SchemaValidationError,
-    validate_mapping,
+    parse_stage_output,
 )
 
 
@@ -53,6 +55,7 @@ class StageExecutionError(RuntimeError):
 SDK_EVOLUTION_CODEX_HOME = Path("~/.codex_agent_runtime_sdk").expanduser()
 SDK_EVOLUTION_CODEX_MODEL = "gpt-5.5"
 SDK_EVOLUTION_CODEX_REASONING_EFFORT = "xhigh"
+ADAPTED_FOR_KIT_VERSION = "0.4.0"
 
 
 class FixtureEvolutionRuntime:
@@ -196,7 +199,8 @@ async def run_stage(
         except json.JSONDecodeError as exc:
             raise StageExecutionError(f"{stage} returned no valid structured output") from exc
     try:
-        return validate_mapping(data, schema, name=stage)
+        del schema
+        return parse_stage_output(stage, data)
     except SchemaValidationError as exc:
         raise StageExecutionError(f"{stage} returned invalid structured output: {exc}") from exc
 
@@ -239,7 +243,15 @@ async def run_analysis_pipeline(
         schema=ARCHITECTURE_DECISION_SCHEMA,
         context=context,
     )
-    architecture = with_recursive_impact(architecture, api_diffs)
+    architecture = with_kit_version_impact(
+        architecture,
+        implementation_enabled=context.implementation_enabled,
+    )
+    architecture = with_recursive_impact(
+        architecture,
+        api_diffs,
+        implementation_enabled=context.implementation_enabled,
+    )
     architecture = with_candidate_api_diff_guard(architecture, evidence, api_diffs)
     architecture = with_release_note_guard(architecture, release_notes)
     architecture = with_behavior_probe_guard(architecture, behavior)
@@ -297,6 +309,41 @@ async def maybe_run_implementation(
     }
 
 
+async def run_implementation_stage(
+    runtime: AgentRuntime,
+    *,
+    payload: Mapping[str, Any],
+    context: RunContext,
+) -> dict[str, Any]:
+    """Run the bounded write-enabled implementation stage."""
+
+    return await run_stage(
+        runtime,
+        stage="implementation",
+        payload=payload,
+        schema=IMPLEMENTATION_SUMMARY_SCHEMA,
+        context=context,
+        write_enabled=True,
+    )
+
+
+async def run_implementation_review_stage(
+    runtime: AgentRuntime,
+    *,
+    payload: Mapping[str, Any],
+    context: RunContext,
+) -> dict[str, Any]:
+    """Review the implementation diff after deterministic verification."""
+
+    return await run_stage(
+        runtime,
+        stage="review-implementation",
+        payload=payload,
+        schema=REVIEWER_OUTPUT_SCHEMA,
+        context=context,
+    )
+
+
 def evaluate_implementation_gate(
     architecture: Mapping[str, Any],
     review: Mapping[str, Any],
@@ -321,8 +368,7 @@ def evaluate_implementation_gate(
 
 
 def _review_passed(review: Mapping[str, Any]) -> bool:
-    status = str(review.get("status", "")).strip().lower()
-    return status in {"pass", "passed", "approve", "approved", "accepted"}
+    return review.get("status") == "pass"
 
 
 def detects_recursive_impact(api_diffs: Sequence[Mapping[str, Any] | ApiDiff]) -> bool:
@@ -347,6 +393,8 @@ def detects_recursive_impact(api_diffs: Sequence[Mapping[str, Any] | ApiDiff]) -
 def with_recursive_impact(
     architecture: Mapping[str, Any],
     api_diffs: Sequence[Mapping[str, Any] | ApiDiff],
+    *,
+    implementation_enabled: bool = False,
 ) -> dict[str, Any]:
     """Ensure recursive runtime-contract impacts are explicit."""
 
@@ -354,19 +402,54 @@ def with_recursive_impact(
     if not detects_recursive_impact(api_diffs):
         return result
     result["recursive_self_adaptation_impact"] = True
-    result.setdefault(
-        "self_adaptation_plan",
-        [
-            "Update examples/sdk_evolution_agent runtime usage, schemas, tests, and docs "
-            "in the same scoped change.",
-        ],
+    plan = [str(item) for item in result.get("self_adaptation_plan") or []]
+    has_executable_plan = implementation_enabled and any(
+        item.startswith("examples/sdk_evolution_agent/") for item in plan
     )
+    if not has_executable_plan:
+        result["manual_design_required"] = True  # relaxed in T3.3 when plan is executable.
     findings = list(result.get("findings") or [])
     findings.append(
         {
             "classification": "manual-design-required",
             "summary": "Runtime contract changes affect the SDK evolution agent itself.",
             "evidence": ["api_diffs"],
+        }
+    )
+    result["findings"] = findings
+    return result
+
+
+def with_kit_version_impact(
+    architecture: Mapping[str, Any],
+    *,
+    implementation_enabled: bool = False,
+) -> dict[str, Any]:
+    """Flag the example when the installed kit version moves past its adaptation marker."""
+
+    try:
+        current = importlib.metadata.version("agent-runtime-kit")
+    except importlib.metadata.PackageNotFoundError:
+        current = ADAPTED_FOR_KIT_VERSION
+    if current == ADAPTED_FOR_KIT_VERSION:
+        return dict(architecture)
+    result = dict(architecture)
+    result["recursive_self_adaptation_impact"] = True
+    plan = [str(item) for item in result.get("self_adaptation_plan") or []]
+    has_executable_plan = implementation_enabled and any(
+        item.startswith("examples/sdk_evolution_agent/") for item in plan
+    )
+    if not has_executable_plan:
+        result["manual_design_required"] = True
+    findings = list(result.get("findings") or [])
+    findings.append(
+        {
+            "classification": "manual-design-required",
+            "summary": (
+                "SDK evolution example adaptation marker does not match "
+                f"agent-runtime-kit {current}."
+            ),
+            "evidence": ["agent-runtime-kit version"],
         }
     )
     result["findings"] = findings
@@ -380,7 +463,13 @@ def with_candidate_api_diff_guard(
 ) -> dict[str, Any]:
     """Block SDK update implementation when candidate API evidence is missing."""
 
-    update_packages = _refresh_update_packages(evidence)
+    update_packages = tuple(
+        sorted(
+            str(item.get("package"))
+            for item in evidence.get("update_candidates", [])
+            if isinstance(item, Mapping) and item.get("package")
+        )
+    )
     if not update_packages:
         return dict(architecture)
     diff_packages = {
@@ -498,14 +587,63 @@ def with_manual_design_gate(architecture: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _refresh_update_packages(evidence: Mapping[str, Any]) -> tuple[str, ...]:
-    preview = evidence.get("refresh_preview")
-    if not isinstance(preview, Mapping):
-        return ()
-    text = f"{preview.get('stdout') or ''}\n{preview.get('stderr') or ''}"
-    return tuple(
-        sorted(set(re.findall(r"Update\s+([A-Za-z0-9_.-]+)\s+v\S+\s+->\s+v\S+", text)))
-    )
+def with_cap_raise_guard(
+    architecture: Mapping[str, Any],
+    *,
+    candidate: Mapping[str, Any],
+    api_diffs: Sequence[Mapping[str, Any] | ApiDiff],
+    release_notes: Sequence[Mapping[str, Any]],
+    behavior: Mapping[str, Any],
+    review: Mapping[str, Any],
+) -> GateResult:
+    """Gate a beyond-cap candidate before pyproject mutation."""
+
+    del architecture
+    package = str(candidate.get("package") or "")
+    version = str(candidate.get("to_version") or "")
+    if not package or not version:
+        return GateResult(False, "cap raise candidate is incomplete")
+    if not _review_passed(review):
+        return GateResult(False, "reviewer did not pass the proposal")
+    if not any(_diff_matches(item, package, version) for item in api_diffs):
+        return GateResult(False, f"missing candidate API diff for {package} {version}")
+    if not _release_notes_ok(release_notes, package, version):
+        return GateResult(False, f"release-note evidence unavailable for {package} {version}")
+    if not _behavior_probe_passed(behavior, package, version):
+        return GateResult(
+            False, f"candidate behavior probe missing or failed for {package} {version}"
+        )
+    return GateResult(True, "cap raise gates passed")
+
+
+def _diff_matches(item: Mapping[str, Any] | ApiDiff, package: str, version: str) -> bool:
+    if isinstance(item, ApiDiff):
+        return item.package == package and item.to_version == version
+    return str(item.get("package")) == package and str(item.get("to_version")) == version
+
+
+def _release_notes_ok(
+    release_notes: Sequence[Mapping[str, Any]], package: str, version: str
+) -> bool:
+    for item in release_notes:
+        if str(item.get("package")) != package or str(item.get("to_version")) != version:
+            continue
+        return str(item.get("status")) in {"found", "no-matching-version"}
+    return False
+
+
+def _behavior_probe_passed(behavior: Mapping[str, Any], package: str, version: str) -> bool:
+    results = behavior.get("results")
+    if not isinstance(results, list):
+        return False
+    for item in results:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("package")) != package or str(item.get("version")) != version:
+            continue
+        if str(item.get("scope")) == "candidate" and str(item.get("status")) == "pass":
+            return True
+    return False
 
 
 def _compact_stage_output(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -559,10 +697,20 @@ def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
             "reviewer-identified unsupported vendor behavior, or recursive "
             "runtime-contract impact remain hard blockers. Release-note status found "
             "is direct release-note evidence. Status no-matching-version is source "
-            "coverage with explicit uncertainty, not unavailable evidence."
+            "coverage with explicit uncertainty, not unavailable evidence. "
+            "Adoptable update candidates are dependency changes allowed by the "
+            "current pyproject caps. Beyond-cap candidates are future releases "
+            "visible only after a bounded cap-horizon probe. Use classification "
+            "capability-opportunity for non-blocking upstream features worth "
+            "tracking separately."
         )
-    if stage == "review":
-        prompt += " The review status must be exactly pass or reject."
+    if stage == "implementation":
+        prompt += (
+            " You may edit only files under examples/sdk_evolution_agent/, "
+            "tests/test_sdk_evolution_*.py, and docs/sdk-evolution-agent*.md. "
+            "Do not run uv, git, gh, or verification commands; deterministic "
+            "mechanical steps and verification are owned by the CLI."
+        )
     return prompt
 
 
@@ -600,6 +748,7 @@ def _fixture_payload(stage: str, task: AgentTask) -> dict[str, Any]:
         source = json.loads(task.goal)
     except json.JSONDecodeError:
         source = {}
+    permissive = os.environ.get("SDK_EVOLUTION_FIXTURE_PROFILE") == "permissive"
     if stage == "direction-analysis":
         packages = [
             {
@@ -621,18 +770,31 @@ def _fixture_payload(stage: str, task: AgentTask) -> dict[str, Any]:
             "uncertainty": ["fake runtime cannot infer real upstream product direction"],
         }
     if stage == "architecture-decision":
-        return {
-            "findings": [],
-            "safe_to_implement": False,
-            "manual_design_required": False,
-            "recursive_self_adaptation_impact": detects_recursive_impact(
-                source.get("api_diffs", [])
-            ),
-            "self_adaptation_plan": [],
-            "verification_commands": ["uv run pytest tests/test_sdk_evolution_agent.py"],
-            "uncertainty": ["fixture decision is conservative"],
-        }
-    if stage == "review":
+        recursive = detects_recursive_impact(source.get("api_diffs", []))
+        return (
+            {
+                "findings": [],
+                "safe_to_implement": True,
+                "manual_design_required": False,
+                "recursive_self_adaptation_impact": recursive,
+                "self_adaptation_plan": [],
+                "verification_commands": [],
+                "uncertainty": [],
+                "docs_test_changes": [],
+            }
+            if permissive
+            else {
+                "findings": [],
+                "safe_to_implement": False,
+                "manual_design_required": False,
+                "recursive_self_adaptation_impact": recursive,
+                "self_adaptation_plan": [],
+                "verification_commands": ["uv run pytest tests/test_sdk_evolution_agent.py"],
+                "uncertainty": ["fixture decision is conservative"],
+                "docs_test_changes": [],
+            }
+        )
+    if stage in {"review", "review-implementation"}:
         return {
             "status": "pass",
             "reasons": ["fixture review only verifies the pipeline shape"],
@@ -642,7 +804,6 @@ def _fixture_payload(stage: str, task: AgentTask) -> dict[str, Any]:
         return {
             "applied": False,
             "changes": [],
-            "verification_results": [],
             "blocked_reason": "fixture runtime does not edit files",
         }
     return {"status": "unknown", "reasons": [], "required_changes": []}

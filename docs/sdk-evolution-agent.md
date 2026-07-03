@@ -11,16 +11,16 @@ changelog strategy, caveats, and alternatives, see
 Run it from the repository:
 
 ```bash
-python -m examples.sdk_evolution_agent --runtime fake
+python -m examples.sdk_evolution_agent --mode report --runtime fake
 ```
 
 The `fake` runtime is deterministic and useful for checking the local pipeline
 without credentials. For real AI reasoning, select a configured runtime:
 
 ```bash
-python -m examples.sdk_evolution_agent --runtime claude-agent-sdk
-python -m examples.sdk_evolution_agent --runtime codex-agent-sdk
-python -m examples.sdk_evolution_agent --runtime antigravity-agent-sdk
+python -m examples.sdk_evolution_agent --mode report --runtime claude-agent-sdk
+python -m examples.sdk_evolution_agent --mode report --runtime codex-agent-sdk
+python -m examples.sdk_evolution_agent --mode report --runtime antigravity-agent-sdk
 ```
 
 Every AI-backed stage is dispatched as an `AgentTask` through a runtime resolved
@@ -105,29 +105,30 @@ installed distributions, then compares it with upstream package metadata for:
 - `openai-codex-cli-bin`
 - `google-antigravity`
 
-When `--refresh-preview` is used, the targeted `uv lock --dry-run -P ...`
-preview runs with freshness cutoff environment variables removed, including
-`UV_EXCLUDE_NEWER`. This workflow needs fresh upstream SDK information, so local
-cutoff variables must not hide candidate releases.
+`--mode report` enables the refresh path. The resolver copies `pyproject.toml`,
+`uv.lock`, and the minimal README metadata into a temporary directory, runs
+targeted `uv lock -P ...` there with freshness cutoff environment variables
+removed, then diffs the temporary lockfile against the real one. The real
+workspace is not touched during candidate detection. The older dry-run stdout
+preview may still be stored as auxiliary evidence, but it is not parsed for
+candidate decisions.
 
 ## Candidate API Inspection
 
 The command treats `uv.lock` as the current baseline. If the active `.venv`
 contains a different installed version, the agent inspects the locked baseline
 in a temporary isolated virtualenv instead of trusting the drifted environment.
-When a refresh preview is available, package update candidates come from the
-resolver's `uv lock --dry-run -P ...` output, not only from PyPI's `latest`
-metadata. With `--inspect-candidates`, the agent installs each resolver update
-candidate in a temporary isolated virtualenv — with a credential-scrubbed
-environment (throwaway `HOME`, `PATH` only) — and writes an API snapshot plus
-`api_diffs.json` entry, and runs the behavior probes against the candidate the
-same way. This avoids false downgrade diffs for packages whose locked
-prerelease is newer than PyPI's stable latest field. Candidate inspection is
-opt-in because it executes freshly downloaded upstream code; without the flag,
-candidates are recorded as explicit `skip` entries rather than silently
-missing evidence.
+When refresh evidence is available, package update candidates come from the
+temporary lockfile diff, not PyPI's `latest` metadata and not human-facing uv
+stdout. With `--inspect-candidates`, the agent installs each resolver update
+candidate and beyond-cap candidate in a temporary isolated virtualenv — with a
+credential-scrubbed environment (throwaway `HOME`, `PATH` only) — then writes an
+API snapshot plus `api_diffs.json` entry and runs behavior probes against the
+candidate the same way. Candidate inspection is opt-in because it executes
+freshly downloaded upstream code; without the flag, candidates are recorded as
+explicit `skip` entries rather than silently missing evidence.
 
-If `uv lock --dry-run -P ...` reports an SDK update but the run cannot produce a
+If the structured resolver reports an SDK update but the run cannot produce a
 candidate-version API diff for that package, implementation is blocked and the
 architecture decision is marked `manual_design_required`. An empty added /
 removed / changed diff is valid; a missing diff object is not.
@@ -143,8 +144,12 @@ and API diffs, but only breaking adapter-contract diffs block implementation.
 Report-only mode is the default. To allow the implementation stage, pass:
 
 ```bash
-python -m examples.sdk_evolution_agent --runtime claude-agent-sdk --implementation-enabled
+python -m examples.sdk_evolution_agent --mode upgrade --runtime claude-agent-sdk
 ```
+
+`--mode upgrade` expands to report + candidate inspection + implementation +
+guarded cap raises. It refuses to run from a dirty worktree unless `--allow-dirty`
+is set for local development.
 
 Implementation is still blocked when:
 
@@ -169,18 +174,15 @@ design review.
 Draft PR creation is opt-in:
 
 ```bash
-python -m examples.sdk_evolution_agent \
-  --runtime claude-agent-sdk \
-  --implementation-enabled \
-  --create-branch \
-  --branch-name sdk-evolution-update \
-  --pr-base main \
-  --draft-pr
+python -m examples.sdk_evolution_agent --mode upgrade-pr --runtime claude-agent-sdk
 ```
 
-When `--draft-pr` is set, the agent stages `uv.lock` and the run report
-directory, commits them with `--commit-message`, pushes the branch, and opens a
-draft PR with `gh`. It never auto-merges.
+`--mode upgrade-pr` creates a `sdk-evolution/<run_id>` branch when one is not
+supplied, refuses to push the default branch, stages `uv.lock`,
+`pyproject.toml` when a cap raise was applied, and the tracked `.sdk-evolution/`
+baseline. The report directory remains local and gitignored; the draft PR body
+embeds report evidence plus a machine-readable SDK-evolution marker. The PR
+flow runs only after implementation is applied and verification passes.
 
 The command uses local Git and `gh` authentication. It never auto-merges,
 auto-publishes, or scrapes unsupported credentials.
