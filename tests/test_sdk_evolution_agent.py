@@ -694,8 +694,8 @@ def test_collect_snapshots_uses_lockfile_baseline_for_candidates(
         inspect_candidates=True,
     )
 
-    assert len(snapshots) == 2
-    assert calls == [("candidate", "0.1.2"), ("candidate", "0.1.4")]
+    assert len(snapshots) == 1
+    assert calls == [("candidate", "0.1.2")]
 
 
 def test_collect_snapshots_uses_refresh_preview_update_targets(
@@ -741,10 +741,13 @@ def test_collect_snapshots_uses_refresh_preview_update_targets(
                     "latest_version": "0.136.0",
                 },
             ],
-            "refresh_preview": {
-                "stdout": "",
-                "stderr": "Update claude-agent-sdk v0.2.96 -> v0.2.106\n",
-            },
+            "update_candidates": [
+                {
+                    "package": "claude-agent-sdk",
+                    "from_version": "0.2.96",
+                    "to_version": "0.2.106",
+                }
+            ],
         },
         inspect_candidates=True,
     )
@@ -789,10 +792,13 @@ def test_collect_snapshots_uses_locked_baseline_when_environment_drifted(
                     "latest_version": "0.2.106",
                 },
             ],
-            "refresh_preview": {
-                "stdout": "",
-                "stderr": "Update claude-agent-sdk v0.2.96 -> v0.2.106\n",
-            },
+            "update_candidates": [
+                {
+                    "package": "claude-agent-sdk",
+                    "from_version": "0.2.96",
+                    "to_version": "0.2.106",
+                }
+            ],
         },
         inspect_candidates=True,
     )
@@ -859,10 +865,13 @@ def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
             "self_adaptation_plan": [],
         },
         {
-            "refresh_preview": {
-                "stdout": "",
-                "stderr": "Update google-antigravity v0.1.2 -> v0.1.4\n",
-            }
+            "update_candidates": [
+                {
+                    "package": "google-antigravity",
+                    "from_version": "0.1.2",
+                    "to_version": "0.1.4",
+                }
+            ]
         },
         [],
     )
@@ -880,10 +889,13 @@ def test_candidate_api_diff_guard_accepts_empty_update_diff() -> None:
             "manual_design_required": False,
         },
         {
-            "refresh_preview": {
-                "stdout": "",
-                "stderr": "Update google-antigravity v0.1.2 -> v0.1.4\n",
-            }
+            "update_candidates": [
+                {
+                    "package": "google-antigravity",
+                    "from_version": "0.1.2",
+                    "to_version": "0.1.4",
+                }
+            ]
         },
         [
             {
@@ -1041,7 +1053,7 @@ def test_recursive_self_adaptation_detection_and_gates() -> None:
         [{"removed": ["AgentResult"]}],
     )
     assert architecture["recursive_self_adaptation_impact"] is True
-    assert architecture["self_adaptation_plan"]
+    assert architecture["manual_design_required"] is True
 
     blocked = evaluate_implementation_gate(
         {
@@ -1060,7 +1072,7 @@ def test_recursive_self_adaptation_detection_and_gates() -> None:
         {"status": "pass"},
         implementation_enabled=True,
     )
-    assert allowed.allowed is True
+    assert allowed.allowed is False
 
 
 def test_reviewer_rejection_blocks_implementation() -> None:
@@ -1078,7 +1090,7 @@ def test_reviewer_rejection_blocks_implementation() -> None:
     assert "reviewer" in gate.reason
 
 
-def test_reviewer_approved_status_allows_implementation() -> None:
+def test_only_exact_reviewer_pass_allows_implementation() -> None:
     gate = evaluate_implementation_gate(
         {
             "safe_to_implement": True,
@@ -1089,7 +1101,7 @@ def test_reviewer_approved_status_allows_implementation() -> None:
         implementation_enabled=True,
     )
 
-    assert gate.allowed is True
+    assert gate.allowed is False
 
 
 @pytest.mark.asyncio
@@ -1148,9 +1160,7 @@ claude = ["claude-agent-sdk>=0.2"]
     assert (report_path.parent / "implementation_summary.json").exists()
     assert (report_path.parent / "review.json").exists()
     assert (report_path.parent / "events.jsonl").exists()
-    assert '"package": "claude-agent-sdk"' in (report_path.parent / "api_diffs.json").read_text(
-        encoding="utf-8"
-    )
+    assert (report_path.parent / "api_diffs.json").read_text(encoding="utf-8") == "[]\n"
     assert "Recursive self-adaptation impact" in report_path.read_text(encoding="utf-8")
 
 
@@ -1322,16 +1332,26 @@ version = "0.2.1"
         *,
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
+        timeout: int | None = None,
     ) -> CommandResult:
-        del cwd, env
+        del env, timeout
         commands.append(command)
-        if command[:3] == ("uv", "lock", "--dry-run"):
-            return CommandResult(
-                command=command,
-                returncode=0,
-                stderr="Update claude-agent-sdk v0.2.1 -> v0.3.0\n",
-            )
+        if command == ("git", "status", "--porcelain"):
+            return CommandResult(command=command, returncode=0, stdout="")
+        if command == ("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"):
+            return CommandResult(command=command, returncode=0, stdout="origin/main\n")
+        if command[:3] == ("gh", "pr", "list"):
+            return CommandResult(command=command, returncode=0, stdout="[]")
         if command[:2] == ("uv", "lock"):
+            if cwd is not None:
+                (cwd / "uv.lock").write_text(
+                    """
+[[package]]
+name = "claude-agent-sdk"
+version = "0.3.0"
+""",
+                    encoding="utf-8",
+                )
             return CommandResult(command=command, returncode=0, stdout="updated")
         if command[:2] == ("git", "check-ignore"):
             # Report dir is tracked in this scenario -> not ignored (exit 1).
@@ -1690,7 +1710,7 @@ class PermissiveRuntime(RecordingRuntime):
                 "verification_commands": [],
                 "uncertainty": [],
             }
-        elif stage == "review":
+        elif stage in {"review", "review-implementation"}:
             payload = {"status": "pass", "reasons": [], "required_changes": []}
         else:
             payload = {

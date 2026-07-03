@@ -53,6 +53,33 @@ from agent_runtime_kit.events import (
 
 logger = logging.getLogger(__name__)
 
+VENDOR_CONTRACT = {
+    "config_fields": frozenset(
+        {
+            "model",
+            "api_key",
+            "vertex",
+            "project",
+            "location",
+            "system_instructions",
+            "capabilities",
+            "policies",
+            "workspaces",
+            "conversation_id",
+            "save_dir",
+            "app_data_dir",
+            "response_schema",
+            "mcp_servers",
+        }
+    ),
+    "required_imports": (
+        "google.antigravity",
+        "google.antigravity.types",
+        "google.antigravity.agent",
+        "google.antigravity.hooks.policy",
+    ),
+}
+
 
 class AntigravityAgentRuntime:
     """Run tasks through Google's ``google-antigravity`` SDK."""

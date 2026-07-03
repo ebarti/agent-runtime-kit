@@ -123,34 +123,38 @@ Step responsibilities:
   report with the evidence bundle, analysis, decision, reviewer output,
   uncertainty, blocked reasons, and the exact manual review questions. This is a
   valid end state, not a failed run.
-- **Apply safe implementation**: Apply only the changes allowed by the accepted
-  architecture decision and deterministic gates. This may include lockfile
-  updates, adapter changes, tests, docs, examples, compatibility shims, or report
-  changes. It must not implement changes that were classified as
-  `manual_design_required`.
+- **Apply safe implementation**: Apply only the bounded change vocabulary:
+  lockfile updates, pyproject upper-bound raises, self-adaptation inside
+  `examples/sdk_evolution_agent/`, and related SDK-evolution docs/tests.
+  Adapter source changes remain `manual_design_required`; the example records
+  the evidence and stops instead of editing adapter modules automatically.
 - **Run verification**: Run the verification commands required by the
   architecture decision. At minimum, this should cover formatting/linting,
   typing, unit tests, lock checks, report generation checks, and any available
   live smoke needed for the affected runtime behavior.
 - **Promote updated state to current baseline**: After implementation and
-  verification pass, save the updated lock/package/API/release-note/probe state
-  as the new current-state baseline for the next run. This promotion should be
-  explicit, atomic, and tied to the verified commit or workspace state. Failed,
-  blocked, or manual-design-required runs must not replace the current baseline.
+  verification pass, save `.sdk-evolution/baseline.json` plus
+  `.sdk-evolution/snapshots/<package>.json` as the new current-state baseline
+  for the next run. Promotion refuses snapshots whose observed imported version
+  differs from the locked version. Failed, blocked, or manual-design-required
+  runs must not replace the current baseline.
 - **Write report and optional draft PR**: Write the final local report with
   evidence, decisions, implementation summary, baseline-promotion result, test
   results, uncertainty, and manual checklist. If explicitly configured and
-  authenticated, create or update a draft PR. This step must never auto-merge.
+  authenticated, create or update a draft PR. Draft PR bodies contain a
+  machine-readable SDK-evolution marker; matching existing PRs are reused, and
+  older marked PRs with different deltas are superseded. This step must never
+  auto-merge.
 
 Every box before direction analysis is deterministic. AI stages may interpret
 evidence, but they should not invent evidence that was not collected.
 
 ## Operating Modes
 
-The default command should be report-only:
+The tested report command is:
 
 ```bash
-python -m examples.sdk_evolution_agent --runtime fake --refresh-preview
+python -m examples.sdk_evolution_agent --mode report --runtime fake
 ```
 
 This mode collects evidence, writes artifacts, runs the analysis stages through
@@ -161,9 +165,9 @@ schemas, not the quality of AI reasoning.
 A real analysis run should select one configured runtime:
 
 ```bash
-python -m examples.sdk_evolution_agent --runtime claude-agent-sdk --refresh-preview
-python -m examples.sdk_evolution_agent --runtime codex-agent-sdk --refresh-preview
-python -m examples.sdk_evolution_agent --runtime antigravity-agent-sdk --refresh-preview
+python -m examples.sdk_evolution_agent --mode report --runtime claude-agent-sdk
+python -m examples.sdk_evolution_agent --mode report --runtime codex-agent-sdk
+python -m examples.sdk_evolution_agent --mode report --runtime antigravity-agent-sdk
 ```
 
 Before a Codex-backed run, prepare the dedicated SDK evolution auth home:
@@ -190,7 +194,7 @@ runs should inspect all tracked packages:
 ```bash
 python -m examples.sdk_evolution_agent \
   --runtime antigravity-agent-sdk \
-  --refresh-preview \
+  --mode report \
   --package claude-agent-sdk \
   --package openai-codex \
   --package openai-codex-cli-bin \
@@ -204,19 +208,17 @@ installs and imports freshly downloaded upstream code, so it is opt-in and
 runs in a credential-scrubbed environment, with explicit `skip` records when
 it is off.
 
-Implementation mode should remain explicitly gated:
+Implementation mode remains explicitly gated:
 
 ```bash
-python -m examples.sdk_evolution_agent \
-  --runtime antigravity-agent-sdk \
-  --refresh-preview \
-  --implementation-enabled
+python -m examples.sdk_evolution_agent --mode upgrade --runtime antigravity-agent-sdk
 ```
 
-Even in implementation mode, deterministic gates decide whether edits are
-allowed. Draft PR creation is separate and should only happen when the local Git
-and GitHub environment is authenticated and explicitly configured with
-`--draft-pr`.
+`--mode upgrade` expands to refresh evidence, candidate inspection,
+implementation, and guarded cap raises. Even in implementation mode,
+deterministic gates decide whether edits are allowed. `--mode upgrade-pr` adds
+branch creation and a draft PR, refuses to push the default branch, and only
+runs after implementation and verification pass.
 
 ## Evidence Layers
 
@@ -231,12 +233,13 @@ The agent checks:
 - `uv.lock` versions.
 - Installed distributions in the local environment.
 - PyPI metadata and recent releases.
-- `uv lock --dry-run -P ...` output with freshness cutoffs removed.
+- structured update candidates from a temporary lockfile diff with freshness
+  cutoff environment variables removed.
 
-`uv lock --dry-run` is the source of truth for update candidates when it is
-available. PyPI `latest` metadata is useful context, but it can be misleading
-for prerelease packages. For example, a locked prerelease can be newer than the
-stable value reported by package metadata.
+The temporary lockfile diff is the source of truth for update candidates. PyPI
+`latest` metadata is useful context, but it can be misleading for prerelease
+packages. Human-facing uv stdout is stored only as auxiliary evidence and is not
+parsed for pass/fail decisions.
 
 ### 2. API Shape Evidence
 

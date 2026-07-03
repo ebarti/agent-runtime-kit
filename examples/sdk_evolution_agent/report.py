@@ -115,9 +115,29 @@ def render_markdown_report(
         for item in release_notes
         if isinstance(item, dict) and item.get("to_version")
     ]
-    behavior_summary = behavior.get("summary") if isinstance(behavior, dict) else {}
+    raw_behavior_summary = behavior.get("summary") if isinstance(behavior, dict) else {}
+    behavior_summary = raw_behavior_summary if isinstance(raw_behavior_summary, dict) else {}
     behavior_diffs = behavior.get("diffs", []) if isinstance(behavior, dict) else []
     promotion = current_state.get("promotion", {}) if isinstance(current_state, dict) else {}
+    baseline = evidence.get("baseline", {}) if isinstance(evidence, dict) else {}
+    candidates = evidence.get("update_candidates", []) if isinstance(evidence, dict) else []
+    beyond_cap = (
+        evidence.get("update_candidates_beyond_cap", []) if isinstance(evidence, dict) else []
+    )
+    candidate_lines = [
+        "- {package}: {from_version} -> {to_version}".format(**item)
+        for item in candidates
+        if isinstance(item, dict)
+    ]
+    beyond_lines = [
+        (
+            "- {package}: {from_version} -> {to_version} "
+            "(blocked_by_cap={blocked_by_cap}, "
+            "cutoff_delayed_until={cutoff_delayed_until})"
+        ).format(**item)
+        for item in beyond_cap
+        if isinstance(item, dict)
+    ]
     return "\n".join(
         [
             "# SDK Evolution Agent Report",
@@ -131,6 +151,14 @@ def render_markdown_report(
             "## Upstream Evidence",
             "",
             *(package_lines or ["- No package evidence collected."]),
+            "",
+            "## Resolver Candidates",
+            "",
+            *(candidate_lines or ["- No adoptable update candidates."]),
+            "",
+            "## Beyond-Cap Candidates",
+            "",
+            *(beyond_lines or ["- No beyond-cap candidates."]),
             "",
             "## API Diffs",
             "",
@@ -171,6 +199,7 @@ def render_markdown_report(
             "",
             "## Current State Baseline",
             "",
+            f"- Baseline status: `{baseline.get('status')}`",
             f"- Promotion status: `{promotion.get('status')}`",
             f"- Promoted: `{promotion.get('promoted')}`",
             "",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 DEFAULT_PACKAGES = (
     "claude-agent-sdk",
@@ -80,6 +80,9 @@ class ApiSnapshot:
     package: str
     version: str | None
     module: str
+    requested_version: str | None = None
+    observed_version: str | None = None
+    provenance: str = "observed"
     members: tuple[ApiMember, ...] = ()
     import_error: str | None = None
     source: str = "current-environment"
@@ -122,6 +125,9 @@ class BehaviorProbeResult:
     status: str
     summary: str
     details: dict[str, Any] = field(default_factory=dict)
+    requested_version: str | None = None
+    observed_version: str | None = None
+    provenance: str = "observed"
 
 
 @dataclass(frozen=True)
@@ -144,6 +150,7 @@ class RunOptions:
 
     workspace: Path
     runtime: str = "fake"
+    mode: str | None = None
     packages: tuple[str, ...] = DEFAULT_PACKAGES
     report_dir: Path = Path("reports/sdk-evolution")
     implementation_enabled: bool = False
@@ -155,6 +162,8 @@ class RunOptions:
     branch_name: str | None = None
     draft_pr: bool = False
     pr_base: str | None = None
+    allow_dirty: bool = False
+    allow_cap_raise: bool = False
     commit_message: str = "Run SDK evolution update"
     pr_title: str = "Adapt agent-runtime-kit to upstream SDK evolution"
 
@@ -184,8 +193,8 @@ class GateResult:
 def to_jsonable(value: Any) -> Any:
     """Convert dataclasses and paths into JSON-compatible values."""
 
-    if is_dataclass(value):
-        return to_jsonable(asdict(value))
+    if is_dataclass(value) and not isinstance(value, type):
+        return to_jsonable(asdict(cast(Any, value)))
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, dict):

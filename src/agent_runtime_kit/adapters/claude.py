@@ -49,6 +49,24 @@ from agent_runtime_kit.events import (
 
 logger = logging.getLogger(__name__)
 
+VENDOR_CONTRACT = {
+    "options_fields": frozenset(
+        {
+            "model",
+            "allowed_tools",
+            "disallowed_tools",
+            "permission_mode",
+            "system_prompt",
+            "cwd",
+            "mcp_servers",
+            "resume",
+            "env",
+            "max_budget_usd",
+            "output_format",
+        }
+    )
+}
+
 
 class ClaudeAgentRuntime:
     """Run tasks through ``claude-agent-sdk`` using the shared runtime API."""

@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import importlib
 import importlib.metadata
 import json
 import os
 import re
 import shlex
 import subprocess
+import sys
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 from examples.sdk_evolution_agent.models import (
@@ -20,6 +24,12 @@ from examples.sdk_evolution_agent.models import (
     SourceRef,
     to_jsonable,
 )
+
+tomllib: ModuleType | None
+if sys.version_info >= (3, 11):  # pragma: no cover - exercised on modern runtimes
+    tomllib = importlib.import_module("tomllib")
+else:  # pragma: no cover - Python 3.10 fallback
+    tomllib = None
 
 FRESHNESS_CUTOFF_ENV_VARS = ("UV_EXCLUDE_NEWER",)
 
@@ -83,14 +93,36 @@ def collect_evidence(
         "packages": [to_jsonable(item) for item in package_states],
         "adapter_sources": [to_jsonable(item) for item in adapter_source_refs(root)],
         "refresh_preview": None,
+        "update_candidates": [],
+        "update_candidates_beyond_cap": [],
         "facts": [
             "pyproject.toml dependency declarations are lower bounds or constraints.",
             "uv.lock is the tested local dependency state.",
         ],
     }
     if include_refresh_preview:
+        from examples.sdk_evolution_agent.resolver import (
+            resolve_constraint_horizon_candidates,
+            resolve_update_candidates,
+        )
+
+        candidates, resolver_result = resolve_update_candidates(
+            root, packages, command_runner=command_runner
+        )
         preview = run_refresh_preview(root, packages, command_runner=command_runner)
         evidence["refresh_preview"] = to_jsonable(preview)
+        evidence["resolver_result"] = to_jsonable(resolver_result)
+        evidence["update_candidates"] = [to_jsonable(candidate) for candidate in candidates]
+        evidence["update_candidates_beyond_cap"] = [
+            to_jsonable(candidate)
+            for candidate in resolve_constraint_horizon_candidates(
+                root,
+                packages,
+                adoptable=candidates,
+                pypi_metadata={package: _safe_pypi(pypi_client, package) for package in packages},
+                command_runner=command_runner,
+            )
+        ]
     return evidence
 
 
@@ -99,8 +131,26 @@ def read_pyproject_dependency_specs(path: Path) -> dict[str, str]:
 
     if not path.exists():
         return {}
-    text = path.read_text(encoding="utf-8")
+    data = _load_toml(path)
     specs: dict[str, str] = {}
+    if data is not None:
+        optional = data.get("project", {}).get("optional-dependencies", {})
+        if isinstance(optional, dict):
+            for dependencies in optional.values():
+                if not isinstance(dependencies, list):
+                    continue
+                for dependency in dependencies:
+                    if not isinstance(dependency, str):
+                        continue
+                    package = _dependency_name(dependency)
+                    if package in DEFAULT_PACKAGES:
+                        specs[package] = dependency
+            return specs
+
+    text = path.read_text(encoding="utf-8")
+    specs.update(_read_optional_dependency_specs_from_text(text))
+    if specs:
+        return specs
     for package in DEFAULT_PACKAGES:
         match = re.search(rf"{re.escape(package)}[^\"'\],]*", text)
         if match:
@@ -109,18 +159,32 @@ def read_pyproject_dependency_specs(path: Path) -> dict[str, str]:
 
 
 def read_uv_lock_versions(path: Path) -> dict[str, str]:
-    """Read package versions from uv.lock without depending on a TOML parser."""
+    """Read package versions from uv.lock."""
 
     if not path.exists():
         return {}
-    versions: dict[str, str] = {}
+    data = _load_toml(path)
+    if data is not None:
+        packages = data.get("package", [])
+        if isinstance(packages, list):
+            toml_versions: dict[str, str] = {}
+            for package in packages:
+                if not isinstance(package, dict):
+                    continue
+                name = package.get("name")
+                version = package.get("version")
+                if isinstance(name, str) and isinstance(version, str):
+                    toml_versions[name] = version
+            return toml_versions
+
+    regex_versions: dict[str, str] = {}
     text = path.read_text(encoding="utf-8")
     for block in re.split(r"\n\[\[package\]\]\n", text):
         name_match = re.search(r'^name = "([^"]+)"', block, re.MULTILINE)
         version_match = re.search(r'^version = "([^"]+)"', block, re.MULTILINE)
         if name_match and version_match:
-            versions[name_match.group(1)] = version_match.group(1)
-    return versions
+            regex_versions[name_match.group(1)] = version_match.group(1)
+    return regex_versions
 
 
 def adapter_source_refs(root: Path) -> tuple[SourceRef, ...]:
@@ -201,7 +265,8 @@ def fetch_pypi_metadata(package: str) -> Mapping[str, Any]:
     url = f"https://pypi.org/pypi/{package}/json"
     request = urllib.request.Request(url, headers={"User-Agent": "agent-runtime-kit-sdk-evolution"})
     with urllib.request.urlopen(request, timeout=20) as response:
-        return json.loads(response.read().decode("utf-8"))
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload if isinstance(payload, Mapping) else {}
 
 
 def installed_version(package: str) -> str | None:
@@ -258,7 +323,7 @@ def run_refresh_preview(
     command_runner = command_runner or run_command
     env, removed = cutoff_free_env()
     command = build_refresh_preview_command(packages)
-    result = command_runner(command, cwd=root, env=env)
+    result = _call_runner(command_runner, command, cwd=root, env=env, timeout=300)
     return CommandResult(
         command=result.command,
         returncode=result.returncode,
@@ -281,7 +346,7 @@ def run_lock_update(
     command = ["uv", "lock"]
     for package in packages:
         command.extend(("-P", package))
-    result = command_runner(tuple(command), cwd=root, env=env)
+    result = _call_runner(command_runner, tuple(command), cwd=root, env=env, timeout=300)
     return CommandResult(
         command=result.command,
         returncode=result.returncode,
@@ -302,7 +367,9 @@ def run_verification_commands(
     command_runner = command_runner or run_command
     results: list[CommandResult] = []
     for command in commands:
-        results.append(command_runner(tuple(shlex.split(command)), cwd=root))
+        results.append(
+            _call_runner(command_runner, tuple(shlex.split(command)), cwd=root, timeout=900)
+        )
     return tuple(results)
 
 
@@ -315,15 +382,23 @@ def run_command(
 ) -> CommandResult:
     """Run a local command and capture output."""
 
-    completed = subprocess.run(
-        tuple(command),
-        cwd=cwd,
-        env=dict(env) if env is not None else None,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            tuple(command),
+            cwd=cwd,
+            env=dict(env) if env is not None else None,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return CommandResult(
+            command=tuple(command),
+            returncode=124,
+            stdout=str(exc.stdout or ""),
+            stderr=f"timed out after {timeout}s",
+        )
     return CommandResult(
         command=tuple(command),
         returncode=completed.returncode,
@@ -332,8 +407,123 @@ def run_command(
     )
 
 
+def _call_runner(
+    command_runner: CommandRunner,
+    command: Sequence[str],
+    *,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+    timeout: int | None = None,
+) -> CommandResult:
+    kwargs: dict[str, Any] = {"cwd": cwd}
+    if env is not None:
+        kwargs["env"] = env
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    try:
+        return command_runner(tuple(command), **kwargs)
+    except TypeError as exc:
+        if "timeout" not in str(exc):
+            raise
+        kwargs.pop("timeout", None)
+        return command_runner(tuple(command), **kwargs)
+
+
 def _version_key(version: str) -> tuple[Any, ...]:
-    parts: list[Any] = []
-    for part in re.split(r"[.\-+_]", version):
-        parts.append((0, int(part)) if part.isdigit() else (1, part))
-    return tuple(parts)
+    """Return a small dependency-free PEP 440-ish ordering key."""
+
+    text = version.strip().lower().replace("_", ".").replace("-", ".")
+    public = text.split("+", 1)[0]
+    epoch = 0
+    if "!" in public:
+        raw_epoch, public = public.split("!", 1)
+        epoch = int(raw_epoch or "0") if raw_epoch.isdigit() else 0
+
+    dev_number = _suffix_number(public, "dev")
+    post_number = _suffix_number(public, "post")
+    pre_match = re.search(r"(a|b|rc)(\d*)", public)
+    release_text = re.split(r"(?:a|b|rc|post|dev)", public, maxsplit=1)[0].strip(".")
+    release = tuple(int(part) for part in release_text.split(".") if part.isdigit())
+    release = release + (0,) * (6 - len(release))
+
+    if dev_number is not None and pre_match is None:
+        phase = (0, dev_number)
+    elif pre_match is not None:
+        phase_order = {"a": 1, "b": 2, "rc": 3}
+        phase = (phase_order[pre_match.group(1)], int(pre_match.group(2) or "0"))
+    elif post_number is not None:
+        phase = (5, post_number)
+    else:
+        phase = (4, 0)
+    return (epoch, release, phase)
+
+
+def _suffix_number(version: str, label: str) -> int | None:
+    match = re.search(rf"(?:^|[.]){label}(\d*)", version)
+    if not match:
+        return None
+    return int(match.group(1) or "0")
+
+
+def _load_toml(path: Path) -> dict[str, Any] | None:
+    if tomllib is None:
+        return None
+    try:
+        return dict(tomllib.loads(path.read_text(encoding="utf-8")))
+    except Exception:
+        return None
+
+
+def _dependency_name(spec: str) -> str:
+    match = re.match(r"\s*([A-Za-z0-9_.-]+)", spec)
+    return (match.group(1) if match else "").replace("_", "-").lower()
+
+
+def _read_optional_dependency_specs_from_text(text: str) -> dict[str, str]:
+    specs: dict[str, str] = {}
+    in_optional = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_optional = stripped == "[project.optional-dependencies]"
+            continue
+        if not in_optional:
+            continue
+        for dependency in re.findall(r'["\']([^"\']+)["\']', stripped):
+            package = _dependency_name(dependency)
+            if package in DEFAULT_PACKAGES:
+                specs[package] = dependency
+    return specs
+
+
+def _safe_pypi(pypi_client: PypiClient, package: str) -> Mapping[str, Any]:
+    try:
+        return pypi_client(package)
+    except Exception:
+        return {}
+
+
+def upload_time_for_version(metadata: Mapping[str, Any], version: str) -> datetime | None:
+    """Return the first PyPI upload timestamp for a version, when present."""
+
+    releases = metadata.get("releases", {})
+    if not isinstance(releases, Mapping):
+        return None
+    files = releases.get(version)
+    if not isinstance(files, list) or not files:
+        return None
+    for file_info in files:
+        if not isinstance(file_info, Mapping):
+            continue
+        raw = file_info.get("upload_time_iso_8601") or file_info.get("upload_time")
+        if not isinstance(raw, str) or not raw:
+            continue
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            continue
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
