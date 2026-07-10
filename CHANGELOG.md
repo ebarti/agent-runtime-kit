@@ -75,6 +75,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   during static preflight instead of surfacing later or being silently ignored.
 - A configured model allow-list now fails closed when model selection is
   provider-native and therefore cannot be verified locally.
+- Cancellation now binds to one active task generation, unregisters without a
+  cancellable lock window, emits at most one timeout/cancellation terminal, and
+  finishes reusable provider-process teardown under repeated cancellation.
 
 ## 0.4.0 - 2026-07-02
 

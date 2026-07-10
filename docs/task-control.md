@@ -47,6 +47,10 @@ the same method directly. `CancellationReceipt.disposition` distinguishes a
 new request, a repeated request, an inactive id, an unsupported hook, a failed
 hook, and a legacy runtime that returned no receipt.
 
+An active `(runtime, task_id)` identifies one run generation. If a legacy
+task-id-only cancellation hook is still settling, `AgentKit` keeps that id
+reserved rather than allowing the delayed hook to target a replacement run.
+
 A `REQUESTED` receipt confirms only that cancellation was requested at the
 runtime coroutine boundary. It does not promise rollback: commands, network
 requests, or other tool side effects that completed before cancellation may be

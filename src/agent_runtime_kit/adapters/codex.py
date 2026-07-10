@@ -31,6 +31,7 @@ from agent_runtime_kit.adapters._common import (
     empty_completion_error,
     field_value,
     filter_supported_kwargs,
+    finish_vendor_cleanup,
     metadata_str,
     model_support_issue,
     optional_int,
@@ -367,9 +368,8 @@ class CodexAgentRuntime:
                     # inside the run lock so a queued run cannot observe the
                     # doomed client between failure and eviction; close under
                     # the client lock only and never mask the original error.
-                    try:
-                        await self._close_codex_client()
-                    except Exception as close_exc:
+                    close_exc = await finish_vendor_cleanup(self._close_codex_client())
+                    if close_exc is not None:
                         logger.warning(
                             "failed to close Codex app-server after run failure: %s", close_exc
                         )
@@ -455,9 +455,8 @@ class CodexAgentRuntime:
             try:
                 client = await enter() if callable(enter) else context
             except BaseException:
-                try:
-                    await close_vendor_resource(context)
-                except Exception as close_exc:
+                close_exc = await finish_vendor_cleanup(close_vendor_resource(context))
+                if close_exc is not None:
                     logger.warning(
                         "failed to close Codex app-server after startup failure: %s", close_exc
                     )

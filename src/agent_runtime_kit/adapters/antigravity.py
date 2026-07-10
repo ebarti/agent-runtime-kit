@@ -37,6 +37,7 @@ from agent_runtime_kit.adapters._common import (
     empty_completion_error,
     filter_supported_kwargs,
     fingerprint_item,
+    finish_vendor_cleanup,
     model_support_issue,
     optional_int,
     optional_str,
@@ -416,9 +417,8 @@ class AntigravityAgentRuntime:
                     # next run() never reuses a poisoned process. The run lock is
                     # already held, so close under the agent lock only and never
                     # let cleanup mask the original error.
-                    try:
-                        await self._close_agent()
-                    except Exception as close_exc:
+                    close_exc = await finish_vendor_cleanup(self._close_agent())
+                    if close_exc is not None:
                         logger.warning(
                             "failed to close Antigravity agent after run failure: %s",
                             close_exc,
@@ -562,9 +562,8 @@ class AntigravityAgentRuntime:
             try:
                 agent = await enter() if callable(enter) else context
             except BaseException:
-                try:
-                    await close_vendor_resource(context)
-                except Exception as close_exc:
+                close_exc = await finish_vendor_cleanup(close_vendor_resource(context))
+                if close_exc is not None:
                     logger.warning(
                         "failed to close Antigravity agent after startup failure: %s", close_exc
                     )

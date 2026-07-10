@@ -743,6 +743,8 @@ class AgentTask:
         if self.reasoning_effort is not None:
             _require_nonblank(self.reasoning_effort, "AgentTask.reasoning_effort")
         if self.deadline is not None:
+            if not isinstance(self.deadline, datetime):
+                raise ValueError("AgentTask.deadline must be a datetime")
             if self.deadline.tzinfo is None or self.deadline.utcoffset() is None:
                 raise ValueError("AgentTask.deadline must be timezone-aware")
             object.__setattr__(self, "deadline", self.deadline.astimezone(timezone.utc))

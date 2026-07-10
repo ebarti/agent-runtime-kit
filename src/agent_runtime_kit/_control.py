@@ -38,7 +38,6 @@ class RuntimeTaskController:
     def __init__(self, kind: AgentRuntimeKind | str) -> None:
         self.kind = AgentRuntimeKind.coerce(kind)
         self._active: dict[str, _ActiveRun] = {}
-        self._lock = asyncio.Lock()
 
     async def run(
         self,
@@ -50,33 +49,40 @@ class RuntimeTaskController:
         current = asyncio.current_task()
         if current is None:  # pragma: no cover - asyncio always supplies one here
             raise AgentRuntimeError("task control requires an active asyncio task")
-        async with self._lock:
-            existing = self._active.get(task.task_id)
-            if existing is not None:
-                raise AgentRuntimeError(
-                    f"task_id {task.task_id!r} is already active for {self.kind}"
-                )
-            self._active[task.task_id] = _ActiveRun(current)
+        # These registry operations deliberately contain no await.  asyncio tasks
+        # share one event-loop thread, so the check-and-set is atomic without a
+        # cancellable lock acquisition.  The same is true of cleanup below.
+        existing = self._active.get(task.task_id)
+        if existing is not None:
+            raise AgentRuntimeError(
+                f"task_id {task.task_id!r} is already active for {self.kind}"
+            )
+        self._active[task.task_id] = _ActiveRun(current)
 
         try:
             return await self._run_with_deadline(task, operation)
         finally:
-            async with self._lock:
-                active = self._active.get(task.task_id)
-                if active is not None and active.task is current:
-                    del self._active[task.task_id]
+            active = self._active.get(task.task_id)
+            if active is not None and active.task is current:
+                del self._active[task.task_id]
 
-    async def cancel(self, task_id: str) -> CancellationReceipt:
+    async def cancel(
+        self,
+        task_id: str,
+        *,
+        _expected_task: asyncio.Task[Any] | None = None,
+    ) -> CancellationReceipt:
         """Request cancellation of an active coroutine without blocking on it."""
 
-        async with self._lock:
-            active = self._active.get(task_id)
-            if active is None:
-                return self._receipt(task_id, CancellationDisposition.NOT_ACTIVE)
-            if active.cancellation_requested:
-                return self._receipt(task_id, CancellationDisposition.ALREADY_REQUESTED)
-            active.cancellation_requested = True
-            accepted = active.task.cancel()
+        active = self._active.get(task_id)
+        if active is None or (
+            _expected_task is not None and active.task is not _expected_task
+        ):
+            return self._receipt(task_id, CancellationDisposition.NOT_ACTIVE)
+        if active.cancellation_requested:
+            return self._receipt(task_id, CancellationDisposition.ALREADY_REQUESTED)
+        active.cancellation_requested = True
+        accepted = active.task.cancel()
         if not accepted:
             return self._receipt(
                 task_id,
@@ -107,6 +113,7 @@ class RuntimeTaskController:
             raise AgentTaskTimeoutError(self.kind, task.task_id, deadline)
 
         operation_task: asyncio.Future[_T] = asyncio.ensure_future(operation())
+        timed_out = False
         try:
             done, _ = await asyncio.wait(
                 {operation_task},
@@ -118,12 +125,16 @@ class RuntimeTaskController:
 
             operation_task.cancel()
             await asyncio.gather(operation_task, return_exceptions=True)
+            # Transition before emitting: cancellation of a slow sink must never
+            # turn one timeout into a second, contradictory interrupted terminal.
+            timed_out = True
             await self._emit_timed_out(task, deadline)
             raise AgentTaskTimeoutError(self.kind, task.task_id, deadline)
         except asyncio.CancelledError:
             operation_task.cancel()
             await asyncio.gather(operation_task, return_exceptions=True)
-            await self._emit_interrupted(task)
+            if not timed_out:
+                await self._emit_interrupted(task)
             raise
 
     async def _emit_interrupted(self, task: AgentTask) -> None:

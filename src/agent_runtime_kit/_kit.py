@@ -63,6 +63,8 @@ class _KitActiveRun:
     agent: AgentRuntime
     task: asyncio.Task[Any]
     cancellation_requested: bool = False
+    cancel_hook_complete: bool = False
+    run_complete: bool = False
 
 # Short spellings for the built-in kinds, resolved only by AgentKit (the
 # registry itself stays alias-free; the full kind strings always work).
@@ -108,7 +110,6 @@ class AgentKit:
         self._handlers: list[tuple[str, _EventHandler]] = []
         self._cache_lock = asyncio.Lock()
         self._active_runs: dict[tuple[int, str], _KitActiveRun] = {}
-        self._active_lock = asyncio.Lock()
 
     @property
     def registry(self) -> RuntimeRegistry:
@@ -391,12 +392,12 @@ class AgentKit:
         current = asyncio.current_task()
         if current is None:  # pragma: no cover - asyncio always supplies one here
             raise RuntimeError("AgentKit.run requires an active asyncio task")
-        async with self._active_lock:
-            if key in self._active_runs:
-                raise ValueError(
-                    f"task_id {built.task_id!r} is already active on this runtime"
-                )
-            self._active_runs[key] = _KitActiveRun(agent=agent, task=current)
+        # No await between lookup and insertion: this is atomic among asyncio
+        # tasks and, unlike an asyncio.Lock acquisition, cannot be interrupted
+        # while registering or unregistering a run.
+        if key in self._active_runs:
+            raise ValueError(f"task_id {built.task_id!r} is already active on this runtime")
+        self._active_runs[key] = _KitActiveRun(agent=agent, task=current)
         try:
             if isinstance(getattr(agent, "_task_controller", None), RuntimeTaskController):
                 result = await agent.run(built)
@@ -410,9 +411,13 @@ class AgentKit:
                 return result
             return _parse_result(output_type, result)
         finally:
-            async with self._active_lock:
-                active = self._active_runs.get(key)
-                if active is not None and active.task is current:
+            active = self._active_runs.get(key)
+            if active is not None and active.task is current:
+                active.run_complete = True
+                # Keep a tombstone while a legacy cancellation hook is still in
+                # flight.  This prevents a delayed task-id-only hook from
+                # cancelling a newer run that reused the same id (ABA race).
+                if not active.cancellation_requested or active.cancel_hook_complete:
                     del self._active_runs[key]
 
     async def cancel(
@@ -442,26 +447,53 @@ class AgentKit:
             kind = agent.kind
 
         key = (id(agent), task_id)
-        async with self._active_lock:
-            active = self._active_runs.get(key)
-            if active is None:
-                return CancellationReceipt(
-                    task_id=task_id,
-                    kind=kind,
-                    disposition=CancellationDisposition.NOT_ACTIVE,
-                )
-            if active.cancellation_requested:
-                return CancellationReceipt(
-                    task_id=task_id,
-                    kind=kind,
-                    disposition=CancellationDisposition.ALREADY_REQUESTED,
-                )
-            active.cancellation_requested = True
+        active = self._active_runs.get(key)
+        if active is None:
+            return CancellationReceipt(
+                task_id=task_id,
+                kind=kind,
+                disposition=CancellationDisposition.NOT_ACTIVE,
+            )
+        if active.cancellation_requested:
+            return CancellationReceipt(
+                task_id=task_id,
+                kind=kind,
+                disposition=CancellationDisposition.ALREADY_REQUESTED,
+            )
+        active.cancellation_requested = True
 
-        cancel_method = getattr(agent, "cancel", None)
-        if callable(cancel_method):
+        controller = getattr(agent, "_task_controller", None)
+        if isinstance(controller, RuntimeTaskController):
             try:
-                receipt = await cancel_method(task_id)
+                # Bind the request to the exact asyncio task generation.  A
+                # task-id-only lookup could otherwise cancel a newer same-id run.
+                receipt = await controller.cancel(task_id, _expected_task=active.task)
+                if receipt.disposition in {
+                    CancellationDisposition.NOT_ACTIVE,
+                    CancellationDisposition.UNSUPPORTED,
+                }:
+                    accepted = active.task.cancel()
+                    return CancellationReceipt(
+                        task_id=task_id,
+                        kind=kind,
+                        disposition=(
+                            CancellationDisposition.REQUESTED
+                            if accepted
+                            else CancellationDisposition.FAILED
+                        ),
+                        message=(
+                            "runtime controller no longer owned this run; local "
+                            "coroutine cancellation was requested"
+                            if accepted
+                            else "the active asyncio task had already completed"
+                        ),
+                    )
+                return receipt
+            except asyncio.CancelledError:
+                # The cancellation caller may itself be cancelled.  The target
+                # still receives a request so the state cannot become poisoned.
+                active.task.cancel()
+                raise
             except Exception as exc:
                 active.task.cancel()
                 return CancellationReceipt(
@@ -469,58 +501,92 @@ class AgentKit:
                     kind=kind,
                     disposition=CancellationDisposition.FAILED,
                     message=(
-                        "runtime cancellation hook failed; local cancellation "
+                        "runtime cancellation controller failed; local cancellation "
                         f"requested: {exc}"
                     ),
                 )
-            if isinstance(receipt, CancellationReceipt):
-                if receipt.disposition in {
-                    CancellationDisposition.NOT_ACTIVE,
-                    CancellationDisposition.UNSUPPORTED,
-                }:
-                    active.task.cancel()
-                    return CancellationReceipt(
-                        task_id=task_id,
-                        kind=kind,
-                        disposition=CancellationDisposition.REQUESTED,
-                        message=(
-                            "runtime hook could not find the task; local coroutine "
-                            "cancellation was requested"
-                        ),
-                    )
-                return receipt
-            accepted = active.task.cancel()
+            finally:
+                self._complete_cancel_hook(key, active)
+
+        # Older third-party runtimes expose only a task-id hook (or no hook).
+        # Cancel the exact task first, then keep its registry tombstone until the
+        # hook returns so a delayed hook cannot target a replacement generation.
+        accepted = active.task.cancel()
+        if not accepted:
+            self._complete_cancel_hook(key, active)
             return CancellationReceipt(
                 task_id=task_id,
                 kind=kind,
-                disposition=(
-                    CancellationDisposition.LEGACY_UNCONFIRMED
-                    if accepted
-                    else CancellationDisposition.FAILED
-                ),
+                disposition=CancellationDisposition.FAILED,
+                message="the active asyncio task had already completed",
+            )
+
+        cancel_method = getattr(agent, "cancel", None)
+        if not callable(cancel_method):
+            self._complete_cancel_hook(key, active)
+            return CancellationReceipt(
+                task_id=task_id,
+                kind=kind,
+                disposition=CancellationDisposition.REQUESTED,
                 message=(
-                    "legacy runtime returned no cancellation receipt; local coroutine "
+                    "runtime has no cancellation hook; local coroutine "
                     "cancellation was requested"
-                    if accepted
-                    else "the active asyncio task had already completed"
                 ),
             )
 
-        accepted = active.task.cancel()
+        try:
+            receipt = await cancel_method(task_id)
+        except asyncio.CancelledError:
+            # Local cancellation was already issued; propagate cancellation of
+            # this request without leaving an unretryable, still-running target.
+            raise
+        except Exception as exc:
+            return CancellationReceipt(
+                task_id=task_id,
+                kind=kind,
+                disposition=CancellationDisposition.FAILED,
+                message=(
+                    "runtime cancellation hook failed; local cancellation "
+                    f"requested: {exc}"
+                ),
+            )
+        finally:
+            self._complete_cancel_hook(key, active)
+
+        if isinstance(receipt, CancellationReceipt):
+            if receipt.disposition in {
+                CancellationDisposition.NOT_ACTIVE,
+                CancellationDisposition.UNSUPPORTED,
+            }:
+                return CancellationReceipt(
+                    task_id=task_id,
+                    kind=kind,
+                    disposition=CancellationDisposition.REQUESTED,
+                    message=(
+                        "runtime hook could not confirm the task; local coroutine "
+                        "cancellation was requested"
+                    ),
+                )
+            return receipt
         return CancellationReceipt(
             task_id=task_id,
             kind=kind,
-            disposition=(
-                CancellationDisposition.REQUESTED
-                if accepted
-                else CancellationDisposition.FAILED
-            ),
+            disposition=CancellationDisposition.LEGACY_UNCONFIRMED,
             message=(
-                "runtime has no cancellation hook; local coroutine cancellation was requested"
-                if accepted
-                else "the active asyncio task had already completed"
+                "legacy runtime returned no cancellation receipt; local coroutine "
+                "cancellation was requested"
             ),
         )
+
+    def _complete_cancel_hook(
+        self,
+        key: tuple[int, str],
+        active: _KitActiveRun,
+    ) -> None:
+        active.cancel_hook_complete = True
+        current = self._active_runs.get(key)
+        if current is active and active.run_complete:
+            del self._active_runs[key]
 
     async def aclose(self) -> None:
         """Close every runtime this hub constructed and cached."""

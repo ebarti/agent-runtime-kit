@@ -36,6 +36,7 @@ from agent_runtime_kit.adapters._common import (
     field_value,
     filter_supported_kwargs,
     fingerprint_value,
+    finish_vendor_cleanup,
     metadata_str,
     model_support_issue,
     optional_int,
@@ -299,9 +300,8 @@ class ClaudeAgentRuntime:
                 # poisoned process is never handed to the next run(). The run
                 # lock is already held, so close under the client lock only and
                 # never let cleanup mask the original error.
-                try:
-                    await self._close_client()
-                except Exception as close_exc:
+                close_exc = await finish_vendor_cleanup(self._close_client())
+                if close_exc is not None:
                     logger.warning(
                         "failed to close Claude client after run failure: %s", close_exc
                     )
@@ -331,9 +331,10 @@ class ClaudeAgentRuntime:
                     if callable(enter):
                         client = await enter()
             except BaseException:
-                try:
-                    await close_vendor_resource(client, try_disconnect=True)
-                except Exception as close_exc:
+                close_exc = await finish_vendor_cleanup(
+                    close_vendor_resource(client, try_disconnect=True)
+                )
+                if close_exc is not None:
                     logger.warning(
                         "failed to close Claude client after startup failure: %s", close_exc
                     )

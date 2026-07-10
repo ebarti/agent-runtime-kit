@@ -18,6 +18,7 @@ from agent_runtime_kit import (
     RuntimeAvailability,
     RuntimeRegistry,
 )
+from agent_runtime_kit.adapters._common import finish_vendor_cleanup
 from agent_runtime_kit.testing import RecordingEventSink
 
 
@@ -99,7 +100,125 @@ class SerialFakeRuntime(FakeAgentRuntime):
             return AgentResult(output=task.goal)
 
 
+class GatedCancellationRuntime:
+    """Runtime whose cancellation hook can be delayed across run generations."""
+
+    kind = AgentRuntimeKind.FAKE
+    capabilities = FakeAgentRuntime().capabilities
+
+    def __init__(self) -> None:
+        self._active: dict[str, asyncio.Task[object]] = {}
+        self.first_started = asyncio.Event()
+        self.release_first = asyncio.Event()
+        self.second_started = asyncio.Event()
+        self.release_second = asyncio.Event()
+        self.cancel_entered = asyncio.Event()
+        self.release_cancel = asyncio.Event()
+        self.cancel_calls = 0
+        self.second_cancelled = False
+
+    def availability(self) -> RuntimeAvailability:
+        return RuntimeAvailability.ok(self.kind)
+
+    async def run(self, task: AgentTask) -> AgentResult:
+        current = asyncio.current_task()
+        assert current is not None
+        self._active[task.task_id] = current
+        try:
+            return await self._run_task(task)
+        finally:
+            if self._active.get(task.task_id) is current:
+                del self._active[task.task_id]
+
+    async def _run_task(self, task: AgentTask) -> AgentResult:
+        if task.goal == "first":
+            self.first_started.set()
+            await self.release_first.wait()
+            return AgentResult(output="first")
+        self.second_started.set()
+        try:
+            await self.release_second.wait()
+        except asyncio.CancelledError:
+            self.second_cancelled = True
+            raise
+        return AgentResult(output="second")
+
+    async def cancel(self, task_id: str) -> CancellationReceipt:
+        self.cancel_calls += 1
+        self.cancel_entered.set()
+        await self.release_cancel.wait()
+        target = self._active.get(task_id)
+        if target is None:
+            return CancellationReceipt(
+                task_id=task_id,
+                kind=self.kind,
+                disposition=CancellationDisposition.NOT_ACTIVE,
+            )
+        target.cancel()
+        return CancellationReceipt(
+            task_id=task_id,
+            kind=self.kind,
+            disposition=CancellationDisposition.REQUESTED,
+        )
+
+    async def aclose(self) -> None:
+        return None
+
+    async def __aenter__(self) -> GatedCancellationRuntime:
+        return self
+
+    async def __aexit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        await self.aclose()
+
+
+class BlockingTimeoutSink:
+    """Record a timeout terminal, then pause its delivery to expose races."""
+
+    def __init__(self) -> None:
+        self.events: list[object] = []
+        self.timeout_seen = asyncio.Event()
+        self.release_timeout = asyncio.Event()
+
+    async def emit(self, event: object) -> None:
+        assert isinstance(event, dict)
+        self.events.append(event)
+        attributes = event.get("attributes", {})
+        if (
+            event.get("name") == "agent.task.failed"
+            and isinstance(attributes, dict)
+            and attributes.get("finish_reason") == FinishReason.TIMED_OUT
+        ):
+            self.timeout_seen.set()
+            await self.release_timeout.wait()
+
+
+class CleanupBlockingRuntime(FakeAgentRuntime):
+    """Expose whether a repeated cancel interrupts operation cleanup."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.cleanup_started = asyncio.Event()
+        self.release_cleanup = asyncio.Event()
+        self.cleanup_interrupted = False
+
+    async def _run_task(self, task: AgentTask) -> AgentResult:
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.cleanup_started.set()
+            try:
+                await self.release_cleanup.wait()
+            except asyncio.CancelledError:
+                self.cleanup_interrupted = True
+                raise
+
+
 def test_deadline_requires_timezone_and_normalizes_to_utc() -> None:
+    with pytest.raises(ValueError, match="must be a datetime"):
+        AgentTask(goal="x", deadline="tomorrow")  # type: ignore[arg-type]
+
     with pytest.raises(ValueError, match="timezone-aware"):
         AgentTask(goal="x", deadline=datetime(2030, 1, 1))
 
@@ -241,6 +360,11 @@ async def test_direct_builtin_cancel_returns_receipts_and_emits_interrupted() ->
     assert len(terminal) == 1
     assert terminal[0]["attributes"]["finish_reason"] == FinishReason.INTERRUPTED
 
+    runtime.started.clear()
+    runtime.release.set()
+    recovered = await runtime.run(AgentTask(goal="next", task_id="direct"))
+    assert recovered.output == "next"
+
 
 @pytest.mark.asyncio
 async def test_queued_deadline_does_not_interrupt_reuse_holder() -> None:
@@ -281,3 +405,149 @@ async def test_external_task_cancellation_emits_one_interrupted_terminal() -> No
     terminal = [event for event in sink.events if event["name"] == "agent.task.failed"]
     assert len(terminal) == 1
     assert terminal[0]["attributes"]["finish_reason"] == FinishReason.INTERRUPTED
+
+
+@pytest.mark.asyncio
+async def test_delayed_cancel_hook_cannot_target_later_same_id_run() -> None:
+    runtime = GatedCancellationRuntime()
+    kit = AgentKit(register_default_adapters=False)
+    first = asyncio.create_task(kit.run(runtime, goal="first", task_id="same"))
+    await runtime.first_started.wait()
+
+    cancelling = asyncio.create_task(kit.cancel(runtime, "same"))
+    await runtime.cancel_entered.wait()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+    # The completed generation remains reserved until its delayed task-id hook
+    # settles, so no replacement can become the hook's accidental target.
+    with pytest.raises(ValueError, match="already active"):
+        await kit.run(runtime, goal="second", task_id="same")
+
+    runtime.release_cancel.set()
+    receipt = await cancelling
+    assert receipt.disposition is CancellationDisposition.REQUESTED
+
+    second = asyncio.create_task(kit.run(runtime, goal="second", task_id="same"))
+    await runtime.second_started.wait()
+    assert runtime.second_cancelled is False
+    runtime.release_second.set()
+    assert (await second).output == "second"
+
+
+@pytest.mark.asyncio
+async def test_cancelling_cancel_request_still_cancels_target_and_releases_generation() -> None:
+    runtime = GatedCancellationRuntime()
+    kit = AgentKit(register_default_adapters=False)
+    running = asyncio.create_task(kit.run(runtime, goal="first", task_id="same"))
+    await runtime.first_started.wait()
+
+    cancelling = asyncio.create_task(kit.cancel(runtime, "same"))
+    await runtime.cancel_entered.wait()
+    cancelling.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await cancelling
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    replacement = asyncio.create_task(kit.run(runtime, goal="second", task_id="same"))
+    await runtime.second_started.wait()
+    runtime.release_second.set()
+    assert (await replacement).output == "second"
+
+
+@pytest.mark.asyncio
+async def test_timeout_racing_external_cancel_emits_only_timed_out_terminal() -> None:
+    runtime = BlockingFakeRuntime()
+    sink = BlockingTimeoutSink()
+    running = asyncio.create_task(
+        runtime.run(
+            AgentTask(
+                goal="wait",
+                task_id="timeout-race",
+                deadline=datetime.now(tz=timezone.utc) + timedelta(milliseconds=10),
+                event_sink=sink,  # type: ignore[arg-type]
+            )
+        )
+    )
+    await sink.timeout_seen.wait()
+
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    terminals = [
+        event
+        for event in sink.events
+        if isinstance(event, dict) and event.get("name") == "agent.task.failed"
+    ]
+    assert len(terminals) == 1
+    assert terminals[0]["attributes"]["finish_reason"] == FinishReason.TIMED_OUT
+
+
+@pytest.mark.asyncio
+async def test_repeated_runtime_cancel_does_not_interrupt_operation_cleanup() -> None:
+    runtime = CleanupBlockingRuntime()
+    running = asyncio.create_task(
+        runtime.run(AgentTask(goal="wait", task_id="cleanup"))
+    )
+    await runtime.started.wait()
+
+    first = await runtime.cancel("cleanup")
+    await runtime.cleanup_started.wait()
+    repeated = await runtime.cancel("cleanup")
+
+    assert first.disposition is CancellationDisposition.REQUESTED
+    assert repeated.disposition is CancellationDisposition.ALREADY_REQUESTED
+    assert runtime.cleanup_interrupted is False
+    runtime.release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert runtime.cleanup_interrupted is False
+
+
+@pytest.mark.asyncio
+async def test_vendor_cleanup_helper_survives_repeated_task_cancellation() -> None:
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    cleanup_finished = False
+
+    async def cleanup() -> None:
+        nonlocal cleanup_finished
+        cleanup_started.set()
+        await release_cleanup.wait()
+        cleanup_finished = True
+
+    async def owner() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            assert await finish_vendor_cleanup(cleanup()) is None
+            raise
+
+    running = asyncio.create_task(owner())
+    await asyncio.sleep(0)
+    running.cancel()
+    await cleanup_started.wait()
+    running.cancel()
+    await asyncio.sleep(0)
+
+    assert cleanup_finished is False
+    release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert cleanup_finished is True
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_completed_run_is_truthfully_not_active() -> None:
+    runtime = LegacyBlockingRuntime()
+    runtime.release.set()
+    kit = AgentKit(register_default_adapters=False)
+
+    assert (await kit.run(runtime, goal="done", task_id="finished")).output == "done"
+    receipt = await kit.cancel(runtime, "finished")
+
+    assert receipt.disposition is CancellationDisposition.NOT_ACTIVE
+    assert runtime.cancel_calls == 0

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Iterable, Mapping
 from dataclasses import dataclass
 from importlib import metadata
 from math import isfinite
@@ -374,3 +375,31 @@ async def close_vendor_resource(
         result = close()
         if hasattr(result, "__await__"):
             await result
+
+
+async def finish_vendor_cleanup(operation: Awaitable[Any]) -> BaseException | None:
+    """Finish teardown even if the owning run receives repeated cancellation.
+
+    The caller is already handling the original run exception (usually
+    ``CancelledError``). A second ``Task.cancel()`` must not abandon provider
+    teardown and expose a half-closed reusable process to the next run. The
+    original exception remains authoritative; a cleanup failure is returned for
+    logging instead of masking it.
+    """
+
+    cleanup: asyncio.Future[Any] = asyncio.ensure_future(operation)
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            # shield keeps the cleanup task alive. Consume any number of
+            # additional cancellation requests until teardown has settled.
+            continue
+        except Exception:
+            # The failure is retrieved and returned below so it can be logged
+            # without replacing the run's original exception.
+            break
+    try:
+        return cleanup.exception()
+    except asyncio.CancelledError as exc:
+        return exc
