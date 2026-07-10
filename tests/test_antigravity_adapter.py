@@ -1345,7 +1345,7 @@ def test_antigravity_availability_uses_injected_sdk(tmp_path: Path) -> None:
     assert diagnostic.available is True
 
 
-def test_antigravity_availability_accepts_application_default_credentials(
+def test_antigravity_availability_does_not_probe_application_default_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -1360,18 +1360,18 @@ def test_antigravity_availability_accepts_application_default_credentials(
         ),
     )
     monkeypatch.setattr(
-        "agent_runtime_kit.adapters.antigravity._google_adc_project",
-        lambda: "adc-project",
+        "agent_runtime_kit.adapters.antigravity._probe_google_adc",
+        lambda: (_ for _ in ()).throw(AssertionError("availability must not probe ADC")),
     )
     runtime = AntigravityAgentRuntime(api_key=None)
 
     diagnostic = runtime.availability()
 
     assert diagnostic.available is True
-    assert diagnostic.metadata["auth_source"] == "application-default-credentials"
+    assert diagnostic.metadata == {}
 
 
-def test_antigravity_availability_rejects_missing_credentials(
+def test_antigravity_availability_does_not_classify_missing_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -1387,10 +1387,13 @@ def test_antigravity_availability_rejects_missing_credentials(
             version="0.1.2",
         ),
     )
-    monkeypatch.setattr("agent_runtime_kit.adapters.antigravity._google_adc_project", lambda: None)
+    monkeypatch.setattr(
+        "agent_runtime_kit.adapters.antigravity._probe_google_adc",
+        lambda: (_ for _ in ()).throw(AssertionError("availability must not probe ADC")),
+    )
     runtime = AntigravityAgentRuntime(api_key=None)
 
     diagnostic = runtime.availability()
 
-    assert diagnostic.available is False
-    assert diagnostic.reason.value == "missing-credentials"
+    assert diagnostic.available is True
+    assert diagnostic.metadata == {}

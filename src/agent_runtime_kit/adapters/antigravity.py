@@ -22,7 +22,9 @@ from agent_runtime_kit._types import (
     AvailabilityReason,
     FilesystemAccess,
     PermissionMode,
+    ReadinessStatus,
     RuntimeAvailability,
+    RuntimeReadiness,
     TaskSupportIssue,
     TaskSupportReport,
     ToolCallAudit,
@@ -116,35 +118,78 @@ class AntigravityAgentRuntime:
         await self.aclose()
 
     def availability(self) -> RuntimeAvailability:
-        """Report Antigravity package and credential availability.
-
-        Synchronous by design (a setup diagnostic), but ADC discovery may read
-        files or hit the GCE metadata server — from async code, call it via
-        ``asyncio.to_thread`` like ``run()`` does internally.
-        """
+        """Report Antigravity package presence without probing Google ADC."""
 
         if self._agent_cls is not None:
             return RuntimeAvailability.ok(self.kind, package="google-antigravity")
-        package = package_availability(self.kind)
-        if not package.available:
-            return package
-        auth = self._auth_config()
-        if not auth.available:
-            return RuntimeAvailability.unavailable(
-                self.kind,
-                reason=AvailabilityReason.MISSING_CREDENTIALS,
-                message=(
-                    "Set GEMINI_API_KEY or GOOGLE_API_KEY, or configure Google "
-                    "Application Default Credentials with a Vertex AI project/location."
-                ),
-                package="google-antigravity",
-                metadata=package.metadata,
+        return package_availability(self.kind)
+
+    async def check_readiness(self) -> RuntimeReadiness:
+        """Check API-key or Google ADC setup without starting an agent task."""
+
+        availability = self.availability()
+        if not availability.available:
+            return RuntimeReadiness.from_availability(
+                availability,
+                status=ReadinessStatus.NOT_READY,
             )
-        return RuntimeAvailability.ok(
+        ambient_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if self._api_key or (ambient_key and self._vertex is not True):
+            return RuntimeReadiness.ready_to_attempt(
+                self.kind,
+                message="An Antigravity API-key credential signal is configured.",
+                package=availability.package,
+                version=availability.version,
+                metadata={"auth_source": "api-key"},
+            )
+        if self._vertex is False:
+            return self._missing_credentials_readiness(availability)
+        try:
+            adc = await asyncio.to_thread(_probe_google_adc)
+        except Exception as exc:
+            if _is_missing_google_credentials(exc):
+                return self._missing_credentials_readiness(availability)
+            return RuntimeReadiness.indeterminate(
+                self.kind,
+                reason=AvailabilityReason.SETUP_FAILED,
+                message=(
+                    "The Google Application Default Credentials probe failed before "
+                    "readiness was known."
+                ),
+                package=availability.package,
+                version=availability.version,
+                metadata={"failure": "adc-probe", "error_type": type(exc).__name__},
+            )
+        project = (
+            self._project
+            or _env_first("GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT")
+            or adc.project
+        )
+        if not adc.credentials_available or not project:
+            return self._missing_credentials_readiness(availability)
+        return RuntimeReadiness.ready_to_attempt(
             self.kind,
-            package="google-antigravity",
-            version=package.version,
-            metadata={**dict(package.metadata), "auth_source": auth.source},
+            message="Google Application Default Credentials and a Vertex project are configured.",
+            package=availability.package,
+            version=availability.version,
+            metadata={
+                "auth_source": "application-default-credentials",
+                "project_configured": True,
+            },
+        )
+
+    def _missing_credentials_readiness(
+        self, availability: RuntimeAvailability
+    ) -> RuntimeReadiness:
+        return RuntimeReadiness.not_ready(
+            self.kind,
+            reason=AvailabilityReason.MISSING_CREDENTIALS,
+            message=(
+                "Set GEMINI_API_KEY or GOOGLE_API_KEY, or configure Google Application "
+                "Default Credentials with a Vertex AI project."
+            ),
+            package=availability.package,
+            version=availability.version,
         )
 
     def validate_task(self, task: AgentTask) -> TaskSupportReport:
@@ -659,6 +704,12 @@ class _AntigravityAuthConfig:
         )
 
 
+@dataclass(frozen=True)
+class _GoogleADCProbe:
+    credentials_available: bool
+    project: str | None
+
+
 def _capability_policy(
     kind: AgentRuntimeKind, task: AgentTask, sdk: _AntigravitySDK
 ) -> tuple[Any, list[Any]]:
@@ -764,13 +815,28 @@ def _env_first(*names: str) -> str | None:
     return None
 
 
+def _probe_google_adc() -> _GoogleADCProbe:
+    google_auth = importlib.import_module("google.auth")
+    credentials, project = google_auth.default()
+    return _GoogleADCProbe(
+        credentials_available=credentials is not None,
+        project=str(project) if project else None,
+    )
+
+
 def _google_adc_project() -> str | None:
     try:
-        google_auth = importlib.import_module("google.auth")
-        _, project = google_auth.default()
+        probe = _probe_google_adc()
     except Exception:
         return None
-    return str(project) if project else None
+    return probe.project if probe.credentials_available else None
+
+
+def _is_missing_google_credentials(exc: Exception) -> bool:
+    return (
+        type(exc).__name__ == "DefaultCredentialsError"
+        and type(exc).__module__.startswith("google.auth")
+    )
 
 
 def _default_tools(task: AgentTask, builtin: Any) -> list[Any]:

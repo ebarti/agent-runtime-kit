@@ -16,10 +16,13 @@ from agent_runtime_kit._types import (
     AgentResult,
     AgentRuntimeKind,
     AgentTask,
+    AvailabilityReason,
     FilesystemAccess,
     PermissionMode,
     PermissionProfile,
+    ReadinessStatus,
     RuntimeAvailability,
+    RuntimeReadiness,
     TaskSupportReport,
     ToolCallAudit,
     Usage,
@@ -103,23 +106,43 @@ class ClaudeAgentRuntime:
         await self.aclose()
 
     def availability(self) -> RuntimeAvailability:
-        """Report Claude Agent SDK package availability."""
+        """Report Claude package presence without probing credentials."""
 
-        auth_metadata = _claude_auth_metadata(self._env)
         if self._query_func is not None or self._client_cls is not None:
-            return RuntimeAvailability.ok(
+            return RuntimeAvailability.ok(self.kind, package="claude-agent-sdk")
+        return package_availability(self.kind)
+
+    async def check_readiness(self) -> RuntimeReadiness:
+        """Inspect supported direct credential signals without starting Claude."""
+
+        availability = self.availability()
+        if not availability.available:
+            return RuntimeReadiness.from_availability(
+                availability,
+                status=ReadinessStatus.NOT_READY,
+            )
+        auth_metadata = _claude_auth_metadata(self._env)
+        if auth_metadata["auth_source"] in {
+            "anthropic-api-key",
+            "claude-code-oauth-token",
+        } or auth_metadata.get("bedrock_api_key_configured") is True:
+            return RuntimeReadiness.ready_to_attempt(
                 self.kind,
-                package="claude-agent-sdk",
+                message="A direct Claude credential signal is configured.",
+                package=availability.package,
+                version=availability.version,
                 metadata=auth_metadata,
             )
-        package = package_availability(self.kind)
-        if not package.available:
-            return package
-        return RuntimeAvailability.ok(
+        return RuntimeReadiness.indeterminate(
             self.kind,
-            package="claude-agent-sdk",
-            version=package.version,
-            metadata={**dict(package.metadata), **auth_metadata},
+            reason=AvailabilityReason.AVAILABLE,
+            message=(
+                "The Claude package is installed, but provider-chain or local-login "
+                "credentials cannot be verified without starting a task."
+            ),
+            package=availability.package,
+            version=availability.version,
+            metadata=auth_metadata,
         )
 
     def validate_task(self, task: AgentTask) -> TaskSupportReport:
@@ -757,6 +780,8 @@ def _claude_auth_metadata(runtime_env: Mapping[str, str] | None) -> dict[str, An
         return {"auth_source": "azure-ai-foundry"}
     if _env_first(env, "ANTHROPIC_API_KEY"):
         return {"auth_source": "anthropic-api-key"}
+    if _env_first(env, "CLAUDE_CODE_OAUTH_TOKEN"):
+        return {"auth_source": "claude-code-oauth-token"}
     return {"auth_source": "provider-owned-local"}
 
 

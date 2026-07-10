@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `COMPATIBILITY_MANIFEST` records each built-in adapter's install extra,
   import module, accepted SDK range, tested lockfile version, and runtime binary
   versions such as `openai-codex-cli-bin`.
+- `RuntimeReadiness`, `ReadinessStatus`, the optional
+  `RuntimeReadinessProvider`, and bounded async `check_readiness()` probes
+  distinguish `READY_TO_ATTEMPT`, `NOT_READY`, and `INDETERMINATE` without
+  running an agent task. Registry, `AgentKit`, and provider-diagnostics helpers
+  expose the same async checks.
 
 ### Changed
 
@@ -37,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tool-filter, and per-MCP-server environment support. Built-in `run()` methods
   consume the same support report used by preflight, eliminating divergent
   rejection paths.
+- `availability()` is now strictly package-only and side-effect-free. Credential
+  and setup checks moved to async readiness probes: Codex uses the supported
+  account API with guaranteed cleanup, and Antigravity runs Google ADC discovery
+  off the event loop. Probe failures/timeouts are secret-safe and indeterminate.
 
 ### Fixed
 

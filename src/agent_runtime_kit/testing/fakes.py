@@ -14,7 +14,9 @@ from agent_runtime_kit._types import (
     AgentRuntimeKind,
     AgentTask,
     AvailabilityReason,
+    ReadinessStatus,
     RuntimeAvailability,
+    RuntimeReadiness,
     TaskSupportReport,
     ToolCallAudit,
 )
@@ -148,6 +150,22 @@ class FakeSDKRuntime:
         """Report unsupported fields without invoking the scripted harness."""
 
         return _validate_declared_task_support(self.kind, self.capabilities, task)
+
+    async def check_readiness(self) -> RuntimeReadiness:
+        """Return deterministic readiness without invoking the fake harness."""
+
+        availability = self.availability()
+        if not availability.available:
+            return RuntimeReadiness.from_availability(
+                availability,
+                status=ReadinessStatus.NOT_READY,
+            )
+        return RuntimeReadiness.ready_to_attempt(
+            self.kind,
+            package=availability.package,
+            version=availability.version,
+            metadata=availability.metadata,
+        )
 
     async def run(self, task: AgentTask) -> AgentResult:
         """Invoke the fake SDK and emit normalized events."""

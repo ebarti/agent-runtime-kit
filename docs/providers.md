@@ -1,7 +1,8 @@
 # Provider Diagnostics
 
-`agent-runtime-kit` keeps provider setup checks explicit. Each runtime exposes
-`availability()` and returns a `RuntimeAvailability` value with:
+`agent-runtime-kit` separates cheap package discovery from provider setup
+probes. Each runtime's synchronous `availability()` is side-effect-free and
+package-only. It returns a `RuntimeAvailability` value with:
 
 - runtime kind
 - availability flag
@@ -9,6 +10,64 @@
 - message
 - package name
 - installed version when discoverable
+
+Availability never imports a vendor SDK, starts a subprocess, reads a
+credential store, calls Google ADC, or contacts a provider. Package presence is
+not a claim that execution will work.
+
+Use the public `await check_readiness(runtime, timeout=5.0)` for an explicit
+credential/setup probe. Registry and hub forms are also available:
+
+```python
+readiness = await registry.readiness_for("codex")
+readiness = await kit.readiness_for("codex")
+all_readiness = await kit.readiness()
+```
+
+`RuntimeReadiness.status` has three outcomes:
+
+- `READY_TO_ATTEMPT`: a supported setup or credential signal was positively
+  established. It does not promise that a later model/network request succeeds.
+- `NOT_READY`: a concrete problem such as a missing package, account, API key,
+  or ADC project was established.
+- `INDETERMINATE`: the runtime uses a provider/local credential chain that
+  cannot be verified safely, lacks the optional readiness extension, or the
+  bounded probe failed/timed out. The caller chooses whether to attempt work.
+
+The built-in probes never return credential values or raw exception messages.
+They report only safe categories such as auth source and exception type. The
+optional `RuntimeReadinessProvider` protocol does not change the required
+`AgentRuntime` protocol. For older third-party runtimes,
+`check_readiness()` maps negative availability to `NOT_READY` and positive
+package presence conservatively to `INDETERMINATE`.
+
+Provider behavior is deliberately specific:
+
+- Claude treats direct API key, OAuth-token, and Bedrock bearer-token signals
+  as `READY_TO_ATTEMPT`. Provider chains and provider-owned local login remain
+  `INDETERMINATE`; probing them would require starting a real task or scraping
+  unsupported credential stores.
+- Codex starts the supported `AsyncCodex` client, calls
+  `account(refresh_token=False)`, and always closes the app-server context. An
+  account is `READY_TO_ATTEMPT`, no account is `NOT_READY`, and startup/API/
+  cleanup failures are `INDETERMINATE`.
+- Antigravity accepts an explicit or ambient Gemini API key, otherwise probes
+  Google Application Default Credentials and project setup in a worker thread
+  so synchronous Google discovery cannot block the event loop. Missing setup
+  is `NOT_READY`; errors and timeouts are `INDETERMINATE`.
+
+For all built-ins at once, the existing sync collector stays package-only while
+the async collector performs bounded readiness checks:
+
+```python
+from agent_runtime_kit.adapters.diagnostics import (
+    collect_provider_diagnostics,
+    collect_provider_readiness,
+)
+
+packages = collect_provider_diagnostics()
+readiness = await collect_provider_readiness(timeout=5.0)
+```
 
 ## Install Model
 

@@ -25,9 +25,11 @@ from agent_runtime_kit._types import (
     PermissionMode,
     PermissionProfile,
     RuntimeAvailability,
+    RuntimeReadiness,
     SessionResumeState,
     TaskSupportReport,
 )
+from agent_runtime_kit.readiness import DEFAULT_READINESS_TIMEOUT, check_readiness
 from agent_runtime_kit.registry import RuntimeFactory, RuntimeRegistry, create_default_registry
 from agent_runtime_kit.support import validate_task as validate_runtime_task
 
@@ -64,8 +66,8 @@ class AgentKit:
 
     ``AgentKit()`` builds a registry with the fake runtime and the vendor
     adapters registered (adapters resolve their SDKs lazily, so this works
-    without any extra installed — ``availability_for`` reports what is
-    missing). Pass ``registry=`` to bring your own; the other flags then do
+    without any extra installed — ``availability_for`` reports missing
+    packages). Pass ``registry=`` to bring your own; the other flags then do
     not apply.
 
     Runtimes resolved through the hub are constructed zero-arg, cached per
@@ -101,12 +103,36 @@ class AgentKit:
         return self._registry.kinds()
 
     def availability(self) -> tuple[RuntimeAvailability, ...]:
-        """Availability diagnostics for every registered kind."""
+        """Side-effect-free package diagnostics for every registered kind."""
 
         return tuple(self._registry.availability_for(kind) for kind in self._registry.kinds())
 
     def availability_for(self, kind: AgentRuntimeKind | str) -> RuntimeAvailability:
         return self._registry.availability_for(self._normalize_kind(kind))
+
+    async def readiness(
+        self,
+        *,
+        timeout: float = DEFAULT_READINESS_TIMEOUT,
+    ) -> tuple[RuntimeReadiness, ...]:
+        """Probe every registered runtime concurrently."""
+
+        return tuple(
+            await asyncio.gather(
+                *(self.readiness_for(kind, timeout=timeout) for kind in self.kinds())
+            )
+        )
+
+    async def readiness_for(
+        self,
+        kind: AgentRuntimeKind | str,
+        *,
+        timeout: float = DEFAULT_READINESS_TIMEOUT,
+    ) -> RuntimeReadiness:
+        """Probe one cached runtime without executing an agent task."""
+
+        runtime = await self._runtime_for(self._normalize_kind(kind))
+        return await check_readiness(runtime, timeout=timeout)
 
     def capabilities_for(self, kind: AgentRuntimeKind | str) -> AgentCapabilities:
         return self._registry.capabilities_for(self._normalize_kind(kind))

@@ -122,5 +122,10 @@ runtime = ClaudeAgentRuntime(default_model="claude-sonnet-4-6", reuse_process=Tr
 result = await runtime.run(AgentTask(goal="Summarize this repository"))
 ```
 
-Use `kit.availability()` (or `runtime.availability()`) before dispatching work
-in applications that need clear setup diagnostics.
+Use synchronous `kit.availability()` (or `runtime.availability()`) for a
+side-effect-free package check. Use `await kit.readiness()` or
+`await check_readiness(runtime)` when an application also needs a bounded
+credential/setup probe. Treat `ReadinessStatus.READY_TO_ATTEMPT` as permission
+to try — not a guarantee that the provider, model, or network will accept the
+next request. `NOT_READY` is a confirmed setup problem; `INDETERMINATE` leaves
+the attempt policy to the caller.

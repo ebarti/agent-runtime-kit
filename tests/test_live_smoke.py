@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from agent_runtime_kit import AgentTask
+from agent_runtime_kit import AgentRuntime, AgentTask, ReadinessStatus, check_readiness
 from agent_runtime_kit.adapters import (
     AntigravityAgentRuntime,
     ClaudeAgentRuntime,
@@ -19,10 +19,10 @@ def _enabled(provider: str) -> bool:
     return selected in {provider, "all"}
 
 
-async def _run_smoke(runtime: object) -> None:
-    availability = runtime.availability()
-    if not availability.available:
-        pytest.skip(availability.message)
+async def _run_smoke(runtime: AgentRuntime) -> None:
+    readiness = await check_readiness(runtime)
+    if readiness.status is ReadinessStatus.NOT_READY:
+        pytest.skip(readiness.message)
     result = await runtime.run(AgentTask(goal="Reply with exactly: agent-runtime-kit smoke"))
     assert result.output
 

@@ -21,6 +21,7 @@ from agent_runtime_kit import (
     AgentRuntimeKind,
     AgentTask,
     RuntimeAvailability,
+    RuntimeReadinessProvider,
 )
 from agent_runtime_kit._types import AgentRuntime
 from agent_runtime_kit.adapters import (
@@ -74,6 +75,18 @@ def test_adapter_exposes_async_lifecycle(
     for name in ("run", "cancel", "aclose", "__aenter__", "__aexit__"):
         method = getattr(runtime, name)
         assert inspect.iscoroutinefunction(method), f"{kind.value}.{name} must be async"
+
+
+@pytest.mark.parametrize("kind,builder", BUILDERS, ids=lambda v: getattr(v, "value", ""))
+def test_adapter_exposes_optional_async_readiness_probe(
+    kind: AgentRuntimeKind, builder: Callable[[Path], AgentRuntime], tmp_path: Path
+) -> None:
+    runtime = builder(tmp_path)
+
+    assert isinstance(runtime, RuntimeReadinessProvider)
+    assert inspect.iscoroutinefunction(runtime.check_readiness), (
+        f"{kind.value}.check_readiness must be async"
+    )
 
 
 @pytest.mark.parametrize("kind,builder", BUILDERS, ids=lambda v: getattr(v, "value", ""))
