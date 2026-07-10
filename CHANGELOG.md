@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- BREAKING: built-in adapters no longer pin library-owned default model names.
+  Model selection now follows task field > legacy metadata > `default_model=`
+  constructor override > provider-native configuration. Provider-native calls
+  omit the model kwarg; results expose `model_source` and only report a model
+  value when known. Existing constructor overrides remain supported.
 - Pydantic structured-output parsing now requests strict validation, so values
   such as `"42"` no longer coerce into integer fields.
 - BREAKING: task and value-object constructors now reject blank identities,
@@ -62,6 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configured model allow-lists, Antigravity MCP name syntax, disjoint
   allow/deny lists, and Antigravity's legacy reasoning-effort alias are rejected
   during static preflight instead of surfacing later or being silently ignored.
+- A configured model allow-list now fails closed when model selection is
+  provider-native and therefore cannot be verified locally.
 
 ## 0.4.0 - 2026-07-02
 

@@ -35,13 +35,14 @@ from agent_runtime_kit.adapters._common import (
     empty_completion_error,
     filter_supported_kwargs,
     fingerprint_item,
-    metadata_str,
     model_support_issue,
     optional_int,
     optional_str,
     output_schema_from,
     package_availability,
     resolve_structured_output,
+    select_model,
+    validate_model_configuration,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -78,7 +79,7 @@ class AntigravityAgentRuntime:
     def __init__(
         self,
         *,
-        default_model: str = "gemini-3.5-flash",
+        default_model: str | None = None,
         supported_models: tuple[str, ...] | None = None,
         api_key: str | None = None,
         vertex: bool | None = None,
@@ -92,7 +93,9 @@ class AntigravityAgentRuntime:
         reuse_process: bool = False,
     ) -> None:
         self._default_model = default_model
-        self._supported_models = supported_models
+        self._supported_models = validate_model_configuration(
+            default_model, supported_models
+        )
         self._api_key = api_key
         self._vertex = vertex
         self._project = project
@@ -197,9 +200,9 @@ class AntigravityAgentRuntime:
 
         report = _validate_declared_task_support(self.kind, self.capabilities, task)
         issues = list(report.issues)
+        selection = select_model(task, self._default_model)
         model_issue = model_support_issue(
-            task=task,
-            model=self._model(task),
+            selection=selection,
             supported_models=self._supported_models,
         )
         if model_issue is not None:
@@ -229,7 +232,8 @@ class AntigravityAgentRuntime:
         await safe_emit(task, task_started_event(task, self.kind))
         try:
             require_task_support(self.validate_task(task))
-            model = self._model(task)
+            selection = select_model(task, self._default_model)
+            model = selection.value
             sdk = self._load_sdk()
             # Resolve auth off the event loop: ADC discovery can call
             # google.auth.default(), which reads files and may hit the GCE metadata
@@ -243,7 +247,12 @@ class AntigravityAgentRuntime:
                 )
             config, dropped = self._build_config(task, model=model, auth=auth, sdk=sdk)
             result = await self._invoke(
-                task, config=config, sdk=sdk, model=model, dropped_options=dropped
+                task,
+                config=config,
+                sdk=sdk,
+                model=model,
+                model_source=selection.source,
+                dropped_options=dropped,
             )
         except Exception as exc:
             await safe_emit(task, task_failed_event(task, self.kind, error=str(exc)))
@@ -307,7 +316,7 @@ class AntigravityAgentRuntime:
         self,
         task: AgentTask,
         *,
-        model: str,
+        model: str | None,
         auth: _AntigravityAuthConfig,
         sdk: _AntigravitySDK,
     ) -> tuple[Any, list[str]]:
@@ -321,7 +330,6 @@ class AntigravityAgentRuntime:
         capabilities, policies = _capability_policy(self.kind, task, sdk)
         schema = output_schema_from(task.output_schema, task.metadata)
         config_kwargs: dict[str, Any] = {
-            "model": model,
             "api_key": auth.api_key,
             "vertex": auth.vertex,
             "project": auth.project,
@@ -343,6 +351,8 @@ class AntigravityAgentRuntime:
                 for server in task.mcp_servers
             ],
         }
+        if model is not None:
+            config_kwargs["model"] = model
         # Tolerate vendor option drift like Claude/Codex: drop kwargs the installed
         # LocalAgentConfig no longer accepts (instead of a TypeError) and record
         # them — except the tool posture (and workspace scoping when requested),
@@ -361,7 +371,8 @@ class AntigravityAgentRuntime:
         *,
         config: Any,
         sdk: _AntigravitySDK,
-        model: str,
+        model: str | None,
+        model_source: str,
         dropped_options: list[str] | None = None,
     ) -> AgentResult:
         text_parts: list[str] = []
@@ -426,10 +437,12 @@ class AntigravityAgentRuntime:
             self._process_reuse_metadata(process_reused) if self._reuse_process else None
         )
         metadata: dict[str, Any] = {
-            "model": model,
+            "model_source": model_source,
             "sdk": "google_antigravity",
             **dict(process_metadata or {}),
         }
+        if model is not None:
+            metadata["model"] = model
         if dropped_options:
             metadata["dropped_options"] = list(dropped_options)
 
@@ -660,9 +673,6 @@ class AntigravityAgentRuntime:
         if self._vertex is False:
             return _AntigravityAuthConfig(source="none")
         return self._vertex_auth_config()
-
-    def _model(self, task: AgentTask) -> str:
-        return task.model or metadata_str(task.metadata, "model") or self._default_model
 
     def _runtime_dir(self, name: str) -> Path:
         base = self._data_dir or _default_data_dir()

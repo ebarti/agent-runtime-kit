@@ -141,6 +141,13 @@ a field (for example only Claude maps `budget_usd`; Codex and Antigravity reject
 it with a typed `UnsupportedTaskInputError`) the adapter raises rather than
 silently dropping it.
 
+Model selection follows one explicit precedence chain: `AgentTask.model`, then
+legacy `metadata["model"]`, then an adapter's `default_model=` constructor
+override, then the provider's native configuration/default. Adapters omit the
+vendor model option at the final step rather than pinning a library-owned model.
+Results record `metadata["model_source"]`; `metadata["model"]` appears only when
+the kit knows the selected value.
+
 Call `validate_task(runtime, task)` (or `kit.validate_task("codex", task)`) to
 inspect every statically detectable incompatibility before dispatch. The
 returned `TaskSupportReport` is side-effect-free and lists source fields such as

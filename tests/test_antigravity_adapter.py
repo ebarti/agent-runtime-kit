@@ -171,8 +171,10 @@ def make_runtime(
     project: str | None = None,
     location: str | None = None,
     reuse_process: bool = False,
+    default_model: str | None = None,
 ) -> AntigravityAgentRuntime:
     return AntigravityAgentRuntime(
+        default_model=default_model,
         api_key=api_key,
         vertex=vertex,
         project=project,
@@ -249,6 +251,47 @@ async def test_antigravity_usage_is_unknown_when_sdk_omits_metadata(tmp_path: Pa
     assert result.usage.input_tokens is None
     assert result.usage.output_tokens is None
     assert result.usage.total_tokens is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("default_model", "task", "expected_model", "expected_source"),
+    [
+        (None, AgentTask(goal="x"), None, "provider-native"),
+        ("constructor-model", AgentTask(goal="x"), "constructor-model", "constructor"),
+        (
+            "constructor-model",
+            AgentTask(goal="x", metadata={"model": "metadata-model"}),
+            "metadata-model",
+            "metadata",
+        ),
+        (
+            "constructor-model",
+            AgentTask(goal="x", model="task-model", metadata={"model": "metadata-model"}),
+            "task-model",
+            "task",
+        ),
+    ],
+)
+async def test_antigravity_model_selection_precedence_and_source(
+    tmp_path: Path,
+    default_model: str | None,
+    task: AgentTask,
+    expected_model: str | None,
+    expected_source: str,
+) -> None:
+    runtime = make_runtime(data_dir=tmp_path, default_model=default_model)
+
+    result = await runtime.run(task)
+
+    assert FakeAgent.last_config is not None
+    if expected_model is None:
+        assert "model" not in FakeAgent.last_config.kwargs
+        assert "model" not in result.metadata
+    else:
+        assert FakeAgent.last_config.kwargs["model"] == expected_model
+        assert result.metadata["model"] == expected_model
+    assert result.metadata["model_source"] == expected_source
 
 
 @pytest.mark.asyncio
@@ -346,7 +389,7 @@ async def test_antigravity_tolerates_config_option_drift(tmp_path: Path) -> None
         def __init__(
             self,
             *,
-            model: str,
+                model: str | None = None,
             api_key: str | None = None,
             capabilities: Any = None,
             policies: Any = None,
@@ -437,7 +480,7 @@ async def test_antigravity_fails_closed_when_sdk_drops_workspaces(tmp_path: Path
         def __init__(
             self,
             *,
-            model: str,
+                model: str | None = None,
             api_key: str | None = None,
             capabilities: Any = None,
             policies: Any = None,

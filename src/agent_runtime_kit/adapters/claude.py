@@ -41,6 +41,8 @@ from agent_runtime_kit.adapters._common import (
     output_schema_from,
     package_availability,
     resolve_structured_output,
+    select_model,
+    validate_model_configuration,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -77,7 +79,7 @@ class ClaudeAgentRuntime:
     def __init__(
         self,
         *,
-        default_model: str = "claude-sonnet-4-6",
+        default_model: str | None = None,
         supported_models: tuple[str, ...] | None = None,
         env: Mapping[str, str] | None = None,
         query_func: Any | None = None,
@@ -86,7 +88,9 @@ class ClaudeAgentRuntime:
         reuse_process: bool = False,
     ) -> None:
         self._default_model = default_model
-        self._supported_models = supported_models
+        self._supported_models = validate_model_configuration(
+            default_model, supported_models
+        )
         self._env = dict(env) if env is not None else None
         self._query_func = query_func
         self._options_cls = options_cls
@@ -149,9 +153,9 @@ class ClaudeAgentRuntime:
         """Report unsupported fields without loading the vendor SDK."""
 
         report = _validate_declared_task_support(self.kind, self.capabilities, task)
+        selection = select_model(task, self._default_model)
         issue = model_support_issue(
-            task=task,
-            model=self._model(task),
+            selection=selection,
             supported_models=self._supported_models,
         )
         return TaskSupportReport(
@@ -163,7 +167,8 @@ class ClaudeAgentRuntime:
         """Execute one task with Claude Agent SDK, streaming events as they arrive."""
 
         await safe_emit(task, task_started_event(task, self.kind))
-        model = self._model(task)
+        selection = select_model(task, self._default_model)
+        model = selection.value
         try:
             require_task_support(self.validate_task(task))
             query_func, options_cls, client_cls = self._load_sdk()
@@ -186,6 +191,7 @@ class ClaudeAgentRuntime:
                 task,
                 stream.messages,
                 model=model,
+                model_source=selection.source,
                 dropped_options=dropped,
                 tool_results=stream.tool_results,
                 tool_previews=stream.tool_previews,
@@ -348,15 +354,16 @@ class ClaudeAgentRuntime:
         }
 
     def _build_options(
-        self, task: AgentTask, model: str, options_cls: Any
+        self, task: AgentTask, model: str | None, options_cls: Any
     ) -> tuple[Any, list[str]]:
         metadata = task.metadata
         kwargs: dict[str, Any] = {
-            "model": model,
             "allowed_tools": list(task.permissions.allowed_tools),
             "disallowed_tools": list(task.permissions.disallowed_tools),
             "permission_mode": _effective_permission_mode(task.permissions),
         }
+        if model is not None:
+            kwargs["model"] = model
         if task.system:
             kwargs["system_prompt"] = task.system
         if self._env is not None:
@@ -404,10 +411,6 @@ class ClaudeAgentRuntime:
             options_cls, kwargs, required=required, kind=self.kind
         )
         return options_cls(**supported), dropped
-
-    def _model(self, task: AgentTask) -> str:
-        return task.model or metadata_str(task.metadata, "model") or self._default_model
-
 
 class _StreamState:
     """Incremental consumer that emits events as Claude messages arrive."""
@@ -492,7 +495,8 @@ def _translate_messages(
     task: AgentTask,
     messages: list[Any],
     *,
-    model: str,
+    model: str | None,
+    model_source: str,
     dropped_options: list[str],
     tool_results: Mapping[str, str],
     tool_previews: Mapping[str, str],
@@ -573,11 +577,13 @@ def _translate_messages(
     )
     tool_calls = _apply_tool_results(tool_calls, tool_use_ids, tool_results, tool_previews)
     metadata: dict[str, Any] = {
-        "model": model,
+        "model_source": model_source,
         "sdk": "claude_agent_sdk",
         "permission_mode": permission_mode,
         **dict(process_metadata or {}),
     }
+    if model is not None:
+        metadata["model"] = model
     if dropped_options:
         metadata["dropped_options"] = list(dropped_options)
     return AgentResult(

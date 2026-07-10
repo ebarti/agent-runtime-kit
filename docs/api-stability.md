@@ -57,6 +57,13 @@ import the names from the top-level package instead.
   without the extension maps a missing package to `NOT_READY` and present
   package to `INDETERMINATE`. `READY_TO_ATTEMPT` establishes only that known
   setup signals are present; it is not a guarantee of future execution.
+- **Providers own the default model.** With no task, legacy metadata, or
+  `default_model=` override, built-in adapters omit the SDK model option and let
+  the provider's supported configuration select it. The effective precedence is
+  task field, metadata alias, constructor override, provider-native. Result
+  metadata always records `model_source` and records `model` only when known.
+  A configured `supported_models` allow-list requires an explicit/verifiable
+  selection and fails closed on provider-native selection.
 - **`AgentKit` is sugar, not a second API.** The hub assembles the same frozen
   `AgentTask` and returns the same `AgentResult` the runtimes produce
   (`ParsedResult` is a runtime-identical subclass adding only the typed
