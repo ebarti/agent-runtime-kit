@@ -6,6 +6,7 @@ import inspect
 import os
 from collections.abc import Iterable, Mapping
 from importlib import metadata, util
+from math import isfinite
 from typing import Any
 
 from agent_runtime_kit._errors import UnsupportedTaskInputError
@@ -259,13 +260,27 @@ def field_value(value: Any, name: str, default: Any = None) -> Any:
     return getattr(value, name, default)
 
 
-def optional_int(value: Any) -> int:
-    """Coerce a vendor-reported value to ``int``, treating ``None``/junk as 0."""
+def optional_int(value: Any) -> int | None:
+    """Coerce a non-negative vendor count, preserving unknown as None."""
 
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, float):
+        if not isfinite(value) or not value.is_integer():
+            return None
+    if isinstance(value, str) and not value.strip():
+        return None
     try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not isinstance(value, (int, float, str)):
+        try:
+            if value != parsed:
+                return None
+        except Exception:
+            return None
+    return parsed if parsed >= 0 else None
 
 
 def optional_str(value: Any) -> str | None:

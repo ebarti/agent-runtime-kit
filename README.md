@@ -143,9 +143,11 @@ silently dropping it.
 
 `AgentResult` returns output, finish reason (see `FinishReason`), locally
 validated structured output, usage, cost, session id, tool-call audits, and
-provider metadata. `parsed_output_available` distinguishes an absent payload
-from valid JSON `null` (both use `parsed_output=None`). `artifacts` is a reserved
-field: no built-in runtime populates it yet, so it is always an empty tuple today.
+provider metadata. `is_success` is true only for a natural, error-free
+completion. Unknown usage and cost fields are `None`; reported zero remains
+distinct. `parsed_output_available` distinguishes an absent payload from valid
+JSON `null` (both use `parsed_output=None`). `artifacts` is a reserved field: no
+built-in runtime populates it yet, so it is always an empty tuple today.
 
 ## Docs
 

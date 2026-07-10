@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from math import isfinite
 from pathlib import Path
 from typing import Any, Generic, NoReturn, Protocol, TypeVar, cast, runtime_checkable
 from uuid import uuid4
@@ -79,6 +80,44 @@ def _coerce_enum(enum_cls: type[_EnumT], value: Any, field_name: str) -> _EnumT:
     except ValueError:
         valid = ", ".join(sorted(str(member.value) for member in enum_cls))
         raise ValueError(f"invalid {field_name} {value!r}; valid values: {valid}") from None
+
+
+def _require_nonblank(value: str, field_name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+
+
+def _require_unique_nonblank(values: tuple[str, ...], field_name: str) -> None:
+    for value in values:
+        _require_nonblank(value, field_name)
+    duplicates = sorted({value for value in values if values.count(value) > 1})
+    if duplicates:
+        raise ValueError(f"{field_name} contains duplicates: {duplicates}")
+
+
+def _tuple_value(value: Any, field_name: str) -> tuple[Any, ...]:
+    if isinstance(value, (str, bytes)):
+        raise ValueError(f"{field_name} must be a sequence, not a scalar string")
+    try:
+        return tuple(value)
+    except TypeError as exc:
+        raise ValueError(f"{field_name} must be an iterable") from exc
+
+
+def _validate_optional_count(value: int | None, field_name: str) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer or None")
+
+
+def _validate_optional_amount(value: float | None, field_name: str) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be a non-negative finite number or None")
+    if value < 0 or not isfinite(float(value)):
+        raise ValueError(f"{field_name} must be a non-negative finite number or None")
 
 
 class AgentRuntimeKind(str, Enum):
@@ -257,6 +296,17 @@ class McpServerConfig:
     env: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        _require_nonblank(self.name, "McpServerConfig.name")
+        _require_nonblank(self.command, "McpServerConfig.command")
+        object.__setattr__(self, "args", _tuple_value(self.args, "McpServerConfig.args"))
+        if not all(isinstance(arg, str) for arg in self.args):
+            raise ValueError("McpServerConfig.args must contain only strings")
+        if not isinstance(self.env, Mapping):
+            raise ValueError("McpServerConfig.env must be a mapping")
+        for key, value in self.env.items():
+            _require_nonblank(key, "McpServerConfig.env key")
+            if not isinstance(value, str):
+                raise ValueError("McpServerConfig.env values must be strings")
         object.__setattr__(self, "env", _freeze_mapping(self.env))
 
 
@@ -285,6 +335,25 @@ class PermissionProfile:
                 "filesystem",
                 _coerce_enum(FilesystemAccess, self.filesystem, "filesystem"),
             )
+        object.__setattr__(
+            self,
+            "allowed_tools",
+            _tuple_value(self.allowed_tools, "PermissionProfile.allowed_tools"),
+        )
+        object.__setattr__(
+            self,
+            "disallowed_tools",
+            _tuple_value(self.disallowed_tools, "PermissionProfile.disallowed_tools"),
+        )
+        _require_unique_nonblank(self.allowed_tools, "PermissionProfile.allowed_tools")
+        _require_unique_nonblank(self.disallowed_tools, "PermissionProfile.disallowed_tools")
+        overlap = sorted(set(self.allowed_tools) & set(self.disallowed_tools))
+        if overlap:
+            raise ValueError(
+                "PermissionProfile cannot both allow and disallow tools: " + ", ".join(overlap)
+            )
+        if self.network is not None and not isinstance(self.network, bool):
+            raise ValueError("PermissionProfile.network must be bool or None")
 
 
 @dataclass(frozen=True)
@@ -298,6 +367,14 @@ class ToolCallAudit:
     duration_ms: int = 0
 
     def __post_init__(self) -> None:
+        _require_nonblank(self.tool_name, "ToolCallAudit.tool_name")
+        _require_nonblank(self.status, "ToolCallAudit.status")
+        if (
+            isinstance(self.duration_ms, bool)
+            or not isinstance(self.duration_ms, int)
+            or self.duration_ms < 0
+        ):
+            raise ValueError("ToolCallAudit.duration_ms must be a non-negative integer")
         object.__setattr__(self, "arguments", _freeze_mapping(self.arguments))
 
 
@@ -310,6 +387,8 @@ class ArtifactRef:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        _require_nonblank(self.uri, "ArtifactRef.uri")
+        _require_nonblank(self.kind, "ArtifactRef.kind")
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
 
 
@@ -325,6 +404,14 @@ class SessionResumeState:
     session_id: str
     transcript: tuple[Any, ...] = ()
 
+    def __post_init__(self) -> None:
+        _require_nonblank(self.session_id, "SessionResumeState.session_id")
+        object.__setattr__(
+            self,
+            "transcript",
+            _tuple_value(self.transcript, "SessionResumeState.transcript"),
+        )
+
 
 @dataclass(frozen=True)
 class Usage:
@@ -332,18 +419,24 @@ class Usage:
 
     ``input_tokens`` counts prompt tokens excluding Anthropic-style cache reads and
     cache creation, which are reported separately in ``cache_read_tokens`` and
-    ``cache_creation_tokens``. ``total_tokens`` is the vendor-reported total when the
-    runtime provides one, and ``None`` when it does not (so "unknown" is
-    distinguishable from zero). ``cost_usd`` is ``0.0`` when the provider reports no
-    cost.
+    ``cache_creation_tokens``. Every field is ``None`` when unknown, so a reported
+    zero remains distinguishable from missing telemetry.
     """
 
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_tokens: int = 0
-    cache_creation_tokens: int = 0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
     total_tokens: int | None = None
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
+
+    def __post_init__(self) -> None:
+        _validate_optional_count(self.input_tokens, "Usage.input_tokens")
+        _validate_optional_count(self.output_tokens, "Usage.output_tokens")
+        _validate_optional_count(self.cache_read_tokens, "Usage.cache_read_tokens")
+        _validate_optional_count(self.cache_creation_tokens, "Usage.cache_creation_tokens")
+        _validate_optional_count(self.total_tokens, "Usage.total_tokens")
+        _validate_optional_amount(self.cost_usd, "Usage.cost_usd")
 
 
 @dataclass(frozen=True)
@@ -375,6 +468,30 @@ class AgentTask:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        _require_nonblank(self.goal, "AgentTask.goal")
+        _require_nonblank(self.task_id, "AgentTask.task_id")
+        if self.model is not None:
+            _require_nonblank(self.model, "AgentTask.model")
+        if self.reasoning_effort is not None:
+            _require_nonblank(self.reasoning_effort, "AgentTask.reasoning_effort")
+        if isinstance(self.sdk_executions, bool) or not isinstance(self.sdk_executions, int):
+            raise ValueError("AgentTask.sdk_executions must be a positive integer")
+        if self.sdk_executions < 1:
+            raise ValueError("AgentTask.sdk_executions must be a positive integer")
+        _validate_optional_amount(self.budget_usd, "AgentTask.budget_usd")
+        if self.session_id is not None:
+            _require_nonblank(self.session_id, "AgentTask.session_id")
+        if self.session_id is not None and self.resume_from is not None:
+            raise ValueError("AgentTask.session_id and resume_from are mutually exclusive")
+        object.__setattr__(
+            self,
+            "mcp_servers",
+            _tuple_value(self.mcp_servers, "AgentTask.mcp_servers"),
+        )
+        server_names = tuple(server.name for server in self.mcp_servers)
+        duplicates = sorted({name for name in server_names if server_names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"AgentTask.mcp_servers contains duplicate names: {duplicates}")
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
         if self.output_schema is not None:
             # Local import avoids an import cycle: _schema's typed errors import
@@ -405,15 +522,38 @@ class AgentResult:
     parsed_output_available: bool = False
 
     def __post_init__(self) -> None:
+        _require_nonblank(self.finish_reason, "AgentResult.finish_reason")
+        if self.error is not None:
+            _require_nonblank(self.error, "AgentResult.error")
+            if self.finish_reason == FinishReason.DONE:
+                raise ValueError("AgentResult.error requires a non-success finish_reason")
+        if isinstance(self.rounds, bool) or not isinstance(self.rounds, int) or self.rounds < 0:
+            raise ValueError("AgentResult.rounds must be a non-negative integer")
+        object.__setattr__(
+            self,
+            "tool_calls",
+            _tuple_value(self.tool_calls, "AgentResult.tool_calls"),
+        )
+        object.__setattr__(
+            self,
+            "artifacts",
+            _tuple_value(self.artifacts, "AgentResult.artifacts"),
+        )
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
         if self.parsed_output is not None and not self.parsed_output_available:
             object.__setattr__(self, "parsed_output_available", True)
 
     @property
-    def cost_usd(self) -> float:
+    def cost_usd(self) -> float | None:
         """Return the reported task cost in USD."""
 
         return self.usage.cost_usd
+
+    @property
+    def is_success(self) -> bool:
+        """Whether the runtime completed naturally without an error."""
+
+        return self.finish_reason == FinishReason.DONE and self.error is None
 
 
 _ParsedT = TypeVar("_ParsedT")

@@ -15,11 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   absent or rejected structured output.
 - All built-in adapters and public fake runtimes now validate returned values
   against `output_schema` locally, including textual JSON fallbacks.
+- `AgentResult.is_success` provides one canonical success predicate.
 
 ### Changed
 
 - Pydantic structured-output parsing now requests strict validation, so values
   such as `"42"` no longer coerce into integer fields.
+- BREAKING: task and value-object constructors now reject blank identities,
+  non-positive execution hints, invalid budgets, ambiguous session inputs,
+  duplicate MCP names, and conflicting tool filters.
+- BREAKING: unknown `Usage` values, including cost, are `None` rather than zero;
+  an explicit provider-reported zero remains `0`/`0.0`.
 
 ### Fixed
 

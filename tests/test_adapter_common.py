@@ -10,7 +10,11 @@ from agent_runtime_kit import (
     OutputSchemaError,
     UnsupportedTaskInputError,
 )
-from agent_runtime_kit.adapters._common import filter_supported_kwargs, output_schema_from
+from agent_runtime_kit.adapters._common import (
+    filter_supported_kwargs,
+    optional_int,
+    output_schema_from,
+)
 
 
 def test_filter_supported_kwargs_rejects_required_key_hidden_by_var_kwargs() -> None:
@@ -125,3 +129,22 @@ def test_output_schema_from_validates_legacy_aliases_and_nested_mutation() -> No
 
     with pytest.raises(OutputSchemaError, match="invalid output_schema"):
         output_schema_from(task.output_schema, task.metadata)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0, 0),
+        (1.0, 1),
+        ("2", 2),
+        (1.9, None),
+        (float("inf"), None),
+        (-1, None),
+        (True, None),
+        ("not-a-number", None),
+    ],
+)
+def test_optional_int_never_truncates_or_invents_vendor_counts(
+    value: object, expected: int | None
+) -> None:
+    assert optional_int(value) == expected

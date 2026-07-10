@@ -33,6 +33,13 @@ import the names from the top-level package instead.
   convention and compare by value. The wrappers remain plain `dict` subclasses,
   so `dataclasses.asdict`, `pickle`, `copy.deepcopy`, and JSON serialization
   keep working.
+- **Constructors enforce domain invariants.** Goals and identifiers are
+  non-blank; execution hints are positive; counts and monetary values are
+  finite and non-negative; session start and resume inputs are mutually
+  exclusive; MCP server names and tool filters are unambiguous.
+- **Unknown telemetry is not zero.** Every `Usage` field is nullable. `None`
+  means the provider did not report a value; `0` and `0.0` mean it explicitly
+  reported zero.
 - **Unsupported inputs raise, they are not dropped.** An adapter that cannot honor
   a task field raises `UnsupportedTaskInputError`; the one exception is
   vendor-option drift, which is recorded in

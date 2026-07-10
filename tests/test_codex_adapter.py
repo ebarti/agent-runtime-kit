@@ -180,7 +180,13 @@ async def test_codex_rejects_structured_output_that_misses_schema() -> None:
         {
             "status": "completed",
             "final_response": '{"ok": "bad"}',
-            "usage": {"total": {"input_tokens": 4, "output_tokens": 2}},
+            "usage": {
+                "total": {
+                    "input_tokens": 4,
+                    "output_tokens": 2,
+                    "cached_input_tokens": 0,
+                }
+            },
         }
     )
     schema = {
@@ -705,7 +711,12 @@ async def test_codex_usage_prefers_per_turn_over_cumulative() -> None:
         "final_response": "ok",
         "usage": {
             "total": {"input_tokens": 1000, "output_tokens": 2000, "total_tokens": 3000},
-            "last": {"input_tokens": 4, "output_tokens": 6, "total_tokens": 10},
+            "last": {
+                "input_tokens": 4,
+                "output_tokens": 6,
+                "cached_input_tokens": 0,
+                "total_tokens": 10,
+            },
         },
     }
     runtime = make_runtime(run_result)
@@ -715,6 +726,56 @@ async def test_codex_usage_prefers_per_turn_over_cumulative() -> None:
     assert result.usage.input_tokens == 4
     assert result.usage.output_tokens == 6
     assert result.usage.total_tokens == 10
+
+
+@pytest.mark.asyncio
+async def test_codex_usage_is_unknown_when_sdk_omits_breakdown() -> None:
+    runtime = make_runtime({"status": "completed", "final_response": "ok"})
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.usage.input_tokens is None
+    assert result.usage.output_tokens is None
+    assert result.usage.total_tokens is None
+    assert result.usage.cost_usd is None
+
+
+@pytest.mark.asyncio
+async def test_codex_partial_usage_preserves_unknown_cache_and_normalized_input() -> None:
+    partial_runtime = make_runtime(
+        {
+            "status": "completed",
+            "final_response": "ok",
+            "usage": {"total": {"input_tokens": 4, "output_tokens": 2}},
+        }
+    )
+    partial = await partial_runtime.run(AgentTask(goal="x"))
+
+    assert partial.usage.input_tokens is None
+    assert partial.usage.cache_read_tokens is None
+    assert partial.usage.output_tokens == 2
+    assert partial.usage.total_tokens == 6
+
+    zero_runtime = make_runtime(
+        {
+            "status": "completed",
+            "final_response": "ok",
+            "usage": {
+                "total": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cached_input_tokens": 0,
+                    "total_tokens": 0,
+                }
+            },
+        }
+    )
+    zero = await zero_runtime.run(AgentTask(goal="x"))
+
+    assert zero.usage.input_tokens == 0
+    assert zero.usage.output_tokens == 0
+    assert zero.usage.cache_read_tokens == 0
+    assert zero.usage.total_tokens == 0
 
 
 @pytest.mark.asyncio
