@@ -31,8 +31,8 @@ All three adapters map the task's system prompt (Claude `system_prompt`, Codex
 field (falling back to the `metadata` aliases of the same names).
 `reasoning_effort` maps to the Claude and Codex `effort` options; Antigravity
 has no reasoning-effort control and rejects the first-class field with a typed
-error (its legacy `metadata["reasoning_effort"]` alias stays ignored, as it
-always has been). Effort values are passed through to the vendor SDK rather
+error. Its legacy `metadata["reasoning_effort"]` alias is rejected too, rather
+than being silently ignored. Effort values are passed through to the vendor SDK rather
 than validated by this library — each vendor defines its own accepted
 vocabulary (for example `claude-agent-sdk` 0.2.x accepts
 `low`/`medium`/`high`/`xhigh`/`max`), and an SDK too old to accept `effort` at
@@ -41,6 +41,12 @@ all records the drop in `AgentResult.metadata["dropped_options"]`.
 Usage fields are `None` when a provider omits its usage breakdown or cost.
 Provider-reported zeros remain numeric zero, so callers can distinguish a free
 or zero-token run from missing telemetry.
+
+Every built-in adapter exposes a pure `validate_task()` extension. The public
+`validate_task(runtime, task)`, registry, and `AgentKit` helpers call that richer
+validator when present and otherwise fall back to declared capabilities for
+older third-party runtimes. A report is a static preflight, not an availability
+or credential probe; installed-SDK drift can still make dispatch fail closed.
 
 Claude uses the `claude-agent-sdk` package and maps working directory,
 permissions, filesystem access (a `READ_ONLY` filesystem forces `plan` mode),

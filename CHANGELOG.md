@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All built-in adapters and public fake runtimes now validate returned values
   against `output_schema` locally, including textual JSON fallbacks.
 - `AgentResult.is_success` provides one canonical success predicate.
+- `TaskSupportReport`, `TaskSupportProvider`, and `validate_task()` provide
+  side-effect-free task preflight without adding a requirement to the
+  `AgentRuntime` protocol. Registry and `AgentKit` helpers preserve custom
+  runtime validation and capability-based fallback for older runtimes.
+- `COMPATIBILITY_MANIFEST` records each built-in adapter's install extra,
+  import module, accepted SDK range, tested lockfile version, and runtime binary
+  versions such as `openai-codex-cli-bin`.
 
 ### Changed
 
@@ -26,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   duplicate MCP names, and conflicting tool filters.
 - BREAKING: unknown `Usage` values, including cost, are `None` rather than zero;
   an explicit provider-reported zero remains `0`/`0.0`.
+- Capability declarations now distinguish budget, reasoning-effort, network,
+  tool-filter, and per-MCP-server environment support. Built-in `run()` methods
+  consume the same support report used by preflight, eliminating divergent
+  rejection paths.
 
 ### Fixed
 
@@ -39,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Permission- and budget-critical vendor options must now be explicit,
   introspectable SDK parameters; opaque `**kwargs`, positional-only options,
   and uninspectable callables fail closed.
+- Configured model allow-lists, Antigravity MCP name syntax, disjoint
+  allow/deny lists, and Antigravity's legacy reasoning-effort alias are rejected
+  during static preflight instead of surfacing later or being silently ignored.
 
 ## 0.4.0 - 2026-07-02
 

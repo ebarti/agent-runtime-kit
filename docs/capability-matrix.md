@@ -20,6 +20,13 @@ The matrix is intentionally not a lowest-common-denominator contract. Adapters
 reject unsupported inputs (see below) when silently dropping them would be
 misleading.
 
+The public `AgentCapabilities` value also advertises the granular task controls
+used by preflight: `budget`, `reasoning_effort`, `network_control`,
+`tool_filters`, and `mcp_server_env`. Use `validate_task(runtime, task)` when a
+concrete task is available; unlike a raw capability flag, its
+`TaskSupportReport` preserves instance-specific rules such as a configured model
+allow-list and reports all detectable issues at once.
+
 For every provider, malformed schemas are rejected locally before dispatch and
 returned structured values are validated locally after the SDK completes.
 `parsed_output_available` distinguishes valid JSON `null` from no parsed value.
@@ -62,6 +69,13 @@ tool, uses the SDK's `disabled_tools` route).
 
 Each adapter raises `UnsupportedTaskInputError` for task fields it has no SDK
 surface to honor, rather than dropping them silently.
+
+The same fields can be checked before dispatch through `validate_task`,
+`RuntimeRegistry.validate_task_for`, or `AgentKit.validate_task`. Built-in
+adapters additionally preflight configured model allow-lists. Antigravity also
+checks its MCP server-name syntax and the SDK's prohibition on combining an
+allow-list with a deny-list. SDK-version-dependent Antigravity tool vocabulary
+is still validated at dispatch, after the installed SDK supplies its enum.
 
 | Field | Claude | Codex | Antigravity |
 |-------|--------|-------|-------------|

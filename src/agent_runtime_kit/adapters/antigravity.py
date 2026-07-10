@@ -7,6 +7,7 @@ import enum
 import importlib
 import logging
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,21 +23,22 @@ from agent_runtime_kit._types import (
     FilesystemAccess,
     PermissionMode,
     RuntimeAvailability,
+    TaskSupportIssue,
+    TaskSupportReport,
     ToolCallAudit,
     Usage,
 )
 from agent_runtime_kit.adapters._common import (
     close_vendor_resource,
     empty_completion_error,
-    ensure_supported_model,
     filter_supported_kwargs,
     fingerprint_item,
     metadata_str,
+    model_support_issue,
     optional_int,
     optional_str,
     output_schema_from,
     package_availability,
-    reject_unsupported_inputs,
     resolve_structured_output,
 )
 from agent_runtime_kit.events import (
@@ -49,8 +51,11 @@ from agent_runtime_kit.events import (
     tool_requested_event,
     vendor_turn_event,
 )
+from agent_runtime_kit.support import _validate_declared_task_support, require_task_support
 
 logger = logging.getLogger(__name__)
+
+_MCP_SERVER_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 class AntigravityAgentRuntime:
@@ -65,6 +70,7 @@ class AntigravityAgentRuntime:
         streaming=True,
         tool_audit=True,
         cancellation=False,
+        tool_filters=True,
     )
 
     def __init__(
@@ -119,11 +125,7 @@ class AntigravityAgentRuntime:
 
         if self._agent_cls is not None:
             return RuntimeAvailability.ok(self.kind, package="google-antigravity")
-        package = package_availability(
-            self.kind,
-            module_name="google.antigravity",
-            package_name="google-antigravity",
-        )
+        package = package_availability(self.kind)
         if not package.available:
             return package
         auth = self._auth_config()
@@ -145,31 +147,44 @@ class AntigravityAgentRuntime:
             metadata={**dict(package.metadata), "auth_source": auth.source},
         )
 
+    def validate_task(self, task: AgentTask) -> TaskSupportReport:
+        """Report unsupported fields without loading auth or the vendor SDK."""
+
+        report = _validate_declared_task_support(self.kind, self.capabilities, task)
+        issues = list(report.issues)
+        model_issue = model_support_issue(
+            task=task,
+            model=self._model(task),
+            supported_models=self._supported_models,
+        )
+        if model_issue is not None:
+            issues.append(model_issue)
+        if task.permissions.allowed_tools and task.permissions.disallowed_tools:
+            issues.append(
+                TaskSupportIssue(
+                    "permissions.allowed_tools",
+                    "Antigravity cannot combine an allow-list with a deny-list; "
+                    "set only one of allowed_tools or disallowed_tools",
+                )
+            )
+        for server in task.mcp_servers:
+            if _MCP_SERVER_NAME_PATTERN.fullmatch(server.name) is None:
+                issues.append(
+                    TaskSupportIssue(
+                        "mcp_servers.name",
+                        f"Antigravity MCP server name {server.name!r} must contain only "
+                        "letters, digits, hyphens, or underscores",
+                    )
+                )
+        return TaskSupportReport(kind=self.kind, issues=tuple(issues))
+
     async def run(self, task: AgentTask) -> AgentResult:
         """Execute one task with Antigravity."""
 
         await safe_emit(task, task_started_event(task, self.kind))
         try:
-            reject_unsupported_inputs(
-                self.kind, task, budget=True, network=True, tool_filters=False
-            )
-            if task.reasoning_effort:
-                # LocalAgentConfig exposes no reasoning/thinking-effort control
-                # (google-antigravity 0.1.x), so the first-class field must not
-                # silently no-op. The legacy metadata alias stays ignored, as it
-                # always has been for this adapter.
-                raise UnsupportedTaskInputError(
-                    self.kind,
-                    "reasoning_effort",
-                    "google-antigravity exposes no reasoning-effort control; "
-                    "unset reasoning_effort for this runtime",
-                )
+            require_task_support(self.validate_task(task))
             model = self._model(task)
-            ensure_supported_model(
-                kind=self.kind,
-                model=model,
-                supported_models=self._supported_models,
-            )
             sdk = self._load_sdk()
             # Resolve auth off the event loop: ADC discovery can call
             # google.auth.default(), which reads files and may hit the GCE metadata

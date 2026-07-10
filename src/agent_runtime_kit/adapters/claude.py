@@ -20,6 +20,7 @@ from agent_runtime_kit._types import (
     PermissionMode,
     PermissionProfile,
     RuntimeAvailability,
+    TaskSupportReport,
     ToolCallAudit,
     Usage,
 )
@@ -27,16 +28,15 @@ from agent_runtime_kit.adapters._common import (
     STRUCTURED_OUTPUT_MISSING,
     close_vendor_resource,
     empty_completion_error,
-    ensure_supported_model,
     field_value,
     filter_supported_kwargs,
     fingerprint_value,
     metadata_str,
+    model_support_issue,
     optional_int,
     optional_str,
     output_schema_from,
     package_availability,
-    reject_unsupported_inputs,
     resolve_structured_output,
 )
 from agent_runtime_kit.events import (
@@ -48,6 +48,7 @@ from agent_runtime_kit.events import (
     tool_completed_event,
     tool_requested_event,
 )
+from agent_runtime_kit.support import _validate_declared_task_support, require_task_support
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,10 @@ class ClaudeAgentRuntime:
         streaming=True,
         tool_audit=True,
         cancellation=False,
+        budget=True,
+        reasoning_effort=True,
+        tool_filters=True,
+        mcp_server_env=True,
     )
 
     def __init__(
@@ -107,11 +112,7 @@ class ClaudeAgentRuntime:
                 package="claude-agent-sdk",
                 metadata=auth_metadata,
             )
-        package = package_availability(
-            self.kind,
-            module_name="claude_agent_sdk",
-            package_name="claude-agent-sdk",
-        )
+        package = package_availability(self.kind)
         if not package.available:
             return package
         return RuntimeAvailability.ok(
@@ -121,20 +122,27 @@ class ClaudeAgentRuntime:
             metadata={**dict(package.metadata), **auth_metadata},
         )
 
+    def validate_task(self, task: AgentTask) -> TaskSupportReport:
+        """Report unsupported fields without loading the vendor SDK."""
+
+        report = _validate_declared_task_support(self.kind, self.capabilities, task)
+        issue = model_support_issue(
+            task=task,
+            model=self._model(task),
+            supported_models=self._supported_models,
+        )
+        return TaskSupportReport(
+            kind=self.kind,
+            issues=report.issues + ((issue,) if issue is not None else ()),
+        )
+
     async def run(self, task: AgentTask) -> AgentResult:
         """Execute one task with Claude Agent SDK, streaming events as they arrive."""
 
         await safe_emit(task, task_started_event(task, self.kind))
         model = self._model(task)
         try:
-            reject_unsupported_inputs(
-                self.kind, task, budget=False, network=True, tool_filters=False
-            )
-            ensure_supported_model(
-                kind=self.kind,
-                model=model,
-                supported_models=self._supported_models,
-            )
+            require_task_support(self.validate_task(task))
             query_func, options_cls, client_cls = self._load_sdk()
             options, dropped = self._build_options(task, model, options_cls)
             stream = _StreamState(self, task)

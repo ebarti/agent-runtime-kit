@@ -8,7 +8,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-from agent_runtime_kit._errors import AgentRuntimeUnavailableError, UnsupportedTaskInputError
+from agent_runtime_kit._errors import AgentRuntimeUnavailableError
 from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentResult,
@@ -17,20 +17,20 @@ from agent_runtime_kit._types import (
     FilesystemAccess,
     PermissionMode,
     RuntimeAvailability,
+    TaskSupportReport,
     ToolCallAudit,
     Usage,
 )
 from agent_runtime_kit.adapters._common import (
     close_vendor_resource,
     empty_completion_error,
-    ensure_supported_model,
     field_value,
     filter_supported_kwargs,
     metadata_str,
+    model_support_issue,
     optional_int,
     output_schema_from,
     package_availability,
-    reject_unsupported_inputs,
     resolve_structured_output,
 )
 from agent_runtime_kit.events import (
@@ -42,6 +42,7 @@ from agent_runtime_kit.events import (
     tool_completed_event,
     tool_requested_event,
 )
+from agent_runtime_kit.support import _validate_declared_task_support, require_task_support
 
 # Vendor ``ThreadItem`` discriminator values that carry a tool/command invocation.
 _COMMAND_ITEM = "commandExecution"
@@ -69,6 +70,7 @@ class CodexAgentRuntime:
         streaming=False,
         tool_audit=True,
         cancellation=False,
+        reasoning_effort=True,
     )
 
     def __init__(
@@ -119,11 +121,7 @@ class CodexAgentRuntime:
                 package="openai-codex",
                 metadata=auth_metadata,
             )
-        package = package_availability(
-            self.kind,
-            module_name="openai_codex",
-            package_name="openai-codex",
-        )
+        package = package_availability(self.kind)
         if not package.available:
             return package
         return RuntimeAvailability.ok(
@@ -133,24 +131,27 @@ class CodexAgentRuntime:
             metadata={**dict(package.metadata), **auth_metadata},
         )
 
+    def validate_task(self, task: AgentTask) -> TaskSupportReport:
+        """Report unsupported fields without loading the vendor SDK."""
+
+        report = _validate_declared_task_support(self.kind, self.capabilities, task)
+        issue = model_support_issue(
+            task=task,
+            model=self._model(task),
+            supported_models=self._supported_models,
+        )
+        return TaskSupportReport(
+            kind=self.kind,
+            issues=report.issues + ((issue,) if issue is not None else ()),
+        )
+
     async def run(self, task: AgentTask) -> AgentResult:
         """Execute one task with the Codex SDK."""
 
         await safe_emit(task, task_started_event(task, self.kind))
         try:
-            if task.mcp_servers:
-                raise UnsupportedTaskInputError(
-                    self.kind,
-                    "mcp_servers",
-                    "openai_codex does not expose per-task MCP server configuration",
-                )
-            reject_unsupported_inputs(self.kind, task, budget=True, network=True, tool_filters=True)
+            require_task_support(self.validate_task(task))
             model = self._model(task)
-            ensure_supported_model(
-                kind=self.kind,
-                model=model,
-                supported_models=self._supported_models,
-            )
             codex_cls, config_cls, sandbox_cls, approval_mode_cls = self._load_sdk()
             result = await self._run_codex(
                 task,

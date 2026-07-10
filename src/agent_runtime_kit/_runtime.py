@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from agent_runtime_kit._errors import UnsupportedTaskInputError
 from agent_runtime_kit._schema import resolve_structured_output
 from agent_runtime_kit._types import (
     AgentCapabilities,
@@ -13,6 +12,7 @@ from agent_runtime_kit._types import (
     AgentRuntimeKind,
     AgentTask,
     RuntimeAvailability,
+    TaskSupportReport,
     ToolCallAudit,
 )
 from agent_runtime_kit.events import (
@@ -25,6 +25,7 @@ from agent_runtime_kit.events import (
     tool_requested_event,
     vendor_turn_event,
 )
+from agent_runtime_kit.support import _validate_declared_task_support, require_task_support
 
 
 class FakeAgentRuntime:
@@ -47,6 +48,7 @@ class FakeAgentRuntime:
             streaming=False,
             tool_audit=True,
             cancellation=True,
+            mcp_server_env=True,
         )
         self._output = output
         self._metadata = dict(metadata or {})
@@ -57,12 +59,17 @@ class FakeAgentRuntime:
 
         return RuntimeAvailability.ok(self.kind, package="agent-runtime-kit")
 
+    def validate_task(self, task: AgentTask) -> TaskSupportReport:
+        """Report unsupported fields without side effects."""
+
+        return _validate_declared_task_support(self.kind, self.capabilities, task)
+
     async def run(self, task: AgentTask) -> AgentResult:
         """Return a deterministic result after validating capabilities."""
 
         await safe_emit(task, task_started_event(task, self.kind))
         try:
-            _ensure_supported(self.kind, self.capabilities, task)
+            require_task_support(self.validate_task(task))
             output = self._output if self._output is not None else f"Fake result for: {task.goal}"
             parsed = {"output": output} if task.output_schema is not None else None
             parsed_available = parsed is not None
@@ -139,30 +146,3 @@ class FakeAgentRuntime:
 
     async def __aexit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
         await self.aclose()
-
-
-def _ensure_supported(
-    kind: AgentRuntimeKind,
-    capabilities: AgentCapabilities,
-    task: AgentTask,
-) -> None:
-    if task.mcp_servers and not capabilities.mcp_support:
-        raise UnsupportedTaskInputError(kind, "mcp_servers", "runtime does not support MCP")
-    if task.working_directory is not None and not capabilities.working_directory:
-        raise UnsupportedTaskInputError(
-            kind,
-            "working_directory",
-            "runtime does not support per-task working directories",
-        )
-    if (task.session_id or task.resume_from) and not capabilities.session_resume:
-        raise UnsupportedTaskInputError(
-            kind,
-            "session_id",
-            "runtime does not support session resume",
-        )
-    if task.output_schema is not None and not capabilities.structured_output:
-        raise UnsupportedTaskInputError(
-            kind,
-            "output_schema",
-            "runtime does not support structured output",
-        )

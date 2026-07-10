@@ -15,6 +15,7 @@ from agent_runtime_kit._types import (
     AgentTask,
     AvailabilityReason,
     RuntimeAvailability,
+    TaskSupportReport,
     ToolCallAudit,
 )
 from agent_runtime_kit.events import (
@@ -27,6 +28,7 @@ from agent_runtime_kit.events import (
     tool_requested_event,
     vendor_turn_event,
 )
+from agent_runtime_kit.support import _validate_declared_task_support, require_task_support
 
 
 @dataclass(frozen=True)
@@ -142,11 +144,17 @@ class FakeSDKRuntime:
             )
         return RuntimeAvailability.ok(self.kind, package="fake-sdk", version="0.0.0")
 
+    def validate_task(self, task: AgentTask) -> TaskSupportReport:
+        """Report unsupported fields without invoking the scripted harness."""
+
+        return _validate_declared_task_support(self.kind, self.capabilities, task)
+
     async def run(self, task: AgentTask) -> AgentResult:
         """Invoke the fake SDK and emit normalized events."""
 
         await safe_emit(task, task_started_event(task, self.kind))
         try:
+            require_task_support(self.validate_task(task))
             result = await self.harness.invoke(task)
         except Exception as exc:
             await safe_emit(task, task_failed_event(task, self.kind, error=str(exc)))
