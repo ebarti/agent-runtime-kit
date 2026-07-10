@@ -50,7 +50,15 @@ class FakeThread:
         self._run_result = run_result
         self._run_error = run_error
 
-    async def run(self, prompt: str, **kwargs: Any) -> Any:
+    async def run(
+        self,
+        prompt: str,
+        *,
+        approval_mode: Any = None,
+        sandbox: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        kwargs.update(approval_mode=approval_mode, sandbox=sandbox)
         FakeThread.last_run_kwargs = kwargs
         if self._run_error is not None:
             raise self._run_error
@@ -97,11 +105,22 @@ class FakeCodex:
     async def __aexit__(self, *args: object) -> None:
         self.closed = True
 
-    async def thread_start(self, **kwargs: Any) -> FakeThread:
+    async def thread_start(
+        self, *, approval_mode: Any = None, sandbox: Any = None, **kwargs: Any
+    ) -> FakeThread:
+        kwargs.update(approval_mode=approval_mode, sandbox=sandbox)
         FakeCodex.last_started_kwargs = kwargs
         return FakeThread("thread-new", self._run_result, self._run_error)
 
-    async def thread_resume(self, thread_id: str, **kwargs: Any) -> FakeThread:
+    async def thread_resume(
+        self,
+        thread_id: str,
+        *,
+        approval_mode: Any = None,
+        sandbox: Any = None,
+        **kwargs: Any,
+    ) -> FakeThread:
+        kwargs.update(approval_mode=approval_mode, sandbox=sandbox)
         FakeCodex.last_started_kwargs = kwargs
         return FakeThread(thread_id, self._run_result, self._run_error)
 
@@ -306,16 +325,35 @@ async def test_codex_queued_run_cancel_does_not_evict_in_flight_client() -> None
     release = asyncio.Event()
 
     class BlockingThread(FakeThread):
-        async def run(self, prompt: str, **kwargs: Any) -> Any:
+        async def run(
+            self,
+            prompt: str,
+            *,
+            approval_mode: Any = None,
+            sandbox: Any = None,
+            **kwargs: Any,
+        ) -> Any:
+            del approval_mode, sandbox, kwargs
             entered.set()
             await release.wait()
             return {"status": "completed", "final_response": f"done: {prompt}"}
 
     class BlockingCodex(FakeCodex):
-        async def thread_start(self, **kwargs: Any) -> FakeThread:
+        async def thread_start(
+            self, *, approval_mode: Any = None, sandbox: Any = None, **kwargs: Any
+        ) -> FakeThread:
+            del approval_mode, sandbox, kwargs
             return BlockingThread("thread-new")
 
-        async def thread_resume(self, thread_id: str, **kwargs: Any) -> FakeThread:
+        async def thread_resume(
+            self,
+            thread_id: str,
+            *,
+            approval_mode: Any = None,
+            sandbox: Any = None,
+            **kwargs: Any,
+        ) -> FakeThread:
+            del approval_mode, sandbox, kwargs
             return BlockingThread(thread_id)
 
     def codex_factory(*, config: FakeCodexConfig) -> FakeCodex:
@@ -535,7 +573,10 @@ class RestrictedRunThread:
 
 
 class RestrictedRunCodex(FakeCodex):
-    async def thread_start(self, **kwargs: Any) -> Any:
+    async def thread_start(
+        self, *, approval_mode: Any = None, sandbox: Any = None, **kwargs: Any
+    ) -> Any:
+        kwargs.update(approval_mode=approval_mode, sandbox=sandbox)
         FakeCodex.last_started_kwargs = kwargs
         return RestrictedRunThread()
 
@@ -650,8 +691,16 @@ async def test_codex_session_id_falls_back_to_task_when_sdk_omits_it() -> None:
         codex = FakeCodex(config, run_result)
         original_resume = codex.thread_resume
 
-        async def resume_without_id(thread_id: str, **kwargs: Any) -> FakeThread:
-            thread = await original_resume(thread_id, **kwargs)
+        async def resume_without_id(
+            thread_id: str,
+            *,
+            approval_mode: Any = None,
+            sandbox: Any = None,
+            **kwargs: Any,
+        ) -> FakeThread:
+            thread = await original_resume(
+                thread_id, approval_mode=approval_mode, sandbox=sandbox, **kwargs
+            )
             thread.id = ""
             return thread
 

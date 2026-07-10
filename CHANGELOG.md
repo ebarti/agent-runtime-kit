@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports failure, so the typed result surface never exposes unvalidated data.
 - `AgentKit.aclose()` attempts to close every cached runtime before reraising
   the first close error, preventing later resources from leaking.
+- Permission- and budget-critical vendor options must now be explicit,
+  introspectable SDK parameters; opaque `**kwargs`, positional-only options,
+  and uninspectable callables fail closed.
 
 ## 0.4.0 - 2026-07-02
 

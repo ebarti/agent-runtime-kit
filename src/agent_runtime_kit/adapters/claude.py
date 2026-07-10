@@ -9,7 +9,7 @@ import os
 from collections.abc import AsyncIterator, Iterable, Mapping
 from typing import Any
 
-from agent_runtime_kit._errors import AgentRuntimeUnavailableError, UnsupportedTaskInputError
+from agent_runtime_kit._errors import AgentRuntimeUnavailableError
 from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentResult,
@@ -360,24 +360,16 @@ class ClaudeAgentRuntime:
             kwargs["setting_sources"] = [str(item) for item in setting_sources]
         # Security posture must fail closed under vendor drift: the permission
         # mode always, and the tool filters whenever the task requested any.
-        required = ["permission_mode"]
+        required = {"permission_mode": "permissions"}
         if task.permissions.allowed_tools:
-            required.append("allowed_tools")
+            required["allowed_tools"] = "permissions"
         if task.permissions.disallowed_tools:
-            required.append("disallowed_tools")
+            required["disallowed_tools"] = "permissions"
+        if task.budget_usd is not None:
+            required["max_budget_usd"] = "budget_usd"
         supported, dropped = filter_supported_kwargs(
             options_cls, kwargs, required=required, kind=self.kind
         )
-        if task.budget_usd is not None and "max_budget_usd" in dropped:
-            # The spend cap is a limit, not a permission, so it is enforced here
-            # rather than via required= (whose typed error reports
-            # field="permissions"). Silently dropping it would run uncapped.
-            raise UnsupportedTaskInputError(
-                self.kind,
-                "budget_usd",
-                "the installed claude-agent-sdk does not accept max_budget_usd; "
-                "refusing to run without the requested spend cap",
-            )
         return options_cls(**supported), dropped
 
     def _model(self, task: AgentTask) -> str:

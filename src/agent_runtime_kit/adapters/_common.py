@@ -174,7 +174,7 @@ def filter_supported_kwargs(
     factory: Any,
     kwargs: Mapping[str, Any],
     *,
-    required: Iterable[str] = (),
+    required: Iterable[str] | Mapping[str, str] = (),
     kind: AgentRuntimeKind | str | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Split kwargs into those the callable accepts and those it does not.
@@ -184,26 +184,58 @@ def filter_supported_kwargs(
     dropped, but drops must be observable, so the dropped key names are returned
     alongside the accepted kwargs and surfaced in ``AgentResult.metadata``.
 
-    ``required`` names the kwargs that carry the task's requested security posture
-    (sandbox, approval/permission mode, tool filters). Best-effort dropping is the
-    wrong failure mode there — the run would silently proceed with MORE access
-    than the caller asked for — so drift on a required key fails closed with
-    ``UnsupportedTaskInputError`` (``kind`` is needed for that error).
+    ``required`` names kwargs that carry mandatory task constraints (sandbox,
+    approval/permission mode, tool filters, spend caps). A mapping may associate
+    each kwarg with the public task field reported by ``UnsupportedTaskInputError``;
+    an iterable retains the historical ``permissions`` field. Best-effort
+    dropping is the wrong failure mode for either shape.
 
-    Two signature shapes limit detection, with different guarantees. A signature
-    that cannot be introspected passes everything through and still fails closed:
-    a truly unsupported kwarg raises ``TypeError`` inside the SDK call. A
-    signature with ``**kwargs`` also passes everything through, but that path is
-    NOT fail-closed — the callee accepts and may silently ignore unknown options,
-    so drift (required keys included) is undetectable here. Callers that need a
-    hard guarantee against a ``**kwargs``-style vendor API must verify the
-    behavior, not just the signature.
+    Required keys must be explicit parameters. If a callable cannot be
+    introspected, or accepts a required key only through ``**kwargs``, the adapter
+    cannot prove the option will be honored and fails closed. Non-required keys
+    remain best-effort under those opaque signatures.
     """
 
+    required_fields = (
+        dict(required)
+        if isinstance(required, Mapping)
+        else {key: "permissions" for key in required}
+    )
+    if required_fields and kind is None:
+        raise TypeError("filter_supported_kwargs(required=...) also requires kind")
+    required_keys = [key for key in required_fields if key in kwargs]
     try:
         signature = inspect.signature(factory)
     except (TypeError, ValueError):
+        if required_keys:
+            assert kind is not None
+            raise UnsupportedTaskInputError(
+                kind,
+                required_fields[required_keys[0]],
+                "the installed SDK callable cannot be inspected to verify "
+                + ", ".join(required_keys)
+                + "; refusing to run without verifiably honoring required task constraints",
+            ) from None
         return dict(kwargs), []
+
+    opaque_required = [
+        key
+        for key in required_keys
+        if key not in signature.parameters
+        or signature.parameters[key].kind is inspect.Parameter.POSITIONAL_ONLY
+    ]
+    if opaque_required:
+        assert kind is not None
+        raise UnsupportedTaskInputError(
+            kind,
+            required_fields[opaque_required[0]],
+            "the installed SDK does not expose "
+            + ", ".join(opaque_required)
+            + " as explicit keyword parameters; refusing to run without a verifiable "
+            "required task constraint (opaque **kwargs and positional-only parameters "
+            "are insufficient)",
+        )
+
     if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
         return dict(kwargs), []
     supported: dict[str, Any] = {}
@@ -213,16 +245,15 @@ def filter_supported_kwargs(
             supported[key] = value
         else:
             dropped.append(key)
-    required_dropped = sorted(set(required) & set(dropped))
+    required_dropped = [key for key in required_keys if key in dropped]
     if required_dropped:
-        if kind is None:
-            raise TypeError("filter_supported_kwargs(required=...) also requires kind")
+        assert kind is not None
         raise UnsupportedTaskInputError(
             kind,
-            "permissions",
+            required_fields[required_dropped[0]],
             "the installed SDK does not accept "
             + ", ".join(required_dropped)
-            + "; refusing to run with a weaker security posture than the task requested",
+            + "; refusing to run without required task constraints",
         )
     return supported, dropped
 
