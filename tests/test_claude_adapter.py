@@ -932,7 +932,7 @@ async def test_claude_passes_runtime_env_for_bedrock() -> None:
     }
 
 
-def test_claude_availability_reports_bedrock_auth_source() -> None:
+def test_claude_availability_is_package_only_for_bedrock() -> None:
     runtime = ClaudeAgentRuntime(
         env={
             "CLAUDE_CODE_USE_BEDROCK": "1",
@@ -946,6 +946,4 @@ def test_claude_availability_reports_bedrock_auth_source() -> None:
     diagnostic = runtime.availability()
 
     assert diagnostic.available is True
-    assert diagnostic.metadata["auth_source"] == "amazon-bedrock"
-    assert diagnostic.metadata["credential_chain"] == "aws-sdk"
-    assert diagnostic.metadata["aws_profile_configured"] is True
+    assert diagnostic.metadata == {}

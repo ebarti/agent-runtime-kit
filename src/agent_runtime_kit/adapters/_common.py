@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import os
 from collections.abc import Iterable, Mapping
-from importlib import metadata, util
+from importlib import metadata
 from math import isfinite
 from typing import Any
 
@@ -28,14 +28,11 @@ from agent_runtime_kit.compatibility import compatibility_for
 
 
 def package_availability(kind: AgentRuntimeKind) -> RuntimeAvailability:
-    """Return import/package availability without importing the package."""
+    """Return installed-distribution availability without resolving a module."""
 
     compatibility = compatibility_for(kind)
-    try:
-        module_spec = util.find_spec(compatibility.module)
-    except ModuleNotFoundError:
-        module_spec = None
-    if module_spec is None:
+    version = package_version(compatibility.package)
+    if version is None:
         return RuntimeAvailability.unavailable(
             kind,
             reason=AvailabilityReason.MISSING_PACKAGE,
@@ -48,7 +45,7 @@ def package_availability(kind: AgentRuntimeKind) -> RuntimeAvailability:
     return RuntimeAvailability.ok(
         kind,
         package=compatibility.package,
-        version=package_version(compatibility.package),
+        version=version,
     )
 
 

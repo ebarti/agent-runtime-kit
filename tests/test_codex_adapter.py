@@ -1083,7 +1083,7 @@ async def test_codex_passes_runtime_env_to_config() -> None:
     assert seen["config"].env == {"AWS_PROFILE": "agent-runtime-kit"}
 
 
-def test_codex_availability_reports_bedrock_provider() -> None:
+def test_codex_availability_is_package_only_for_bedrock() -> None:
     runtime = CodexAgentRuntime(
         config_overrides=(
             "features.plugins=false",
@@ -1098,6 +1098,4 @@ def test_codex_availability_reports_bedrock_provider() -> None:
     diagnostic = runtime.availability()
 
     assert diagnostic.available is True
-    assert diagnostic.metadata["auth_source"] == "amazon-bedrock"
-    assert diagnostic.metadata["credential_chain"] == "aws-sdk"
-    assert diagnostic.metadata["aws_profile_configured"] is True
+    assert diagnostic.metadata == {}

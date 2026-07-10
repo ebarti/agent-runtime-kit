@@ -50,6 +50,13 @@ import the names from the top-level package instead.
   `TaskSupportProvider` is an optional extension, not a new requirement on the
   `AgentRuntime` protocol, so existing third-party runtimes retain structural
   compatibility and use capability-based fallback checks.
+- **Package availability and execution readiness are separate.** Synchronous
+  `availability()` is package-only and side-effect-free. The bounded async
+  `check_readiness()` helper uses the optional `RuntimeReadinessProvider`
+  extension without changing the `AgentRuntime` protocol. A third-party runtime
+  without the extension maps a missing package to `NOT_READY` and present
+  package to `INDETERMINATE`. `READY_TO_ATTEMPT` establishes only that known
+  setup signals are present; it is not a guarantee of future execution.
 - **`AgentKit` is sugar, not a second API.** The hub assembles the same frozen
   `AgentTask` and returns the same `AgentResult` the runtimes produce
   (`ParsedResult` is a runtime-identical subclass adding only the typed

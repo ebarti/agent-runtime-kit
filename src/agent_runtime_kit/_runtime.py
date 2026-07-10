@@ -12,6 +12,7 @@ from agent_runtime_kit._types import (
     AgentRuntimeKind,
     AgentTask,
     RuntimeAvailability,
+    RuntimeReadiness,
     TaskSupportReport,
     ToolCallAudit,
 )
@@ -63,6 +64,17 @@ class FakeAgentRuntime:
         """Report unsupported fields without side effects."""
 
         return _validate_declared_task_support(self.kind, self.capabilities, task)
+
+    async def check_readiness(self) -> RuntimeReadiness:
+        """Fake runtime is deterministic and always ready to attempt."""
+
+        availability = self.availability()
+        return RuntimeReadiness.ready_to_attempt(
+            self.kind,
+            package=availability.package,
+            version=availability.version,
+            metadata=availability.metadata,
+        )
 
     async def run(self, task: AgentTask) -> AgentResult:
         """Return a deterministic result after validating capabilities."""

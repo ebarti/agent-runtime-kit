@@ -12,10 +12,13 @@ from agent_runtime_kit._types import (
     AgentRuntime,
     AgentRuntimeKind,
     AgentTask,
+    AvailabilityReason,
     RuntimeAvailability,
+    RuntimeReadiness,
     TaskSupportReport,
     runtime_kind_value,
 )
+from agent_runtime_kit.readiness import DEFAULT_READINESS_TIMEOUT, check_readiness
 from agent_runtime_kit.support import validate_task
 
 RuntimeFactory = Callable[..., AgentRuntime]
@@ -80,13 +83,43 @@ class RuntimeRegistry:
         return validate_task(self.resolve(kind), task)
 
     def availability_for(self, kind: AgentRuntimeKind | str) -> RuntimeAvailability:
-        """Construct a runtime and return its availability diagnostic.
+        """Construct a runtime and return its package diagnostic.
 
         This constructs the runtime with no arguments, so any registered factory
         must be callable with zero args (the built-in adapters are).
         """
 
         return self.resolve(kind).availability()
+
+    async def readiness_for(
+        self,
+        kind: AgentRuntimeKind | str,
+        *,
+        timeout: float = DEFAULT_READINESS_TIMEOUT,
+    ) -> RuntimeReadiness:
+        """Construct, probe, and close a runtime for one registered kind."""
+
+        runtime = self.resolve(kind)
+        try:
+            readiness = await check_readiness(runtime, timeout=timeout)
+        except BaseException:
+            try:
+                await runtime.aclose()
+            except Exception:
+                pass
+            raise
+        try:
+            await runtime.aclose()
+        except Exception as exc:
+            return RuntimeReadiness.indeterminate(
+                runtime.kind,
+                reason=AvailabilityReason.SETUP_FAILED,
+                message="Runtime cleanup failed after the readiness probe.",
+                package=readiness.package,
+                version=readiness.version,
+                metadata={"failure": "cleanup", "error_type": type(exc).__name__},
+            )
+        return readiness
 
 
 def create_default_registry(

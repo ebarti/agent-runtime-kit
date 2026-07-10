@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import inspect
 
 import pytest
@@ -14,7 +15,29 @@ from agent_runtime_kit.adapters._common import (
     filter_supported_kwargs,
     optional_int,
     output_schema_from,
+    package_availability,
 )
+
+
+def test_package_availability_never_resolves_or_imports_vendor_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "agent_runtime_kit.adapters._common.metadata.version",
+        lambda _package: "1.2.3",
+    )
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda _module: (_ for _ in ()).throw(
+            AssertionError("package availability must not resolve imports")
+        ),
+    )
+
+    availability = package_availability(AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK)
+
+    assert availability.available is True
+    assert availability.version == "1.2.3"
 
 
 def test_filter_supported_kwargs_rejects_required_key_hidden_by_var_kwargs() -> None:

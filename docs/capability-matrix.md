@@ -12,8 +12,9 @@
 | Streaming output events | Yes — incremental `output.delta` while the SDK runs | No — a single `output.delta` at the end (non-streaming SDK) | Yes — from response chunks |
 | Tool audit events | Yes — streamed from message blocks | Yes — emitted from parsed `TurnResult` items after the turn | Yes — from tool chunks |
 | `vendor.turn` events | No | No | Yes — from thought/unknown chunks |
-| Missing package diagnostics | Yes (`AgentRuntimeUnavailableError`) | Yes (`AgentRuntimeUnavailableError`) | Yes (`AgentRuntimeUnavailableError`) |
-| Missing credential diagnostics | No — `availability()` reports available with an `auth_source` label; auth failures surface at `run()` | No — same as Claude (`auth_source` label; deferred) | Yes — `availability()` returns `MISSING_CREDENTIALS` when no API key / ADC-Vertex project is configured |
+| Package availability | Sync, side-effect-free, package-only | Sync, side-effect-free, package-only | Sync, side-effect-free, package-only; never calls ADC |
+| Async readiness | Direct API key/OAuth/Bedrock bearer signal → `READY_TO_ATTEMPT`; provider/local chains → `INDETERMINATE` | Supported `AsyncCodex.account(refresh_token=False)` probe; absent account → `NOT_READY` | API key or off-loop ADC/project probe; missing → `NOT_READY` |
+| Probe failure/timeout | `INDETERMINATE` | `INDETERMINATE`, app-server always closed | `INDETERMINATE` |
 | Live smoke test | Opt-in | Opt-in | Opt-in |
 
 The matrix is intentionally not a lowest-common-denominator contract. Adapters

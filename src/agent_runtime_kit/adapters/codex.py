@@ -14,9 +14,12 @@ from agent_runtime_kit._types import (
     AgentResult,
     AgentRuntimeKind,
     AgentTask,
+    AvailabilityReason,
     FilesystemAccess,
     PermissionMode,
+    ReadinessStatus,
     RuntimeAvailability,
+    RuntimeReadiness,
     TaskSupportReport,
     ToolCallAudit,
     Usage,
@@ -112,23 +115,62 @@ class CodexAgentRuntime:
         await self.aclose()
 
     def availability(self) -> RuntimeAvailability:
-        """Report OpenAI Codex SDK package availability."""
+        """Report Codex package presence without starting app-server."""
 
-        auth_metadata = _codex_auth_metadata(self._config_overrides, self._env)
         if self._codex_cls is not None:
-            return RuntimeAvailability.ok(
+            return RuntimeAvailability.ok(self.kind, package="openai-codex")
+        return package_availability(self.kind)
+
+    async def check_readiness(self) -> RuntimeReadiness:
+        """Ask the supported SDK account API whether Codex is authenticated."""
+
+        availability = self.availability()
+        if not availability.available:
+            return RuntimeReadiness.from_availability(
+                availability,
+                status=ReadinessStatus.NOT_READY,
+            )
+        auth_metadata = _codex_auth_metadata(self._config_overrides, self._env)
+        try:
+            account_response = await self._read_account()
+        except Exception as exc:
+            return RuntimeReadiness.indeterminate(
                 self.kind,
-                package="openai-codex",
+                reason=AvailabilityReason.SETUP_FAILED,
+                message="The Codex account probe failed before authentication was known.",
+                package=availability.package,
+                version=availability.version,
+                metadata={
+                    **auth_metadata,
+                    "failure": "account-probe",
+                    "error_type": type(exc).__name__,
+                },
+            )
+        account = field_value(account_response, "account")
+        if account is None:
+            return RuntimeReadiness.not_ready(
+                self.kind,
+                reason=AvailabilityReason.MISSING_CREDENTIALS,
+                message="The Codex SDK reported no authenticated account.",
+                package=availability.package,
+                version=availability.version,
                 metadata=auth_metadata,
             )
-        package = package_availability(self.kind)
-        if not package.available:
-            return package
-        return RuntimeAvailability.ok(
+        account_root = field_value(account, "root", account)
+        account_type = field_value(account_root, "type")
+        safe_account_types = {
+            "apiKey": "api-key",
+            "chatgpt": "chatgpt",
+            "amazonBedrock": "amazon-bedrock",
+        }
+        if account_type in safe_account_types:
+            auth_metadata["account_type"] = safe_account_types[account_type]
+        return RuntimeReadiness.ready_to_attempt(
             self.kind,
-            package="openai-codex",
-            version=package.version,
-            metadata={**dict(package.metadata), **auth_metadata},
+            message="The Codex SDK reported an authenticated account.",
+            package=availability.package,
+            version=availability.version,
+            metadata=auth_metadata,
         )
 
     def validate_task(self, task: AgentTask) -> TaskSupportReport:
@@ -238,6 +280,25 @@ class CodexAgentRuntime:
             self._sandbox_cls or Sandbox,
             self._approval_mode_cls or ApprovalMode,
         )
+
+    async def _read_account(self) -> Any:
+        codex_cls, config_cls, _, _ = self._load_sdk()
+        config_kwargs: dict[str, Any] = {"config_overrides": self._config_overrides}
+        if self._env is not None:
+            config_kwargs["env"] = dict(self._env)
+        supported, _ = filter_supported_kwargs(config_cls, config_kwargs)
+        context = codex_cls(config=config_cls(**supported))
+        client = context
+        try:
+            enter = getattr(context, "__aenter__", None)
+            if callable(enter):
+                client = await enter()
+            account = getattr(client, "account", None)
+            if not callable(account):
+                raise TypeError("installed Codex SDK does not expose AsyncCodex.account")
+            return await account(refresh_token=False)
+        finally:
+            await close_vendor_resource(context, fallback=client)
 
     async def _run_codex(
         self,

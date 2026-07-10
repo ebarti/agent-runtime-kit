@@ -166,6 +166,14 @@ class AvailabilityReason(str, Enum):
     UNKNOWN = "unknown"
 
 
+class ReadinessStatus(str, Enum):
+    """Whether a runtime can start work in the current environment."""
+
+    READY_TO_ATTEMPT = "ready-to-attempt"
+    NOT_READY = "not-ready"
+    INDETERMINATE = "indeterminate"
+
+
 class PermissionMode(str, Enum):
     """High-level permission intent for vendor runtimes."""
 
@@ -280,7 +288,7 @@ class TaskSupportProvider(Protocol):
 
 @dataclass(frozen=True)
 class RuntimeAvailability:
-    """Availability diagnostic for a runtime in the current environment."""
+    """Side-effect-free package/loadability diagnostic for a runtime."""
 
     kind: AgentRuntimeKind | str
     available: bool
@@ -334,6 +342,168 @@ class RuntimeAvailability:
             package=package,
             metadata=dict(metadata or {}),
         )
+
+
+@dataclass(frozen=True)
+class RuntimeReadiness:
+    """Execution-readiness diagnostic produced by an explicit async probe.
+
+    ``status`` is the readiness conclusion. ``reason`` retains the related
+    package/setup category, so an installed package can legitimately produce
+    ``INDETERMINATE`` with ``AvailabilityReason.AVAILABLE`` when credentials or
+    provider connectivity cannot be verified safely.
+    """
+
+    kind: AgentRuntimeKind | str
+    status: ReadinessStatus
+    message: str
+    reason: AvailabilityReason = AvailabilityReason.UNKNOWN
+    package: str | None = None
+    version: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", AgentRuntimeKind.coerce(self.kind))
+        object.__setattr__(
+            self,
+            "status",
+            _coerce_enum(ReadinessStatus, self.status, "RuntimeReadiness.status"),
+        )
+        object.__setattr__(
+            self,
+            "reason",
+            _coerce_enum(AvailabilityReason, self.reason, "RuntimeReadiness.reason"),
+        )
+        _require_nonblank(self.message, "RuntimeReadiness.message")
+        if self.package is not None:
+            _require_nonblank(self.package, "RuntimeReadiness.package")
+        if self.version is not None:
+            _require_nonblank(self.version, "RuntimeReadiness.version")
+        if not isinstance(self.metadata, Mapping):
+            raise ValueError("RuntimeReadiness.metadata must be a mapping")
+        object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
+
+    @property
+    def is_ready_to_attempt(self) -> bool:
+        """Return whether setup is sufficient to attempt execution."""
+
+        return self.status is ReadinessStatus.READY_TO_ATTEMPT
+
+    @classmethod
+    def ready_to_attempt(
+        cls,
+        kind: AgentRuntimeKind | str,
+        *,
+        message: str = "ready to attempt",
+        package: str | None = None,
+        version: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> RuntimeReadiness:
+        """Build a positive setup diagnostic without promising execution."""
+
+        return cls(
+            kind=kind,
+            status=ReadinessStatus.READY_TO_ATTEMPT,
+            reason=AvailabilityReason.AVAILABLE,
+            message=message,
+            package=package,
+            version=version,
+            metadata=dict(metadata or {}),
+        )
+
+    @classmethod
+    def not_ready(
+        cls,
+        kind: AgentRuntimeKind | str,
+        *,
+        reason: AvailabilityReason,
+        message: str,
+        package: str | None = None,
+        version: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> RuntimeReadiness:
+        """Build a negative readiness diagnostic."""
+
+        return cls(
+            kind=kind,
+            status=ReadinessStatus.NOT_READY,
+            reason=reason,
+            message=message,
+            package=package,
+            version=version,
+            metadata=dict(metadata or {}),
+        )
+
+    @classmethod
+    def indeterminate(
+        cls,
+        kind: AgentRuntimeKind | str,
+        *,
+        message: str,
+        reason: AvailabilityReason = AvailabilityReason.UNKNOWN,
+        package: str | None = None,
+        version: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> RuntimeReadiness:
+        """Build a diagnostic for a probe that could not reach a conclusion."""
+
+        return cls(
+            kind=kind,
+            status=ReadinessStatus.INDETERMINATE,
+            reason=reason,
+            message=message,
+            package=package,
+            version=version,
+            metadata=dict(metadata or {}),
+        )
+
+    @classmethod
+    def from_availability(
+        cls,
+        availability: RuntimeAvailability,
+        *,
+        status: ReadinessStatus,
+        message: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> RuntimeReadiness:
+        """Build readiness while preserving non-metadata availability fields.
+
+        Availability metadata is not copied implicitly because third-party
+        implementations may have placed credential material there. Callers may
+        pass explicitly curated readiness metadata instead.
+        """
+
+        combined_metadata = dict(metadata or {})
+        fallback_messages = {
+            ReadinessStatus.READY_TO_ATTEMPT: "ready to attempt",
+            ReadinessStatus.NOT_READY: "not ready",
+            ReadinessStatus.INDETERMINATE: "readiness could not be determined",
+        }
+        normalized_status = _coerce_enum(
+            ReadinessStatus, status, "RuntimeReadiness.status"
+        )
+        if (
+            normalized_status is ReadinessStatus.READY_TO_ATTEMPT
+            and not availability.available
+        ):
+            raise ValueError("an unavailable package cannot be ready to attempt")
+        return cls(
+            kind=availability.kind,
+            status=normalized_status,
+            reason=availability.reason,
+            message=message or availability.message or fallback_messages[normalized_status],
+            package=availability.package,
+            version=availability.version,
+            metadata=combined_metadata,
+        )
+
+
+@runtime_checkable
+class RuntimeReadinessProvider(Protocol):
+    """Optional extension for runtimes that can probe execution readiness."""
+
+    async def check_readiness(self) -> RuntimeReadiness:
+        """Probe credentials/setup without executing an agent task."""
 
 
 @dataclass(frozen=True)
@@ -638,7 +808,7 @@ class AgentRuntime(Protocol):
     capabilities: AgentCapabilities
 
     def availability(self) -> RuntimeAvailability:
-        """Report whether this runtime can execute in the current environment."""
+        """Report package/loadability without credential or network probes."""
 
     async def run(self, task: AgentTask) -> AgentResult:
         """Execute one task."""

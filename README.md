@@ -14,7 +14,7 @@ capabilities visible.
 `agent-runtime-kit` is for Python developers who want to run coding-agent tasks
 through vendor runtimes without rewriting their application around each SDK. It
 normalizes the runtime boundary: task inputs, capability checks, event streams,
-tool audits, availability diagnostics, and typed results.
+tool audits, package/readiness diagnostics, and typed results.
 
 The library keeps vendor differences visible. Claude, Codex, and Antigravity
 still expose different capabilities, permission models, setup requirements, and
@@ -23,7 +23,7 @@ shape instead of hiding them behind a lowest-common-denominator wrapper.
 
 The package is intentionally not a router, benchmark harness, queue, hosted
 service, or full agent framework. It is the reusable layer underneath those
-systems: task models, runtime capabilities, event sinks, availability
+systems: task models, runtime capabilities, event sinks, package/readiness
 diagnostics, and adapters.
 
 ## Install
@@ -83,7 +83,7 @@ caches them per kind, and turns Python types into structured output.
 import asyncio
 from dataclasses import dataclass
 
-from agent_runtime_kit import AgentKit
+from agent_runtime_kit import AgentKit, ReadinessStatus
 
 
 @dataclass
@@ -94,9 +94,9 @@ class RepoSummary:
 
 async def main() -> None:
     async with AgentKit() as kit:
-        diagnostic = kit.availability_for("claude")
-        if not diagnostic.available:
-            raise RuntimeError(diagnostic.message)
+        readiness = await kit.readiness_for("claude")
+        if readiness.status is ReadinessStatus.NOT_READY:
+            raise RuntimeError(readiness.message)
         result = await kit.run(
             "claude",
             goal="Summarize this repository",
@@ -114,15 +114,15 @@ Adapters also work standalone when you need vendor-specific configuration:
 ```python
 import asyncio
 
-from agent_runtime_kit import AgentTask
+from agent_runtime_kit import AgentTask, ReadinessStatus, check_readiness
 from agent_runtime_kit.adapters import ClaudeAgentRuntime
 
 
 async def main() -> None:
     runtime = ClaudeAgentRuntime(default_model="claude-sonnet-4-6")
-    diagnostic = runtime.availability()
-    if not diagnostic.available:
-        raise RuntimeError(diagnostic.message)
+    readiness = await check_readiness(runtime)
+    if readiness.status is ReadinessStatus.NOT_READY:
+        raise RuntimeError(readiness.message)
     result = await runtime.run(AgentTask(goal="Summarize this repository"))
     print(result.output)
 
@@ -148,6 +148,13 @@ returned `TaskSupportReport` is side-effect-free and lists source fields such as
 issue. Third-party runtimes can opt into provider-specific checks with the
 `TaskSupportProvider` protocol, while older `AgentRuntime` implementations
 continue to work through capability-based fallback checks.
+
+`availability()` is deliberately synchronous, side-effect-free, and package-only.
+Use `await check_readiness(runtime)` (or `kit.readiness_for(...)`) for an explicit,
+bounded credential/setup probe. `READY_TO_ATTEMPT` means setup was positively
+detected, not that a future provider call is guaranteed to succeed;
+`INDETERMINATE` lets callers decide whether to attempt provider-chain or local
+login authentication. Probe failures and timeouts never include credential values.
 
 `AgentResult` returns output, finish reason (see `FinishReason`), locally
 validated structured output, usage, cost, session id, tool-call audits, and
