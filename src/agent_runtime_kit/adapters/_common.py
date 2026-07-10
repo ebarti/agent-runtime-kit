@@ -22,32 +22,33 @@ from agent_runtime_kit._types import (
     AgentTask,
     AvailabilityReason,
     RuntimeAvailability,
+    TaskSupportIssue,
 )
+from agent_runtime_kit.compatibility import compatibility_for
 
 
-def package_availability(
-    kind: AgentRuntimeKind,
-    *,
-    module_name: str,
-    package_name: str,
-) -> RuntimeAvailability:
+def package_availability(kind: AgentRuntimeKind) -> RuntimeAvailability:
     """Return import/package availability without importing the package."""
 
+    compatibility = compatibility_for(kind)
     try:
-        module_spec = util.find_spec(module_name)
+        module_spec = util.find_spec(compatibility.module)
     except ModuleNotFoundError:
         module_spec = None
     if module_spec is None:
         return RuntimeAvailability.unavailable(
             kind,
             reason=AvailabilityReason.MISSING_PACKAGE,
-            message=f"Install the optional dependency: agent-runtime-kit[{_extra_name(kind)}]",
-            package=package_name,
+            message=(
+                "Install the optional dependency: "
+                f"agent-runtime-kit[{compatibility.extra}]"
+            ),
+            package=compatibility.package,
         )
     return RuntimeAvailability.ok(
         kind,
-        package=package_name,
-        version=package_version(package_name),
+        package=compatibility.package,
+        version=package_version(compatibility.package),
     )
 
 
@@ -60,20 +61,25 @@ def package_version(package_name: str) -> str | None:
         return None
 
 
-def ensure_supported_model(
+def model_support_issue(
     *,
-    kind: AgentRuntimeKind,
+    task: AgentTask,
     model: str,
     supported_models: tuple[str, ...] | None,
-) -> None:
-    """Raise a typed error when a runtime was configured with an allow-list."""
+) -> TaskSupportIssue | None:
+    """Report a configured model allow-list mismatch at the source field."""
 
     if supported_models is None or model in supported_models:
-        return
-    supported = ", ".join(supported_models)
-    raise UnsupportedTaskInputError(
-        kind,
-        "metadata.model",
+        return None
+    supported = ", ".join(supported_models) or "(none)"
+    if task.model is not None:
+        field = "model"
+    elif metadata_str(task.metadata, "model") is not None:
+        field = "metadata.model"
+    else:
+        field = "model"
+    return TaskSupportIssue(
+        field,
         f"model {model!r} is not supported by this runtime; supported: {supported}",
     )
 
@@ -116,48 +122,6 @@ def empty_completion_error(sdk_label: str) -> str:
     """
 
     return f"{sdk_label} completed with no output, tool calls, or structured output"
-
-
-def reject_unsupported_inputs(
-    kind: AgentRuntimeKind,
-    task: AgentTask,
-    *,
-    budget: bool,
-    network: bool,
-    tool_filters: bool,
-) -> None:
-    """Raise ``UnsupportedTaskInputError`` for task fields a runtime cannot honor.
-
-    Each flag selects a field whose silent omission would mislead the caller. The
-    project contract is to reject these inputs rather than drop them quietly, so an
-    adapter passes ``True`` only for fields it has no SDK surface to honor.
-    """
-
-    if budget and task.budget_usd is not None:
-        raise UnsupportedTaskInputError(
-            kind,
-            "budget_usd",
-            "this runtime does not expose a cost budget; remove budget_usd to proceed",
-        )
-    if network and task.permissions.network is not None:
-        raise UnsupportedTaskInputError(
-            kind,
-            "permissions.network",
-            "this runtime does not expose network access control",
-        )
-    if tool_filters:
-        if task.permissions.allowed_tools:
-            raise UnsupportedTaskInputError(
-                kind,
-                "permissions.allowed_tools",
-                "this runtime does not expose a tool allow-list",
-            )
-        if task.permissions.disallowed_tools:
-            raise UnsupportedTaskInputError(
-                kind,
-                "permissions.disallowed_tools",
-                "this runtime does not expose a tool deny-list",
-            )
 
 
 def filter_supported_kwargs(
@@ -359,11 +323,3 @@ async def close_vendor_resource(
         result = close()
         if hasattr(result, "__await__"):
             await result
-
-
-def _extra_name(kind: AgentRuntimeKind) -> str:
-    return {
-        AgentRuntimeKind.CLAUDE_AGENT_SDK: "claude",
-        AgentRuntimeKind.CODEX_AGENT_SDK: "codex",
-        AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK: "antigravity",
-    }.get(kind, "all")

@@ -141,6 +141,14 @@ a field (for example only Claude maps `budget_usd`; Codex and Antigravity reject
 it with a typed `UnsupportedTaskInputError`) the adapter raises rather than
 silently dropping it.
 
+Call `validate_task(runtime, task)` (or `kit.validate_task("codex", task)`) to
+inspect every statically detectable incompatibility before dispatch. The
+returned `TaskSupportReport` is side-effect-free and lists source fields such as
+`budget_usd` and `permissions.network`; `run()` still fails closed on the first
+issue. Third-party runtimes can opt into provider-specific checks with the
+`TaskSupportProvider` protocol, while older `AgentRuntime` implementations
+continue to work through capability-based fallback checks.
+
 `AgentResult` returns output, finish reason (see `FinishReason`), locally
 validated structured output, usage, cost, session id, tool-call audits, and
 provider metadata. `is_success` is true only for a natural, error-free

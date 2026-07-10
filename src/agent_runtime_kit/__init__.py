@@ -27,9 +27,18 @@ from agent_runtime_kit._types import (
     PermissionProfile,
     RuntimeAvailability,
     SessionResumeState,
+    TaskSupportIssue,
+    TaskSupportProvider,
+    TaskSupportReport,
     ToolCallAudit,
     Usage,
     runtime_kind_value,
+)
+from agent_runtime_kit.compatibility import (
+    COMPATIBILITY_MANIFEST,
+    PackageVersion,
+    RuntimeCompatibility,
+    compatibility_for,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -42,6 +51,7 @@ from agent_runtime_kit.events import (
     vendor_turn_event,
 )
 from agent_runtime_kit.registry import RuntimeRegistry, create_default_registry
+from agent_runtime_kit.support import validate_task
 
 __all__ = [
     "AgentCapabilities",
@@ -59,20 +69,27 @@ __all__ = [
     "FilesystemAccess",
     "FinishReason",
     "KIND_ALIASES",
+    "COMPATIBILITY_MANIFEST",
     "McpServerConfig",
     "OutputSchemaError",
     "OutputTypeError",
+    "PackageVersion",
     "ParsedResult",
     "PermissionMode",
     "PermissionProfile",
     "RuntimeAvailability",
+    "RuntimeCompatibility",
     "RuntimeNotRegisteredError",
     "RuntimeRegistry",
     "SessionResumeState",
+    "TaskSupportIssue",
+    "TaskSupportProvider",
+    "TaskSupportReport",
     "ToolCallAudit",
     "UnsupportedTaskInputError",
     "Usage",
     "create_default_registry",
+    "compatibility_for",
     "runtime_kind_value",
     "output_delta_event",
     "safe_emit",
@@ -82,4 +99,5 @@ __all__ = [
     "tool_completed_event",
     "tool_requested_event",
     "vendor_turn_event",
+    "validate_task",
 ]

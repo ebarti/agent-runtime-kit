@@ -44,6 +44,12 @@ import the names from the top-level package instead.
   a task field raises `UnsupportedTaskInputError`; the one exception is
   vendor-option drift, which is recorded in
   `AgentResult.metadata["dropped_options"]` instead.
+- **Task support can be inspected without dispatch.** `validate_task(runtime,
+  task)`, `RuntimeRegistry.validate_task_for(...)`, and `AgentKit.validate_task(...)`
+  return every statically detectable incompatibility as a `TaskSupportReport`.
+  `TaskSupportProvider` is an optional extension, not a new requirement on the
+  `AgentRuntime` protocol, so existing third-party runtimes retain structural
+  compatibility and use capability-based fallback checks.
 - **`AgentKit` is sugar, not a second API.** The hub assembles the same frozen
   `AgentTask` and returns the same `AgentResult` the runtimes produce
   (`ParsedResult` is a runtime-identical subclass adding only the typed
@@ -71,6 +77,13 @@ SDKs *within the declared caps*, so drift inside an allowed range surfaces befor
 it reaches installed users; a release above a cap is by design invisible to that
 lane until the cap is raised. A separate lane installs every direct dependency at
 its declared floor so a stale minimum cannot sit undetected in the metadata.
+
+`COMPATIBILITY_MANIFEST` is the machine-readable form of that policy. Each entry
+records the install extra, import module, accepted SDK range, exact lockfile
+version exercised by the repository, and any separately versioned runtime binary
+(currently `openai-codex-cli-bin`). The manifest is tested against both
+`pyproject.toml` and `uv.lock`; it is evidence of the committed test baseline,
+not a claim that every version in the accepted range was exhaustively tested.
 
 ## Deprecation
 

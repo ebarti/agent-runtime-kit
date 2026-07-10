@@ -11,9 +11,12 @@ from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentRuntime,
     AgentRuntimeKind,
+    AgentTask,
     RuntimeAvailability,
+    TaskSupportReport,
     runtime_kind_value,
 )
+from agent_runtime_kit.support import validate_task
 
 RuntimeFactory = Callable[..., AgentRuntime]
 
@@ -68,6 +71,13 @@ class RuntimeRegistry:
         """
 
         return self.resolve(kind).capabilities
+
+    def validate_task_for(
+        self, kind: AgentRuntimeKind | str, task: AgentTask
+    ) -> TaskSupportReport:
+        """Resolve the runtime and run its pure task-support preflight."""
+
+        return validate_task(self.resolve(kind), task)
 
     def availability_for(self, kind: AgentRuntimeKind | str) -> RuntimeAvailability:
         """Construct a runtime and return its availability diagnostic.

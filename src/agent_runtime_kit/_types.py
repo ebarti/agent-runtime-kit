@@ -226,6 +226,56 @@ class AgentCapabilities:
     streaming: bool = False
     tool_audit: bool = False
     cancellation: bool = False
+    budget: bool = False
+    reasoning_effort: bool = False
+    network_control: bool = False
+    tool_filters: bool = False
+    mcp_server_env: bool = False
+
+
+@dataclass(frozen=True)
+class TaskSupportIssue:
+    """One task field a runtime cannot honor faithfully."""
+
+    field: str
+    message: str
+
+    def __post_init__(self) -> None:
+        _require_nonblank(self.field, "TaskSupportIssue.field")
+        _require_nonblank(self.message, "TaskSupportIssue.message")
+
+
+@dataclass(frozen=True)
+class TaskSupportReport:
+    """Pure compatibility result for one task/runtime pair."""
+
+    kind: AgentRuntimeKind | str
+    issues: tuple[TaskSupportIssue, ...] = ()
+
+    def __post_init__(self) -> None:
+        issues = _tuple_value(self.issues, "TaskSupportReport.issues")
+        if not all(isinstance(issue, TaskSupportIssue) for issue in issues):
+            raise ValueError(
+                "TaskSupportReport.issues must contain only TaskSupportIssue values"
+            )
+        object.__setattr__(self, "kind", AgentRuntimeKind.coerce(self.kind))
+        object.__setattr__(self, "issues", issues)
+
+    @property
+    def supported(self) -> bool:
+        return not self.issues
+
+
+@runtime_checkable
+class TaskSupportProvider(Protocol):
+    """Optional extension for runtimes with provider-specific task checks.
+
+    ``AgentRuntime`` deliberately does not require this protocol: third-party
+    runtimes written before task preflight was introduced remain compatible.
+    """
+
+    def validate_task(self, task: AgentTask) -> TaskSupportReport:
+        """Purely report whether this runtime can honor the task."""
 
 
 @dataclass(frozen=True)

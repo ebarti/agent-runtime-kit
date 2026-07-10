@@ -26,8 +26,10 @@ from agent_runtime_kit._types import (
     PermissionProfile,
     RuntimeAvailability,
     SessionResumeState,
+    TaskSupportReport,
 )
 from agent_runtime_kit.registry import RuntimeFactory, RuntimeRegistry, create_default_registry
+from agent_runtime_kit.support import validate_task as validate_runtime_task
 
 _T = TypeVar("_T")
 # An event handler receives one normalized event dict; sync or async.
@@ -108,6 +110,21 @@ class AgentKit:
 
     def capabilities_for(self, kind: AgentRuntimeKind | str) -> AgentCapabilities:
         return self._registry.capabilities_for(self._normalize_kind(kind))
+
+    def validate_task(
+        self,
+        runtime: AgentRuntimeKind | str | AgentRuntime,
+        task: AgentTask,
+    ) -> TaskSupportReport:
+        """Report unsupported task fields without starting a run."""
+
+        if isinstance(runtime, str):
+            kind = self._normalize_kind(runtime)
+            cached = self._runtimes.get(kind)
+            if cached is None:
+                return self._registry.validate_task_for(kind, task)
+            runtime = cached
+        return validate_runtime_task(runtime, task)
 
     def on(self, event: str = "*") -> Callable[[_HandlerT], _HandlerT]:
         """Register an event handler for tasks assembled by this hub.
