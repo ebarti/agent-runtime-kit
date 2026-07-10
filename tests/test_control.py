@@ -269,10 +269,7 @@ async def test_expired_deadline_never_invokes_legacy_runtime() -> None:
     assert caught.value.task_id == "expired"
     assert caught.value.deadline == deadline
     assert isinstance(caught.value, TimeoutError)
-    assert [event["name"] for event in sink.events] == [
-        "agent.task.started",
-        "agent.task.failed",
-    ]
+    assert [event["name"] for event in sink.events] == ["agent.task.failed"]
     assert sink.events[-1]["attributes"]["finish_reason"] == FinishReason.TIMED_OUT
 
 
@@ -487,6 +484,33 @@ async def test_timeout_racing_external_cancel_emits_only_timed_out_terminal() ->
 
 
 @pytest.mark.asyncio
+async def test_timeout_wins_over_external_cancel_during_operation_cleanup() -> None:
+    runtime = CleanupBlockingRuntime()
+    sink = RecordingEventSink()
+    running = asyncio.create_task(
+        runtime.run(
+            AgentTask(
+                goal="wait",
+                task_id="cleanup-timeout-race",
+                deadline=datetime.now(tz=timezone.utc) + timedelta(milliseconds=10),
+                event_sink=sink,
+            )
+        )
+    )
+    await runtime.cleanup_started.wait()
+
+    running.cancel()
+    await asyncio.sleep(0)
+    runtime.release_cleanup.set()
+
+    with pytest.raises(AgentTaskTimeoutError):
+        await running
+    terminal = [event for event in sink.events if event["name"] == "agent.task.failed"]
+    assert len(terminal) == 1
+    assert terminal[0]["attributes"]["finish_reason"] == FinishReason.TIMED_OUT
+
+
+@pytest.mark.asyncio
 async def test_repeated_runtime_cancel_does_not_interrupt_operation_cleanup() -> None:
     runtime = CleanupBlockingRuntime()
     running = asyncio.create_task(
@@ -538,6 +562,30 @@ async def test_vendor_cleanup_helper_survives_repeated_task_cancellation() -> No
     with pytest.raises(asyncio.CancelledError):
         await running
     assert cleanup_finished is True
+
+
+@pytest.mark.asyncio
+async def test_vendor_cleanup_helper_has_bounded_liveness() -> None:
+    cleanup_started = asyncio.Event()
+    cleanup_cancelled = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def wedged_cleanup() -> None:
+        cleanup_started.set()
+        try:
+            await release_cleanup.wait()
+        except asyncio.CancelledError:
+            cleanup_cancelled.set()
+            await release_cleanup.wait()
+
+    outcome = await finish_vendor_cleanup(wedged_cleanup(), timeout=0.01)
+    await asyncio.sleep(0)
+
+    assert cleanup_started.is_set()
+    assert cleanup_cancelled.is_set()
+    assert isinstance(outcome, TimeoutError)
+    release_cleanup.set()
+    await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio

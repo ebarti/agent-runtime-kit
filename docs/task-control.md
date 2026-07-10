@@ -15,9 +15,10 @@ except AgentTaskTimeoutError as exc:
     print(exc.task_id, exc.deadline)
 ```
 
-An expired deadline never starts the vendor SDK. A deadline expiry emits an
-`agent.task.failed` event with `finish_reason="timed_out"`, cancels the in-flight
-provider coroutine, waits for its cleanup, and raises `AgentTaskTimeoutError`
+An expired deadline never starts the vendor SDK (and therefore emits no started
+event). A deadline expiry emits an `agent.task.failed` event with
+`finish_reason="timed_out"`, cancels the in-flight provider coroutine, gives its
+cleanup a bounded five-second grace period, and raises `AgentTaskTimeoutError`
 (which is both an `AgentRuntimeError` and `TimeoutError`). Direct adapter calls
 honor `AgentTask(deadline=...)` too.
 

@@ -21,9 +21,10 @@ from agent_runtime_kit._types import (
     CancellationReceipt,
     FinishReason,
 )
-from agent_runtime_kit.events import safe_emit, task_failed_event, task_started_event
+from agent_runtime_kit.events import safe_emit, task_failed_event
 
 _T = TypeVar("_T")
+_OPERATION_CLEANUP_TIMEOUT = 5.0
 
 
 @dataclass
@@ -106,9 +107,9 @@ class RuntimeTaskController:
 
         remaining = (deadline - datetime.now(tz=timezone.utc)).total_seconds()
         if remaining <= 0:
-            # The adapter body normally emits started.  It is deliberately not
-            # invoked for an already-expired task, so preserve a coherent pair.
-            await safe_emit(task, task_started_event(task, self.kind))
+            # An already-expired task never starts, including its started event.
+            # Emit the terminal first so cancellation of a blocking observability
+            # sink cannot strand the lifecycle after a misleading start.
             await self._emit_timed_out(task, deadline)
             raise AgentTaskTimeoutError(self.kind, task.task_id, deadline)
 
@@ -123,16 +124,14 @@ class RuntimeTaskController:
             if operation_task in done:
                 return await operation_task
 
-            operation_task.cancel()
-            await asyncio.gather(operation_task, return_exceptions=True)
             # Transition before emitting: cancellation of a slow sink must never
             # turn one timeout into a second, contradictory interrupted terminal.
             timed_out = True
+            await _cancel_and_settle(operation_task)
             await self._emit_timed_out(task, deadline)
             raise AgentTaskTimeoutError(self.kind, task.task_id, deadline)
         except asyncio.CancelledError:
-            operation_task.cancel()
-            await asyncio.gather(operation_task, return_exceptions=True)
+            await _cancel_and_settle(operation_task)
             if not timed_out:
                 await self._emit_interrupted(task)
             raise
@@ -185,3 +184,34 @@ async def run_legacy_with_deadline(
     # terminal event semantics.
     controller = RuntimeTaskController(kind)
     return await controller.run(task, operation)
+
+
+async def _cancel_and_settle(operation: asyncio.Future[Any]) -> None:
+    """Give a cancelled operation bounded, repeat-cancel-safe cleanup time."""
+
+    operation.cancel()
+    deadline = asyncio.get_running_loop().time() + _OPERATION_CLEANUP_TIMEOUT
+    while not operation.done():
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            operation.cancel()
+            operation.add_done_callback(_consume_operation_result)
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(operation), timeout=remaining)
+        except asyncio.CancelledError:
+            continue
+        except asyncio.TimeoutError:
+            operation.cancel()
+            operation.add_done_callback(_consume_operation_result)
+            return
+        except Exception:
+            break
+    _consume_operation_result(operation)
+
+
+def _consume_operation_result(operation: asyncio.Future[Any]) -> None:
+    try:
+        operation.exception()
+    except BaseException:
+        return

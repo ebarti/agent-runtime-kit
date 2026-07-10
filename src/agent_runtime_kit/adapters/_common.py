@@ -29,6 +29,7 @@ from agent_runtime_kit._types import (
 from agent_runtime_kit.compatibility import compatibility_for
 
 ModelSource = Literal["task", "metadata", "constructor", "provider-native"]
+DEFAULT_VENDOR_CLEANUP_TIMEOUT = 5.0
 
 
 @dataclass(frozen=True)
@@ -377,24 +378,52 @@ async def close_vendor_resource(
             await result
 
 
-async def finish_vendor_cleanup(operation: Awaitable[Any]) -> BaseException | None:
+async def finish_vendor_cleanup(
+    operation: Awaitable[Any],
+    *,
+    timeout: float = DEFAULT_VENDOR_CLEANUP_TIMEOUT,
+) -> BaseException | None:
     """Finish teardown even if the owning run receives repeated cancellation.
 
     The caller is already handling the original run exception (usually
     ``CancelledError``). A second ``Task.cancel()`` must not abandon provider
     teardown and expose a half-closed reusable process to the next run. The
-    original exception remains authoritative; a cleanup failure is returned for
-    logging instead of masking it.
+    grace period is bounded so a wedged vendor close cannot make cancellation
+    permanently non-returning. The original exception remains authoritative; a
+    cleanup failure is returned for logging instead of masking it.
     """
 
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not isfinite(float(timeout))
+        or timeout <= 0
+    ):
+        raise ValueError("cleanup timeout must be a positive finite number")
+
     cleanup: asyncio.Future[Any] = asyncio.ensure_future(operation)
+    deadline = asyncio.get_running_loop().time() + float(timeout)
     while not cleanup.done():
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            cleanup.cancel()
+            cleanup.add_done_callback(_consume_cleanup_result)
+            return TimeoutError(
+                f"vendor cleanup did not finish within {float(timeout):g} seconds"
+            )
         try:
-            await asyncio.shield(cleanup)
+            await asyncio.wait_for(asyncio.shield(cleanup), timeout=remaining)
         except asyncio.CancelledError:
             # shield keeps the cleanup task alive. Consume any number of
-            # additional cancellation requests until teardown has settled.
+            # additional cancellation requests until teardown settles or the
+            # bounded grace period ends.
             continue
+        except asyncio.TimeoutError:
+            cleanup.cancel()
+            cleanup.add_done_callback(_consume_cleanup_result)
+            return TimeoutError(
+                f"vendor cleanup did not finish within {float(timeout):g} seconds"
+            )
         except Exception:
             # The failure is retrieved and returned below so it can be logged
             # without replacing the run's original exception.
@@ -403,3 +432,12 @@ async def finish_vendor_cleanup(operation: Awaitable[Any]) -> BaseException | No
         return cleanup.exception()
     except asyncio.CancelledError as exc:
         return exc
+
+
+def _consume_cleanup_result(cleanup: asyncio.Future[Any]) -> None:
+    """Retrieve a detached cleanup result so asyncio never reports it unhandled."""
+
+    try:
+        cleanup.exception()
+    except BaseException:
+        return
