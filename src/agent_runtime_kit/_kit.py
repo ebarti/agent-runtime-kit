@@ -35,6 +35,18 @@ _EventHandler = Callable[[Mapping[str, Any]], Any]
 _HandlerT = TypeVar("_HandlerT", bound=_EventHandler)
 _FactoryT = TypeVar("_FactoryT", bound=RuntimeFactory)
 
+
+class _UnsetType:
+    """Sentinel whose repr keeps the public signature compact."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "..."
+
+
+_UNSET = _UnsetType()
+
 # Short spellings for the built-in kinds, resolved only by AgentKit (the
 # registry itself stays alias-free; the full kind strings always work).
 KIND_ALIASES: dict[str, AgentRuntimeKind] = {
@@ -186,25 +198,25 @@ class AgentKit:
         runtime: AgentRuntimeKind | str | AgentRuntime,
         *,
         output_type: type[Any] | None = None,
-        goal: str | None = None,
+        goal: str | None | _UnsetType = _UNSET,
         task: AgentTask | None = None,
-        system: str | None = None,
-        model: str | None = None,
-        reasoning_effort: str | None = None,
-        working_directory: Path | str | None = None,
-        permissions: PermissionProfile | PermissionMode | str | None = None,
-        filesystem: FilesystemAccess | str | None = None,
-        allowed_tools: Sequence[str] = (),
-        disallowed_tools: Sequence[str] = (),
+        system: str | None | _UnsetType = _UNSET,
+        model: str | None | _UnsetType = _UNSET,
+        reasoning_effort: str | None | _UnsetType = _UNSET,
+        working_directory: Path | str | None | _UnsetType = _UNSET,
+        permissions: PermissionProfile | PermissionMode | str | None | _UnsetType = _UNSET,
+        filesystem: FilesystemAccess | str | None | _UnsetType = _UNSET,
+        allowed_tools: Sequence[str] | _UnsetType = _UNSET,
+        disallowed_tools: Sequence[str] | _UnsetType = _UNSET,
         output_schema: Mapping[str, Any] | None = None,
         event_sink: EventSink | None = None,
-        mcp_servers: Sequence[McpServerConfig] = (),
-        session_id: str | None = None,
-        resume_from: SessionResumeState | None = None,
-        budget_usd: float | None = None,
-        sdk_executions: int = 1,
-        task_id: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
+        mcp_servers: Sequence[McpServerConfig] | _UnsetType = _UNSET,
+        session_id: str | None | _UnsetType = _UNSET,
+        resume_from: SessionResumeState | None | _UnsetType = _UNSET,
+        budget_usd: float | None | _UnsetType = _UNSET,
+        sdk_executions: int | _UnsetType = _UNSET,
+        task_id: str | None | _UnsetType = _UNSET,
+        metadata: Mapping[str, Any] | None | _UnsetType = _UNSET,
     ) -> AgentResult:
         """Run one task, assembling the ``AgentTask`` from keyword arguments.
 
@@ -239,32 +251,60 @@ class AgentKit:
                 session_id=session_id,
                 resume_from=resume_from,
                 budget_usd=budget_usd,
+                sdk_executions=sdk_executions,
                 task_id=task_id,
                 metadata=metadata,
                 schema=schema,
             )
         else:
-            if goal is None:
+            if goal is _UNSET or goal is None:
                 raise ValueError("run() needs either goal=... or task=...")
+            normalized_permissions = cast(
+                "PermissionProfile | PermissionMode | str | None",
+                None if permissions is _UNSET else permissions,
+            )
+            normalized_filesystem = cast(
+                "FilesystemAccess | str | None",
+                None if filesystem is _UNSET else filesystem,
+            )
+            normalized_allowed_tools = cast(
+                "Sequence[str]", () if allowed_tools is _UNSET else allowed_tools
+            )
+            normalized_disallowed_tools = cast(
+                "Sequence[str]", () if disallowed_tools is _UNSET else disallowed_tools
+            )
+            normalized_working_directory = cast(
+                "Path | str | None",
+                None if working_directory is _UNSET else working_directory,
+            )
+            normalized_mcp_servers = cast(
+                "Sequence[McpServerConfig]", () if mcp_servers is _UNSET else mcp_servers
+            )
+            normalized_metadata = cast(
+                "Mapping[str, Any] | None", None if metadata is _UNSET else metadata
+            )
             task_kwargs: dict[str, Any] = {
                 "goal": goal,
-                "system": system,
-                "model": model,
-                "reasoning_effort": reasoning_effort,
-                "working_directory": _as_path(working_directory),
-                "mcp_servers": tuple(mcp_servers),
+                "system": None if system is _UNSET else system,
+                "model": None if model is _UNSET else model,
+                "reasoning_effort": None if reasoning_effort is _UNSET else reasoning_effort,
+                "working_directory": _as_path(normalized_working_directory),
+                "mcp_servers": tuple(normalized_mcp_servers),
                 "permissions": _normalize_permissions(
-                    permissions, filesystem, allowed_tools, disallowed_tools
+                    normalized_permissions,
+                    normalized_filesystem,
+                    normalized_allowed_tools,
+                    normalized_disallowed_tools,
                 ),
                 "event_sink": self._compose_sink(event_sink),
-                "sdk_executions": sdk_executions,
-                "budget_usd": budget_usd,
-                "session_id": session_id,
-                "resume_from": resume_from,
+                "sdk_executions": 1 if sdk_executions is _UNSET else sdk_executions,
+                "budget_usd": None if budget_usd is _UNSET else budget_usd,
+                "session_id": None if session_id is _UNSET else session_id,
+                "resume_from": None if resume_from is _UNSET else resume_from,
                 "output_schema": schema,
-                "metadata": dict(metadata) if metadata is not None else {},
+                "metadata": dict(normalized_metadata) if normalized_metadata is not None else {},
             }
-            if task_id is not None:
+            if task_id is not _UNSET and task_id is not None:
                 task_kwargs["task_id"] = task_id
             built = AgentTask(**task_kwargs)
 
@@ -280,8 +320,15 @@ class AgentKit:
         async with self._cache_lock:
             runtimes = list(self._runtimes.values())
             self._runtimes.clear()
+        first_error: BaseException | None = None
         for agent in runtimes:
-            await agent.aclose()
+            try:
+                await agent.aclose()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     async def __aenter__(self) -> AgentKit:
         return self
@@ -313,11 +360,7 @@ class AgentKit:
         event_sink: EventSink | None,
         **field_kwargs: Any,
     ) -> AgentTask:
-        conflicting = sorted(
-            name
-            for name, value in field_kwargs.items()
-            if value not in (None, (), {}, [])  # defaults mean "not provided"
-        )
+        conflicting = sorted(name for name, value in field_kwargs.items() if value is not _UNSET)
         if conflicting:
             raise ValueError(
                 "task= is mutually exclusive with per-field kwargs; got both task and "
@@ -409,9 +452,12 @@ def _normalize_permissions(
 
 def _parse_result(output_type: type[_T], result: AgentResult) -> ParsedResult[_T]:
     values = {f.name: getattr(result, f.name) for f in dataclass_fields(result)}
-    if result.error is not None or result.parsed_output is None:
-        # Adapter-reported failures (including unsatisfied structured output)
-        # pass through untyped; .parsed stays None.
+    if result.error is not None or result.finish_reason == FinishReason.FAILED:
+        # Never expose an adapter's unvalidated raw payload through the typed
+        # ``ParsedResult`` surface when the adapter itself reported failure.
+        values["parsed_output"] = None
+        return cast("ParsedResult[_T]", ParsedResult(**values))
+    if result.parsed_output is None:
         return cast("ParsedResult[_T]", ParsedResult(**values))
     try:
         instance = parse_as(output_type, result.parsed_output)

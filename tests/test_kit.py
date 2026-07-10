@@ -147,6 +147,29 @@ async def test_kit_requires_exactly_one_of_goal_and_task() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("goal", None),
+        ("system", None),
+        ("allowed_tools", ()),
+        ("metadata", {}),
+        ("budget_usd", None),
+        ("sdk_executions", 1),
+    ],
+)
+async def test_kit_rejects_explicit_default_values_with_prebuilt_task(
+    field_name: str, value: object
+) -> None:
+    kit = AgentKit(register_default_adapters=False)
+
+    # Explicit default-valued kwargs are still caller input. Silently ignoring
+    # them makes wrapper code look as though it changed the prebuilt task.
+    with pytest.raises(ValueError, match=field_name):
+        await kit.run(RecordingRuntime(), task=AgentTask(goal="a"), **{field_name: value})
+
+
+@pytest.mark.asyncio
 async def test_kit_task_passthrough_runs_unchanged() -> None:
     runtime = RecordingRuntime()
     kit = AgentKit(register_default_adapters=False)
@@ -217,6 +240,43 @@ async def test_kit_output_type_passes_adapter_failures_through() -> None:
     assert result.finish_reason == "failed"
     assert result.error == "vendor exploded"
     assert result.parsed is None
+
+
+@pytest.mark.asyncio
+async def test_kit_output_type_never_leaks_failed_raw_payload() -> None:
+    failed = AgentResult(
+        output='{"x": "unchecked"}',
+        finish_reason="failed",
+        error="vendor rejected structured output",
+        parsed_output={"x": "unchecked"},
+    )
+    runtime = RecordingRuntime(failed)
+    kit = AgentKit(register_default_adapters=False)
+
+    result = await kit.run(runtime, goal="g", output_type=Point)
+
+    assert result.finish_reason == "failed"
+    assert result.error == "vendor rejected structured output"
+    assert result.parsed_output is None
+    assert result.parsed is None
+
+
+@pytest.mark.asyncio
+async def test_kit_output_type_clears_raw_payload_for_failed_reason_without_error() -> None:
+    failed = AgentResult(
+        output='{"x": 1, "y": 2}',
+        finish_reason="failed",
+        parsed_output={"x": 1, "y": 2},
+    )
+    runtime = RecordingRuntime(failed)
+
+    result = await AgentKit(register_default_adapters=False).run(
+        runtime, goal="g", output_type=Point
+    )
+
+    assert result.finish_reason == "failed"
+    assert result.error is None
+    assert result.parsed_output is None
 
 
 @pytest.mark.asyncio
@@ -338,3 +398,37 @@ async def test_kit_caches_runtimes_per_kind_and_closes_them() -> None:
     async with AgentKit(register_default_adapters=False) as kit:
         await kit.run(outside, goal="g")
     assert outside.closed is False
+
+
+@pytest.mark.asyncio
+async def test_kit_aclose_attempts_every_cached_runtime_and_reraises_first_error() -> None:
+    closed: list[str] = []
+
+    class CloseTrackingRuntime(RecordingRuntime):
+        def __init__(self, name: str, error: Exception | None = None) -> None:
+            super().__init__()
+            self.name = name
+            self.error = error
+
+        async def aclose(self) -> None:
+            closed.append(self.name)
+            if self.error is not None:
+                raise self.error
+
+    kit = AgentKit(register_default_adapters=False)
+    kit.registry.register("x-first", lambda: CloseTrackingRuntime("first", ValueError("first")))
+    kit.registry.register(
+        "x-second", lambda: CloseTrackingRuntime("second", RuntimeError("second"))
+    )
+    kit.registry.register("x-third", lambda: CloseTrackingRuntime("third"))
+    await kit.run("x-first", goal="one")
+    await kit.run("x-second", goal="two")
+    await kit.run("x-third", goal="three")
+
+    with pytest.raises(ValueError, match="first"):
+        await kit.aclose()
+
+    assert closed == ["first", "second", "third"]
+    # The cache is cleared before closing, so a retry cannot close any runtime twice.
+    await kit.aclose()
+    assert closed == ["first", "second", "third"]

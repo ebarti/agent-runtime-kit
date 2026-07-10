@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- `AgentKit.run(task=...)` now rejects every explicitly supplied per-field task
+  argument, including default-valued `sdk_executions=1` and empty tool lists,
+  instead of silently ignoring it.
+- `ParsedResult[T]` clears an adapter's raw `parsed_output` when the adapter
+  reports failure, so the typed result surface never exposes unvalidated data.
+- `AgentKit.aclose()` attempts to close every cached runtime before reraising
+  the first close error, preventing later resources from leaking.
+
 ## 0.4.0 - 2026-07-02
 
 ### Added
