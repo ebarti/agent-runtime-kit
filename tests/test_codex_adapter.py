@@ -175,6 +175,41 @@ async def test_codex_runtime_runs_with_injected_sdk() -> None:
 
 
 @pytest.mark.asyncio
+async def test_codex_rejects_structured_output_that_misses_schema() -> None:
+    runtime = make_runtime(
+        {
+            "status": "completed",
+            "final_response": '{"ok": "bad"}',
+            "usage": {"total": {"input_tokens": 4, "output_tokens": 2}},
+        }
+    )
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "integer"}},
+        "required": ["ok"],
+    }
+
+    result = await runtime.run(AgentTask(goal="x", output_schema=schema))
+
+    assert result.finish_reason == "failed"
+    assert "does not conform" in (result.error or "")
+    assert result.parsed_output_available is False
+    assert result.session_id == "thread-new"
+    assert result.usage.input_tokens == 4
+
+
+@pytest.mark.asyncio
+async def test_codex_accepts_textual_json_null() -> None:
+    runtime = make_runtime({"status": "completed", "final_response": "null"})
+
+    result = await runtime.run(AgentTask(goal="x", output_schema={"type": "null"}))
+
+    assert result.finish_reason == "done"
+    assert result.parsed_output is None
+    assert result.parsed_output_available is True
+
+
+@pytest.mark.asyncio
 async def test_codex_runtime_defaults_to_per_call_process_isolation() -> None:
     runtime = make_runtime()
 

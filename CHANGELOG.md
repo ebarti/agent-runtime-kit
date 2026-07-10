@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schema checks and `OutputSchemaError` for malformed definitions.
 - `AgentResult.parsed_output_available` distinguishes a valid JSON `null` from
   absent or rejected structured output.
+- All built-in adapters and public fake runtimes now validate returned values
+  against `output_schema` locally, including textual JSON fallbacks.
 
 ### Changed
 

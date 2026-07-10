@@ -84,6 +84,8 @@ async def main() -> None:
 A malformed raw `output_schema` raises `OutputSchemaError` before execution.
 `AgentKit` strictly validates values requested with `output_type`; a mismatch
 yields `finish_reason="failed"` with the details in `result.error`.
+All built-in adapters also validate results requested with a raw
+`output_schema` and include the failing JSON path in `result.error`.
 Unsupported Python annotations (sets, plain unions, ...) raise
 `OutputTypeError` at call time. For nullable schemas,
 `parsed_output_available=True` with `parsed_output=None` represents valid JSON

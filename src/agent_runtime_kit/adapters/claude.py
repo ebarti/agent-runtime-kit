@@ -23,6 +23,7 @@ from agent_runtime_kit._types import (
     Usage,
 )
 from agent_runtime_kit.adapters._common import (
+    STRUCTURED_OUTPUT_MISSING,
     close_vendor_resource,
     empty_completion_error,
     ensure_supported_model,
@@ -33,9 +34,8 @@ from agent_runtime_kit.adapters._common import (
     optional_str,
     output_schema_from,
     package_availability,
-    parse_json_output,
     reject_unsupported_inputs,
-    structured_output_unsatisfied_error,
+    resolve_structured_output,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -475,7 +475,7 @@ def _translate_messages(
     rounds = 0
     error: str | None = None
     finish_reason = "done"
-    structured_output: Any | None = None
+    structured_output: Any = STRUCTURED_OUTPUT_MISSING
 
     for message in messages:
         message_type = _message_type(message)
@@ -503,15 +503,23 @@ def _translate_messages(
                 finish_reason, error = _result_failure(message, result_text)
 
     output = "\n".join(part for part in content_parts if part).strip()
-    schema_requested = output_schema_from(task.output_schema, task.metadata) is not None
-    if structured_output is None and schema_requested:
-        structured_output = parse_json_output(output)
-    if error is None and schema_requested and structured_output is None:
-        # Match Codex/Antigravity: a requested schema that cannot be satisfied is a
-        # failure, not a silently-successful task with parsed_output=None.
-        finish_reason = "failed"
-        error = structured_output_unsatisfied_error("Claude Agent SDK")
-    elif error is None and not output and not tool_calls and structured_output is None:
+    schema = output_schema_from(task.output_schema, task.metadata)
+    parsed_output: Any = None
+    parsed_output_available = False
+    if error is None and schema is not None:
+        resolution = resolve_structured_output(
+            schema,
+            output,
+            sdk_label="Claude Agent SDK",
+            native=structured_output,
+        )
+        if resolution.error is not None:
+            finish_reason = "failed"
+            error = resolution.error
+        else:
+            parsed_output = resolution.value
+            parsed_output_available = resolution.available
+    if error is None and not output and not tool_calls and not parsed_output_available:
         finish_reason = "failed"
         error = empty_completion_error("Claude Agent SDK")
     usage = Usage(
@@ -535,7 +543,8 @@ def _translate_messages(
         output=output,
         finish_reason=finish_reason,
         error=error,
-        parsed_output=structured_output,
+        parsed_output=parsed_output,
+        parsed_output_available=parsed_output_available,
         usage=usage,
         tool_calls=tuple(tool_calls),
         session_id=session_id,

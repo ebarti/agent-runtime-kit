@@ -213,6 +213,7 @@ async def test_antigravity_runtime_runs_with_injected_sdk(tmp_path: Path) -> Non
 
     assert result.output == "done: task"
     assert result.parsed_output == {"ok": True}
+    assert result.parsed_output_available is True
     assert result.session_id == "ag-session"
     # ToolCall + its ToolResult must collapse into ONE completed audit entry,
     # not a requested/ok pair — this is the cardinality contract.
@@ -224,6 +225,46 @@ async def test_antigravity_runtime_runs_with_injected_sdk(tmp_path: Path) -> Non
     assert FakeAgent.last_config is not None
     assert FakeAgent.last_config.kwargs["workspaces"] == [str(tmp_path)]
     assert FakeAgent.last_config.kwargs["api_key"] == "key"
+
+
+@pytest.mark.asyncio
+async def test_antigravity_rejects_structured_output_that_misses_schema(tmp_path: Path) -> None:
+    runtime = make_runtime(data_dir=tmp_path)
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "integer"}},
+        "required": ["ok"],
+    }
+
+    result = await runtime.run(AgentTask(goal="x", output_schema=schema))
+
+    assert result.finish_reason == "failed"
+    assert "does not conform" in (result.error or "")
+    assert result.parsed_output_available is False
+    assert result.session_id == "ag-session"
+    assert result.usage.input_tokens == 4
+    assert result.tool_calls
+
+
+@pytest.mark.asyncio
+async def test_antigravity_accepts_textual_json_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def null_chunks(_prompt: str):
+        yield FakeTypes.Text("null")
+
+    async def no_native_output(_response: FakeResponse) -> None:
+        return None
+
+    monkeypatch.setattr(FakeAgent, "chunks_factory", staticmethod(null_chunks))
+    monkeypatch.setattr(FakeResponse, "structured_output", no_native_output)
+    runtime = make_runtime(data_dir=tmp_path)
+
+    result = await runtime.run(AgentTask(goal="x", output_schema={"type": "null"}))
+
+    assert result.finish_reason == "done"
+    assert result.parsed_output is None
+    assert result.parsed_output_available is True
 
 
 @pytest.mark.asyncio

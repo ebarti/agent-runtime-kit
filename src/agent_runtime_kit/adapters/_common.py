@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import inspect
-import json
 import os
 from collections.abc import Iterable, Mapping
 from importlib import metadata, util
 from typing import Any
 
 from agent_runtime_kit._errors import UnsupportedTaskInputError
+from agent_runtime_kit._schema import (
+    STRUCTURED_OUTPUT_MISSING as STRUCTURED_OUTPUT_MISSING,
+)
+from agent_runtime_kit._schema import (
+    resolve_structured_output as resolve_structured_output,
+)
+from agent_runtime_kit._schema import validate_output_schema
 from agent_runtime_kit._types import (
     AgentRuntimeKind,
     AgentTask,
@@ -88,33 +94,16 @@ def output_schema_from(
     """Resolve output schema from first-class task field or metadata aliases."""
 
     if task_output_schema is not None:
+        # Revalidate at dispatch: AgentTask's mapping freeze is deliberately
+        # shallow, so nested schema values may have changed since construction.
+        validate_output_schema(task_output_schema)
         return task_output_schema
     for key in ("output_schema", "json_schema"):
         raw = metadata_values.get(key)
         if isinstance(raw, Mapping):
+            validate_output_schema(raw)
             return raw
     return None
-
-
-def parse_json_output(output: str) -> Any | None:
-    """Best-effort JSON parsing for structured-output fallbacks."""
-
-    try:
-        return json.loads(output)
-    except json.JSONDecodeError:
-        return None
-
-
-def structured_output_unsatisfied_error(sdk_label: str) -> str:
-    """Uniform error text when a requested ``output_schema`` produced no JSON.
-
-    The adapters verify JSON-parseability, not schema conformance (validation
-    stays with the vendor SDK and the caller), so the message claims exactly
-    that. Kept in one place so all three adapters fail identically instead of
-    each inventing its own message (and, previously, its own verdict).
-    """
-
-    return f"{sdk_label} returned no parseable JSON for the requested output_schema"
 
 
 def empty_completion_error(sdk_label: str) -> str:

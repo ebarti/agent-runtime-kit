@@ -45,7 +45,9 @@ import the names from the top-level package instead.
   supports a bounded, documented subset of the typing system and raises
   `OutputTypeError` on anything outside it (Pydantic-style models are used
   through their own `model_json_schema`/`model_validate(strict=True)` when
-  present). Raw schemas are checked at construction.
+  present). Raw schemas are checked at construction and again at dispatch
+  because their nested values are only shallow-frozen. Every built-in adapter
+  validates returned structured values locally.
 - **Structured-output presence is explicit.** `parsed_output_available` is true
   for a validated payload, including JSON `null`. Existing non-null custom
   runtime results opt in automatically; a custom runtime returning valid null

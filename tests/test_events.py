@@ -197,6 +197,46 @@ async def test_fake_sdk_harness_simulates_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fake_sdk_harness_fails_schema_mismatch_and_emits_failed_event() -> None:
+    sink = RecordingEventSink()
+    runtime = FakeSDKRuntime(
+        FakeSDKHarness(
+            FakeSDKScenario(output='{"count": "bad"}', structured_output={"count": "bad"})
+        )
+    )
+    schema = {
+        "type": "object",
+        "properties": {"count": {"type": "integer"}},
+        "required": ["count"],
+    }
+
+    result = await runtime.run(AgentTask(goal="count", output_schema=schema, event_sink=sink))
+
+    assert result.finish_reason == "failed"
+    assert result.parsed_output_available is False
+    assert [event["name"] for event in sink.events][-1] == "agent.task.failed"
+
+
+@pytest.mark.asyncio
+async def test_fake_sdk_harness_can_script_valid_json_null() -> None:
+    runtime = FakeSDKRuntime(
+        FakeSDKHarness(
+            FakeSDKScenario(
+                output="",
+                structured_output=None,
+                structured_output_available=True,
+            )
+        )
+    )
+
+    result = await runtime.run(AgentTask(goal="null", output_schema={"type": "null"}))
+
+    assert result.finish_reason == "done"
+    assert result.parsed_output is None
+    assert result.parsed_output_available is True
+
+
+@pytest.mark.asyncio
 async def test_fake_sdk_harness_simulates_timeout() -> None:
     runtime = FakeSDKRuntime(FakeSDKHarness(FakeSDKScenario(timeout=True)))
 

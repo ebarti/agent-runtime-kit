@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError, UnsupportedTaskInputError
+from agent_runtime_kit._schema import resolve_structured_output
 from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentResult,
@@ -39,8 +40,13 @@ class FakeSDKScenario:
     timeout: bool = False
     session_id: str | None = "fake-session"
     structured_output: Any | None = None
+    structured_output_available: bool = False
     tool_events: tuple[ToolCallAudit, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.structured_output is not None and not self.structured_output_available:
+            object.__setattr__(self, "structured_output_available", True)
 
 
 class FakeSDKHarness:
@@ -76,9 +82,30 @@ class FakeSDKHarness:
                 session_id=scenario.session_id,
                 metadata=dict(scenario.metadata),
             )
+        parsed_output = scenario.structured_output
+        parsed_output_available = scenario.structured_output_available
+        if task.output_schema is not None:
+            resolution = resolve_structured_output(
+                task.output_schema,
+                scenario.output,
+                sdk_label="Fake SDK",
+                native=scenario.structured_output,
+                native_available=scenario.structured_output_available,
+            )
+            if resolution.error is not None:
+                return AgentResult(
+                    output=scenario.output,
+                    finish_reason="failed",
+                    error=resolution.error,
+                    session_id=scenario.session_id,
+                    metadata=dict(scenario.metadata),
+                )
+            parsed_output = resolution.value
+            parsed_output_available = resolution.available
         return AgentResult(
             output=scenario.output,
-            parsed_output=scenario.structured_output,
+            parsed_output=parsed_output,
+            parsed_output_available=parsed_output_available,
             tool_calls=scenario.tool_events,
             session_id=scenario.session_id,
             rounds=1,

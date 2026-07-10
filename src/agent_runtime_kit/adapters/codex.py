@@ -30,9 +30,8 @@ from agent_runtime_kit.adapters._common import (
     optional_int,
     output_schema_from,
     package_availability,
-    parse_json_output,
     reject_unsupported_inputs,
-    structured_output_unsatisfied_error,
+    resolve_structured_output,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -499,19 +498,25 @@ def _translate_run_result(
     # status is "completed" or missing (dict-based fakes): treat as success and keep
     # the empty-output and schema-parse-failure branches.
     schema = output_schema_from(task.output_schema, task.metadata)
-    parsed = parse_json_output(output) if schema is not None else None
-    if schema is not None and parsed is None:
-        return AgentResult(
-            output=output,
-            finish_reason="failed",
-            error=structured_output_unsatisfied_error("Codex SDK"),
-            usage=usage,
-            tool_calls=tool_calls,
-            session_id=session_id,
-            rounds=1,
-            metadata=metadata,
-        )
-    if not output and not tool_calls and parsed is None:
+    parsed: Any = None
+    parsed_available = False
+    if schema is not None:
+        resolution = resolve_structured_output(schema, output, sdk_label="Codex SDK")
+        if resolution.error is None:
+            parsed = resolution.value
+            parsed_available = resolution.available
+        else:
+            return AgentResult(
+                output=output,
+                finish_reason="failed",
+                error=resolution.error,
+                usage=usage,
+                tool_calls=tool_calls,
+                session_id=session_id,
+                rounds=1,
+                metadata=metadata,
+            )
+    if not output and not tool_calls and not parsed_available:
         # Empty output alone is not a failure when the turn did real tool work;
         # only a completion with nothing usable is (matches Claude/Antigravity).
         return AgentResult(
@@ -527,6 +532,7 @@ def _translate_run_result(
     return AgentResult(
         output=output,
         parsed_output=parsed,
+        parsed_output_available=parsed_available,
         usage=usage,
         tool_calls=tool_calls,
         session_id=session_id,
@@ -737,4 +743,3 @@ def _uses_bedrock_provider(config_overrides: tuple[str, ...]) -> bool:
         if normalized_key == "model_provider" and normalized_value == "amazon-bedrock":
             return True
     return False
-
