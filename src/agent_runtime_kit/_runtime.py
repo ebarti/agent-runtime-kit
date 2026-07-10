@@ -1,4 +1,4 @@
-"""Dependency-free runtime implementations used by tests and examples."""
+"""Vendor-independent runtime implementations used by tests and examples."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from agent_runtime_kit._errors import UnsupportedTaskInputError
+from agent_runtime_kit._schema import resolve_structured_output
 from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentResult,
@@ -64,6 +65,19 @@ class FakeAgentRuntime:
             _ensure_supported(self.kind, self.capabilities, task)
             output = self._output if self._output is not None else f"Fake result for: {task.goal}"
             parsed = {"output": output} if task.output_schema is not None else None
+            parsed_available = parsed is not None
+            structured_error: str | None = None
+            if task.output_schema is not None:
+                resolution = resolve_structured_output(
+                    task.output_schema,
+                    output,
+                    sdk_label="Fake runtime",
+                    native=parsed,
+                    native_available=True,
+                )
+                parsed = resolution.value
+                parsed_available = resolution.available
+                structured_error = resolution.error
             tool_call = ToolCallAudit(
                 tool_name="fake",
                 arguments={"goal": task.goal},
@@ -94,7 +108,10 @@ class FakeAgentRuntime:
             )
             result = AgentResult(
                 output=output,
+                finish_reason="failed" if structured_error is not None else "done",
+                error=structured_error,
                 parsed_output=parsed,
+                parsed_output_available=parsed_available,
                 tool_calls=(tool_call,),
                 session_id=task.session_id or task.task_id,
                 rounds=1,
@@ -103,6 +120,9 @@ class FakeAgentRuntime:
         except Exception as exc:
             await safe_emit(task, task_failed_event(task, self.kind, error=str(exc)))
             raise
+        if result.error is not None:
+            await safe_emit(task, task_failed_event(task, self.kind, error=result.error))
+            return result
         await safe_emit(task, task_completed_event(task, self.kind, result))
         return result
 

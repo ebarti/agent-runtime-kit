@@ -5,9 +5,16 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict
 
 import pytest
+from pydantic import BaseModel
 
-from agent_runtime_kit import OutputTypeError
-from agent_runtime_kit._schema import json_schema_for, parse_as
+from agent_runtime_kit import OutputSchemaError, OutputTypeError
+from agent_runtime_kit._schema import (
+    json_schema_for,
+    output_value_error,
+    parse_as,
+    resolve_structured_output,
+    validate_output_schema,
+)
 
 
 class Color(str, enum.Enum):
@@ -198,3 +205,69 @@ def test_model_protocol_bad_schema_shape_fails_closed() -> None:
 
     with pytest.raises(OutputTypeError, match="expected a mapping"):
         json_schema_for(BadDuck)
+
+
+def test_validate_output_schema_accepts_known_dialects_and_rejects_bad_definitions() -> None:
+    validate_output_schema({"type": "object", "properties": {"count": {"type": "integer"}}})
+    validate_output_schema(
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "null",
+        }
+    )
+
+    with pytest.raises(OutputSchemaError, match="invalid output_schema"):
+        validate_output_schema({"required": "count"})
+    with pytest.raises(OutputSchemaError, match="unknown .* dialect"):
+        validate_output_schema({"$schema": "https://example.invalid/unknown-schema"})
+    with pytest.raises(OutputSchemaError, match="not JSON-serializable"):
+        validate_output_schema({"enum": [{1, 2}]})
+
+
+def test_output_value_error_reports_nested_json_path() -> None:
+    mismatch = output_value_error(
+        {
+            "type": "object",
+            "properties": {
+                "item": {
+                    "type": "object",
+                    "properties": {"count": {"type": "integer"}},
+                }
+            },
+        },
+        {"item": {"count": "42"}},
+    )
+
+    assert mismatch is not None
+    assert "$.item.count" in mismatch
+
+
+def test_structured_output_resolution_distinguishes_null_absence_and_mismatch() -> None:
+    valid_null = resolve_structured_output({"type": "null"}, "null", sdk_label="Test SDK")
+    missing = resolve_structured_output({"type": "null"}, "not JSON", sdk_label="Test SDK")
+    explicit_null = resolve_structured_output(
+        {"type": "null"},
+        "",
+        sdk_label="Test SDK",
+        native=None,
+        native_available=True,
+    )
+    mismatch = resolve_structured_output(
+        {"type": "object", "required": ["ok"]},
+        '{"wrong": true}',
+        sdk_label="Test SDK",
+    )
+
+    assert valid_null.available is True and valid_null.value is None
+    assert explicit_null.available is True and explicit_null.value is None
+    assert missing.available is False and "no parseable JSON" in (missing.error or "")
+    assert mismatch.available is False and "does not conform" in (mismatch.error or "")
+
+
+def test_pydantic_model_validation_is_strict() -> None:
+    class CountModel(BaseModel):
+        count: int
+
+    assert parse_as(CountModel, {"count": 42}).count == 42
+    with pytest.raises(OutputTypeError, match="strict=True"):
+        parse_as(CountModel, {"count": "42"})

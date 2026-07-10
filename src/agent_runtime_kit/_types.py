@@ -377,6 +377,11 @@ class AgentTask:
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
         if self.output_schema is not None:
+            # Local import avoids an import cycle: _schema's typed errors import
+            # AgentRuntimeKind from this module.
+            from agent_runtime_kit._schema import validate_output_schema
+
+            validate_output_schema(self.output_schema)
             object.__setattr__(self, "output_schema", _freeze_mapping(self.output_schema))
 
 
@@ -394,9 +399,15 @@ class AgentResult:
     session_id: str | None = None
     rounds: int = 0
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    # None is both valid JSON and the historical missing-value sentinel. This
+    # trailing bit preserves the distinction without shifting existing positional
+    # constructor arguments.
+    parsed_output_available: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
+        if self.parsed_output is not None and not self.parsed_output_available:
+            object.__setattr__(self, "parsed_output_available", True)
 
     @property
     def cost_usd(self) -> float:
@@ -420,7 +431,7 @@ class ParsedResult(AgentResult, Generic[_ParsedT]):
 
     @property
     def parsed(self) -> _ParsedT | None:
-        """The validated instance, or ``None`` when the run failed."""
+        """The validated instance; use parsed_output_available to distinguish null."""
 
         return cast("_ParsedT | None", self.parsed_output)
 

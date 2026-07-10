@@ -44,7 +44,12 @@ import the names from the top-level package instead.
   `KIND_ALIASES` mapping; exact kind strings always work. `output_type=`
   supports a bounded, documented subset of the typing system and raises
   `OutputTypeError` on anything outside it (Pydantic-style models are used
-  through their own `model_json_schema`/`model_validate` when present).
+  through their own `model_json_schema`/`model_validate(strict=True)` when
+  present). Raw schemas are checked at construction.
+- **Structured-output presence is explicit.** `parsed_output_available` is true
+  for a validated payload, including JSON `null`. Existing non-null custom
+  runtime results opt in automatically; a custom runtime returning valid null
+  must set the flag explicitly.
 
 ## Vendor SDK version policy
 

@@ -3,6 +3,7 @@
 from agent_runtime_kit._errors import (
     AgentRuntimeError,
     AgentRuntimeUnavailableError,
+    OutputSchemaError,
     OutputTypeError,
     RuntimeNotRegisteredError,
     UnsupportedTaskInputError,
@@ -59,6 +60,7 @@ __all__ = [
     "FinishReason",
     "KIND_ALIASES",
     "McpServerConfig",
+    "OutputSchemaError",
     "OutputTypeError",
     "ParsedResult",
     "PermissionMode",

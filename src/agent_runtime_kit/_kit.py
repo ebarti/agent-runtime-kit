@@ -456,8 +456,9 @@ def _parse_result(output_type: type[_T], result: AgentResult) -> ParsedResult[_T
         # Never expose an adapter's unvalidated raw payload through the typed
         # ``ParsedResult`` surface when the adapter itself reported failure.
         values["parsed_output"] = None
+        values["parsed_output_available"] = False
         return cast("ParsedResult[_T]", ParsedResult(**values))
-    if result.parsed_output is None:
+    if not result.parsed_output_available:
         return cast("ParsedResult[_T]", ParsedResult(**values))
     try:
         instance = parse_as(output_type, result.parsed_output)
@@ -466,6 +467,7 @@ def _parse_result(output_type: type[_T], result: AgentResult) -> ParsedResult[_T
             finish_reason=FinishReason.FAILED.value,
             error=f"structured output does not conform to {output_type.__name__}: {exc}",
             parsed_output=None,
+            parsed_output_available=False,
         )
         return cast("ParsedResult[_T]", ParsedResult(**values))
     values["parsed_output"] = instance

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from agent_runtime_kit import (
     AgentKit,
@@ -27,6 +28,10 @@ from agent_runtime_kit.testing import RecordingEventSink
 class Point:
     x: int
     y: int
+
+
+class CountModel(BaseModel):
+    count: int
 
 
 class RecordingRuntime:
@@ -227,6 +232,46 @@ async def test_kit_output_type_mismatch_fails_the_result_not_the_call() -> None:
     assert result.finish_reason == "failed"
     assert result.error is not None and "Point" in result.error
     assert result.parsed is None
+    assert result.parsed_output_available is False
+
+
+@pytest.mark.asyncio
+async def test_kit_output_type_uses_strict_pydantic_validation() -> None:
+    runtime = RecordingRuntime(
+        AgentResult(output='{"count": "42"}', parsed_output={"count": "42"})
+    )
+
+    result = await AgentKit(register_default_adapters=False).run(
+        runtime,
+        goal="count",
+        output_type=CountModel,
+    )
+
+    assert result.finish_reason == "failed"
+    assert "strict=True" in (result.error or "")
+    assert result.parsed_output_available is False
+
+
+@pytest.mark.asyncio
+async def test_kit_output_type_accepts_available_json_null() -> None:
+    runtime = RecordingRuntime(
+        AgentResult(
+            output="null",
+            parsed_output=None,
+            parsed_output_available=True,
+        )
+    )
+
+    result = await AgentKit(register_default_adapters=False).run(
+        runtime,
+        goal="return null",
+        output_type=type(None),
+    )
+
+    assert result.finish_reason == "done"
+    assert result.error is None
+    assert result.parsed is None
+    assert result.parsed_output_available is True
 
 
 @pytest.mark.asyncio
@@ -258,6 +303,7 @@ async def test_kit_output_type_never_leaks_failed_raw_payload() -> None:
     assert result.finish_reason == "failed"
     assert result.error == "vendor rejected structured output"
     assert result.parsed_output is None
+    assert result.parsed_output_available is False
     assert result.parsed is None
 
 
