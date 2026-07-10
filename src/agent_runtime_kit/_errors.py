@@ -38,6 +38,10 @@ class OutputTypeError(AgentRuntimeError, TypeError):
     """
 
 
+class OutputSchemaError(AgentRuntimeError, ValueError):
+    """An output_schema is not a valid JSON Schema."""
+
+
 class RuntimeNotRegisteredError(AgentRuntimeError, LookupError):
     """No runtime factory is registered for the requested runtime kind."""
 

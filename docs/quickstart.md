@@ -51,9 +51,9 @@ asyncio.run(main())
 
 ## Typed structured output
 
-Pass a type instead of hand-writing JSON schema. Dataclasses and `TypedDict`s
-work out of the box (no dependency); Pydantic v2 models are used through their
-own `model_json_schema`/`model_validate` when you have Pydantic installed.
+Pass a type instead of hand-writing JSON Schema. Dataclasses and `TypedDict`s
+work without Pydantic; Pydantic v2 models are used through their own
+`model_json_schema`/`model_validate` methods and validated with `strict=True`.
 
 ```python
 from dataclasses import dataclass
@@ -75,17 +75,19 @@ async def main() -> None:
             goal="Summarize this repository",
             output_type=RepoSummary,
         )
-        if result.parsed is not None:
+        if result.parsed_output_available:
             print(result.parsed.languages)  # typed: list[str]
         else:
             print(result.error)
 ```
 
-A payload that does not conform yields `finish_reason="failed"` with the
-mismatch in `result.error` — the same convention the adapters use for
-unsatisfied structured output. Unsupported annotations (sets, plain unions,
-...) raise `OutputTypeError` at call time rather than sending a half-true
-schema.
+A malformed raw `output_schema` raises `OutputSchemaError` before execution.
+`AgentKit` strictly validates values requested with `output_type`; a mismatch
+yields `finish_reason="failed"` with the details in `result.error`.
+Unsupported Python annotations (sets, plain unions, ...) raise
+`OutputTypeError` at call time. For nullable schemas,
+`parsed_output_available=True` with `parsed_output=None` represents valid JSON
+`null`.
 
 ## Events and custom runtimes
 

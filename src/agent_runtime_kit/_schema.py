@@ -1,4 +1,4 @@
-"""Dependency-free bridge between Python types and JSON schema.
+"""Bridge between Python types, JSON Schema, and structured payloads.
 
 ``json_schema_for`` turns an ``output_type`` into the JSON schema sent to the
 vendor SDK; ``parse_as`` turns the returned payload back into an instance of
@@ -17,12 +17,19 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import inspect
+import json
 import types
 import typing
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from agent_runtime_kit._errors import OutputTypeError
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, best_match
+from jsonschema.validators import validator_for
+
+from agent_runtime_kit._errors import OutputSchemaError, OutputTypeError
 
 # Deep enough for any sane payload model; recursive dataclasses hit this bound
 # and fail closed instead of overflowing.
@@ -62,13 +69,114 @@ def parse_as(tp: Any, value: Any) -> Any:
     """
 
     if supports_model_protocol(tp):
+        validator = tp.model_validate
+        validate_kwargs: dict[str, Any] = {}
         try:
-            return tp.model_validate(value)
+            signature = inspect.signature(validator)
+        except (TypeError, ValueError):
+            signature = None
+        if signature is not None and (
+            "strict" in signature.parameters
+            or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in signature.parameters.values()
+            )
+        ):
+            validate_kwargs["strict"] = True
+        try:
+            return validator(value, **validate_kwargs)
         except Exception as exc:
+            strict_note = "(strict=True)" if validate_kwargs else ""
             raise OutputTypeError(
-                f"{_name(tp)}.model_validate() rejected the payload: {exc}"
+                f"{_name(tp)}.model_validate{strict_note} rejected the payload: {exc}"
             ) from exc
     return _parse(tp, value, path="$", depth=0)
+
+
+def validate_output_schema(schema: Mapping[str, Any]) -> None:
+    """Raise OutputSchemaError unless schema is valid and JSON-serializable."""
+
+    materialized = dict(schema)
+    try:
+        json.dumps(materialized, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise OutputSchemaError(f"invalid output_schema: not JSON-serializable: {exc}") from exc
+
+    dialect = materialized.get("$schema")
+    default_validator: Any = Draft202012Validator if dialect is None else None
+    validator_cls = validator_for(
+        materialized,
+        default=default_validator,
+    )
+    if validator_cls is None:
+        raise OutputSchemaError(f"invalid output_schema: unknown $schema dialect {dialect!r}")
+    try:
+        validator_cls.check_schema(materialized)
+    except SchemaError as exc:
+        raise OutputSchemaError(f"invalid output_schema: {exc.message}") from exc
+
+
+def output_value_error(schema: Mapping[str, Any], value: Any) -> str | None:
+    """Return a concise instance-conformance error, or None when value is valid."""
+
+    materialized = dict(schema)
+    validate_output_schema(materialized)
+    validator_cls = validator_for(materialized, default=Draft202012Validator)
+    validator = validator_cls(materialized)
+    error = best_match(validator.iter_errors(value))
+    if error is None:
+        return None
+    return f"{error.json_path}: {error.message}"
+
+
+STRUCTURED_OUTPUT_MISSING = object()
+
+
+@dataclass(frozen=True)
+class StructuredOutputResolution:
+    """A locally validated output with explicit presence semantics."""
+
+    value: Any = None
+    available: bool = False
+    error: str | None = None
+
+
+def resolve_structured_output(
+    schema: Mapping[str, Any],
+    output: str,
+    *,
+    sdk_label: str,
+    native: Any = STRUCTURED_OUTPUT_MISSING,
+    native_available: bool | None = None,
+) -> StructuredOutputResolution:
+    """Resolve native/text JSON, preserve valid null, and enforce its schema."""
+
+    validate_output_schema(schema)
+    if native_available is None:
+        native_available = native is not STRUCTURED_OUTPUT_MISSING and native is not None
+
+    value = native
+    available = native_available
+    if not available:
+        try:
+            value = json.loads(output)
+            available = True
+        except json.JSONDecodeError:
+            value = None
+
+    if not available:
+        return StructuredOutputResolution(
+            error=f"{sdk_label} returned no parseable JSON for the requested output_schema"
+        )
+    mismatch = output_value_error(schema, value)
+    if mismatch is not None:
+        return StructuredOutputResolution(
+            error=(
+                f"{sdk_label} returned structured output that does not conform to "
+                f"output_schema: {mismatch}"
+            )
+        )
+    return StructuredOutputResolution(value=value, available=True)
 
 
 def _schema(tp: Any, *, depth: int) -> dict[str, Any]:

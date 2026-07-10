@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Core JSON Schema validation via `jsonschema`, including construction-time
+  schema checks and `OutputSchemaError` for malformed definitions.
+- `AgentResult.parsed_output_available` distinguishes a valid JSON `null` from
+  absent or rejected structured output.
+
+### Changed
+
+- Pydantic structured-output parsing now requests strict validation, so values
+  such as `"42"` no longer coerce into integer fields.
+
 ### Fixed
 
 - `AgentKit.run(task=...)` now rejects every explicitly supplied per-field task

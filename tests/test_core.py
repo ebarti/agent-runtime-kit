@@ -18,6 +18,7 @@ from agent_runtime_kit import (
     FilesystemAccess,
     FinishReason,
     McpServerConfig,
+    OutputSchemaError,
     PermissionMode,
     PermissionProfile,
     RuntimeAvailability,
@@ -120,6 +121,22 @@ def test_agent_task_does_not_leak_caller_mapping() -> None:
         task.metadata["model"] = "nope"  # type: ignore[index]
 
 
+def test_agent_task_rejects_invalid_output_schema_at_construction() -> None:
+    with pytest.raises(OutputSchemaError, match="invalid output_schema"):
+        AgentTask(goal="g", output_schema={"required": "not-an-array"})
+
+
+def test_agent_result_distinguishes_absent_output_from_valid_null() -> None:
+    absent = AgentResult(output="")
+    inferred = AgentResult(output="", parsed_output={"ok": True})
+    valid_null = AgentResult(output="null", parsed_output=None, parsed_output_available=True)
+
+    assert absent.parsed_output_available is False
+    assert inferred.parsed_output_available is True
+    assert valid_null.parsed_output is None
+    assert valid_null.parsed_output_available is True
+
+
 @pytest.mark.parametrize(
     ("instance", "field_name"),
     [
@@ -217,3 +234,22 @@ async def test_fake_runtime_rejects_unsupported_structured_output() -> None:
         await runtime.run(task)
 
     assert exc_info.value.field == "output_schema"
+
+
+@pytest.mark.asyncio
+async def test_fake_runtime_fails_when_generated_output_does_not_match_schema() -> None:
+    runtime = FakeAgentRuntime(output="done")
+    task = AgentTask(
+        goal="return count",
+        output_schema={
+            "type": "object",
+            "properties": {"count": {"type": "integer"}},
+            "required": ["count"],
+        },
+    )
+
+    result = await runtime.run(task)
+
+    assert result.finish_reason == "failed"
+    assert "does not conform" in (result.error or "")
+    assert result.parsed_output_available is False
