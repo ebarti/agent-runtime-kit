@@ -33,6 +33,7 @@ from agent_runtime_kit._types import (
     Usage,
 )
 from agent_runtime_kit.adapters._common import (
+    VendorCleanupQuarantine,
     close_vendor_resource,
     empty_completion_error,
     filter_supported_kwargs,
@@ -117,6 +118,7 @@ class AntigravityAgentRuntime:
         self._agent_lock = asyncio.Lock()
         self._agent_run_lock = asyncio.Lock()
         self._task_controller = RuntimeTaskController(self.kind)
+        self._cleanup_quarantine = VendorCleanupQuarantine()
 
     async def __aenter__(self) -> AntigravityAgentRuntime:
         return self
@@ -233,6 +235,7 @@ class AntigravityAgentRuntime:
     async def run(self, task: AgentTask) -> AgentResult:
         """Execute one deadline- and cancellation-controlled Antigravity task."""
 
+        self._cleanup_quarantine.ensure_ready(self.kind)
         return await self._task_controller.run(task, lambda: self._run_task(task))
 
     async def _run_task(self, task: AgentTask) -> AgentResult:
@@ -290,6 +293,7 @@ class AntigravityAgentRuntime:
         in-flight ``run()`` instead of closing the agent mid-turn.
         """
 
+        self._cleanup_quarantine.ensure_ready(self.kind)
         async with self._agent_run_lock:
             await self._close_agent()
 
@@ -418,6 +422,7 @@ class AntigravityAgentRuntime:
                     # already held, so close under the agent lock only and never
                     # let cleanup mask the original error.
                     close_exc = await finish_vendor_cleanup(self._close_agent())
+                    self._cleanup_quarantine.track(close_exc)
                     if close_exc is not None:
                         logger.warning(
                             "failed to close Antigravity agent after run failure: %s",
@@ -563,6 +568,7 @@ class AntigravityAgentRuntime:
                 agent = await enter() if callable(enter) else context
             except BaseException:
                 close_exc = await finish_vendor_cleanup(close_vendor_resource(context))
+                self._cleanup_quarantine.track(close_exc)
                 if close_exc is not None:
                     logger.warning(
                         "failed to close Antigravity agent after startup failure: %s", close_exc

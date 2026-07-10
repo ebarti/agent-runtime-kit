@@ -5,9 +5,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import agent_runtime_kit._control as control_module
 from agent_runtime_kit import (
     AgentKit,
     AgentResult,
+    AgentRuntimeError,
     AgentRuntimeKind,
     AgentTask,
     AgentTaskTimeoutError,
@@ -18,7 +20,10 @@ from agent_runtime_kit import (
     RuntimeAvailability,
     RuntimeRegistry,
 )
-from agent_runtime_kit.adapters._common import finish_vendor_cleanup
+from agent_runtime_kit.adapters._common import (
+    VendorCleanupQuarantine,
+    finish_vendor_cleanup,
+)
 from agent_runtime_kit.testing import RecordingEventSink
 
 
@@ -213,6 +218,29 @@ class CleanupBlockingRuntime(FakeAgentRuntime):
             except asyncio.CancelledError:
                 self.cleanup_interrupted = True
                 raise
+
+
+class StubbornCleanupRuntime(FakeAgentRuntime):
+    """Keep a deadline-cancelled operation alive until a test releases it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.cleanup_started = asyncio.Event()
+        self.release_cleanup = asyncio.Event()
+
+    async def _run_task(self, task: AgentTask) -> AgentResult:
+        if task.goal == "replacement":
+            return AgentResult(output="replacement")
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.cleanup_started.set()
+            try:
+                await self.release_cleanup.wait()
+            except asyncio.CancelledError:
+                await self.release_cleanup.wait()
 
 
 def test_deadline_requires_timezone_and_normalizes_to_utc() -> None:
@@ -584,8 +612,41 @@ async def test_vendor_cleanup_helper_has_bounded_liveness() -> None:
     assert cleanup_started.is_set()
     assert cleanup_cancelled.is_set()
     assert isinstance(outcome, TimeoutError)
+    quarantine = VendorCleanupQuarantine()
+    quarantine.track(outcome)
+    with pytest.raises(AgentRuntimeError, match="cleanup still pending"):
+        quarantine.ensure_ready(AgentRuntimeKind.FAKE)
     release_cleanup.set()
     await asyncio.sleep(0)
+    quarantine.ensure_ready(AgentRuntimeKind.FAKE)
+
+
+@pytest.mark.asyncio
+async def test_detached_operation_quarantines_runtime_until_cleanup_settles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(control_module, "_OPERATION_CLEANUP_TIMEOUT", 0.01)
+    runtime = StubbornCleanupRuntime()
+
+    with pytest.raises(AgentTaskTimeoutError):
+        await runtime.run(
+            AgentTask(
+                goal="stubborn",
+                task_id="old",
+                deadline=datetime.now(tz=timezone.utc) + timedelta(milliseconds=10),
+            )
+        )
+
+    assert runtime.cleanup_started.is_set()
+    with pytest.raises(AgentRuntimeError, match="still cleaning up"):
+        await runtime.run(AgentTask(goal="replacement", task_id="new"))
+
+    runtime.release_cleanup.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert (
+        await runtime.run(AgentTask(goal="replacement", task_id="new"))
+    ).output == "replacement"
 
 
 @pytest.mark.asyncio

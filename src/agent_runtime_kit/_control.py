@@ -39,6 +39,7 @@ class RuntimeTaskController:
     def __init__(self, kind: AgentRuntimeKind | str) -> None:
         self.kind = AgentRuntimeKind.coerce(kind)
         self._active: dict[str, _ActiveRun] = {}
+        self._quarantined: set[asyncio.Future[Any]] = set()
 
     async def run(
         self,
@@ -50,6 +51,12 @@ class RuntimeTaskController:
         current = asyncio.current_task()
         if current is None:  # pragma: no cover - asyncio always supplies one here
             raise AgentRuntimeError("task control requires an active asyncio task")
+        self._quarantined = {item for item in self._quarantined if not item.done()}
+        if self._quarantined:
+            raise AgentRuntimeError(
+                f"{self.kind} has a cancelled operation still cleaning up; "
+                "wait for cleanup before starting another run"
+            )
         # These registry operations deliberately contain no await.  asyncio tasks
         # share one event-loop thread, so the check-and-set is atomic without a
         # cancellable lock acquisition.  The same is true of cleanup below.
@@ -127,11 +134,13 @@ class RuntimeTaskController:
             # Transition before emitting: cancellation of a slow sink must never
             # turn one timeout into a second, contradictory interrupted terminal.
             timed_out = True
-            await _cancel_and_settle(operation_task)
+            if not await _cancel_and_settle(operation_task):
+                self._quarantine(operation_task)
             await self._emit_timed_out(task, deadline)
             raise AgentTaskTimeoutError(self.kind, task.task_id, deadline)
         except asyncio.CancelledError:
-            await _cancel_and_settle(operation_task)
+            if not await _cancel_and_settle(operation_task):
+                self._quarantine(operation_task)
             if not timed_out:
                 await self._emit_interrupted(task)
             raise
@@ -171,6 +180,15 @@ class RuntimeTaskController:
             message=message,
         )
 
+    def _quarantine(self, operation: asyncio.Future[Any]) -> None:
+        self._quarantined.add(operation)
+
+        def release(completed: asyncio.Future[Any]) -> None:
+            self._quarantined.discard(completed)
+            _consume_operation_result(completed)
+
+        operation.add_done_callback(release)
+
 
 async def run_legacy_with_deadline(
     task: AgentTask,
@@ -186,7 +204,7 @@ async def run_legacy_with_deadline(
     return await controller.run(task, operation)
 
 
-async def _cancel_and_settle(operation: asyncio.Future[Any]) -> None:
+async def _cancel_and_settle(operation: asyncio.Future[Any]) -> bool:
     """Give a cancelled operation bounded, repeat-cancel-safe cleanup time."""
 
     operation.cancel()
@@ -195,19 +213,18 @@ async def _cancel_and_settle(operation: asyncio.Future[Any]) -> None:
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             operation.cancel()
-            operation.add_done_callback(_consume_operation_result)
-            return
+            return False
         try:
             await asyncio.wait_for(asyncio.shield(operation), timeout=remaining)
         except asyncio.CancelledError:
             continue
         except asyncio.TimeoutError:
             operation.cancel()
-            operation.add_done_callback(_consume_operation_result)
-            return
+            return False
         except Exception:
             break
     _consume_operation_result(operation)
+    return True
 
 
 def _consume_operation_result(operation: asyncio.Future[Any]) -> None:

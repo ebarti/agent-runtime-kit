@@ -11,7 +11,7 @@ from importlib import metadata
 from math import isfinite
 from typing import Any, Literal
 
-from agent_runtime_kit._errors import UnsupportedTaskInputError
+from agent_runtime_kit._errors import AgentRuntimeError, UnsupportedTaskInputError
 from agent_runtime_kit._schema import (
     STRUCTURED_OUTPUT_MISSING as STRUCTURED_OUTPUT_MISSING,
 )
@@ -30,6 +30,45 @@ from agent_runtime_kit.compatibility import compatibility_for
 
 ModelSource = Literal["task", "metadata", "constructor", "provider-native"]
 DEFAULT_VENDOR_CLEANUP_TIMEOUT = 5.0
+
+
+class VendorCleanupTimeoutError(TimeoutError):
+    """A bounded cleanup grace expired while teardown continues in quarantine."""
+
+    def __init__(self, timeout: float, pending: asyncio.Future[Any]) -> None:
+        self.timeout = timeout
+        self.pending = pending
+        super().__init__(f"vendor cleanup did not finish within {timeout:g} seconds")
+
+
+class VendorCleanupQuarantine:
+    """Fail new work fast while detached provider teardown still owns resources."""
+
+    def __init__(self) -> None:
+        self._pending: set[asyncio.Future[Any]] = set()
+
+    def track(self, error: BaseException | None) -> None:
+        if not isinstance(error, VendorCleanupTimeoutError):
+            return
+        pending = error.pending
+        if pending.done():
+            _consume_cleanup_result(pending)
+            return
+        self._pending.add(pending)
+
+        def release(completed: asyncio.Future[Any]) -> None:
+            self._pending.discard(completed)
+            _consume_cleanup_result(completed)
+
+        pending.add_done_callback(release)
+
+    def ensure_ready(self, kind: AgentRuntimeKind | str) -> None:
+        self._pending = {item for item in self._pending if not item.done()}
+        if self._pending:
+            raise AgentRuntimeError(
+                f"{kind} has provider cleanup still pending; wait before reusing "
+                "this runtime instance"
+            )
 
 
 @dataclass(frozen=True)
@@ -408,9 +447,7 @@ async def finish_vendor_cleanup(
         if remaining <= 0:
             cleanup.cancel()
             cleanup.add_done_callback(_consume_cleanup_result)
-            return TimeoutError(
-                f"vendor cleanup did not finish within {float(timeout):g} seconds"
-            )
+            return VendorCleanupTimeoutError(float(timeout), cleanup)
         try:
             await asyncio.wait_for(asyncio.shield(cleanup), timeout=remaining)
         except asyncio.CancelledError:
@@ -421,9 +458,7 @@ async def finish_vendor_cleanup(
         except asyncio.TimeoutError:
             cleanup.cancel()
             cleanup.add_done_callback(_consume_cleanup_result)
-            return TimeoutError(
-                f"vendor cleanup did not finish within {float(timeout):g} seconds"
-            )
+            return VendorCleanupTimeoutError(float(timeout), cleanup)
         except Exception:
             # The failure is retrieved and returned below so it can be logged
             # without replacing the run's original exception.

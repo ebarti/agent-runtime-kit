@@ -31,6 +31,7 @@ from agent_runtime_kit._types import (
 )
 from agent_runtime_kit.adapters._common import (
     STRUCTURED_OUTPUT_MISSING,
+    VendorCleanupQuarantine,
     close_vendor_resource,
     empty_completion_error,
     field_value,
@@ -106,6 +107,7 @@ class ClaudeAgentRuntime:
         self._client_lock = asyncio.Lock()
         self._client_run_lock = asyncio.Lock()
         self._task_controller = RuntimeTaskController(self.kind)
+        self._cleanup_quarantine = VendorCleanupQuarantine()
 
     async def __aenter__(self) -> ClaudeAgentRuntime:
         return self
@@ -170,6 +172,7 @@ class ClaudeAgentRuntime:
     async def run(self, task: AgentTask) -> AgentResult:
         """Execute one deadline- and cancellation-controlled Claude task."""
 
+        self._cleanup_quarantine.ensure_ready(self.kind)
         return await self._task_controller.run(task, lambda: self._run_task(task))
 
     async def _run_task(self, task: AgentTask) -> AgentResult:
@@ -240,6 +243,7 @@ class ClaudeAgentRuntime:
         in-flight ``run()`` to finish instead of closing the client mid-stream.
         """
 
+        self._cleanup_quarantine.ensure_ready(self.kind)
         async with self._client_run_lock:
             await self._close_client()
 
@@ -301,6 +305,7 @@ class ClaudeAgentRuntime:
                 # lock is already held, so close under the client lock only and
                 # never let cleanup mask the original error.
                 close_exc = await finish_vendor_cleanup(self._close_client())
+                self._cleanup_quarantine.track(close_exc)
                 if close_exc is not None:
                     logger.warning(
                         "failed to close Claude client after run failure: %s", close_exc
@@ -334,6 +339,7 @@ class ClaudeAgentRuntime:
                 close_exc = await finish_vendor_cleanup(
                     close_vendor_resource(client, try_disconnect=True)
                 )
+                self._cleanup_quarantine.track(close_exc)
                 if close_exc is not None:
                     logger.warning(
                         "failed to close Claude client after startup failure: %s", close_exc

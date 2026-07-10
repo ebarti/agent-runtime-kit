@@ -20,7 +20,9 @@ event). A deadline expiry emits an `agent.task.failed` event with
 `finish_reason="timed_out"`, cancels the in-flight provider coroutine, gives its
 cleanup a bounded five-second grace period, and raises `AgentTaskTimeoutError`
 (which is both an `AgentRuntimeError` and `TimeoutError`). Direct adapter calls
-honor `AgentTask(deadline=...)` too.
+honor `AgentTask(deadline=...)` too. If provider teardown remains wedged after
+that grace, the runtime instance is quarantined and rejects new runs rather than
+overlapping them; it becomes reusable when the detached cleanup finally settles.
 
 To cancel a task started through `AgentKit`, keep its task id and use the same
 runtime instance or cached kind:

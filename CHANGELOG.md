@@ -77,7 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider-native and therefore cannot be verified locally.
 - Cancellation now binds to one active task generation, unregisters without a
   cancellable lock window, emits at most one timeout/cancellation terminal, and
-  finishes reusable provider-process teardown under repeated cancellation.
+  gives reusable provider-process teardown a bounded grace period under repeated
+  cancellation. Runtime instances stay quarantined from new work while detached
+  teardown remains pending.
 
 ## 0.4.0 - 2026-07-02
 
