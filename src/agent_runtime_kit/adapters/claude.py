@@ -7,6 +7,7 @@ import inspect
 import logging
 import os
 from collections.abc import AsyncIterator, Iterable, Mapping
+from math import isfinite
 from typing import Any
 
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError
@@ -31,6 +32,7 @@ from agent_runtime_kit.adapters._common import (
     filter_supported_kwargs,
     fingerprint_value,
     metadata_str,
+    optional_int,
     optional_str,
     output_schema_from,
     package_availability,
@@ -470,8 +472,8 @@ def _translate_messages(
     tool_calls: list[ToolCallAudit] = []
     tool_use_ids: list[str | None] = []
     usage = Usage()
-    cost_usd = 0.0
-    session_id = task.session_id
+    cost_usd: float | None = None
+    session_id = _conversation_id(task)
     rounds = 0
     error: str | None = None
     finish_reason = "done"
@@ -495,7 +497,15 @@ def _translate_messages(
             if result_text and not content_parts:
                 content_parts.append(str(result_text))
             structured_output = field_value(message, "structured_output", structured_output)
-            cost_usd = float(field_value(message, "total_cost_usd", cost_usd) or cost_usd)
+            reported_cost = field_value(message, "total_cost_usd")
+            if reported_cost is not None:
+                try:
+                    candidate_cost = float(reported_cost)
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    if candidate_cost >= 0 and isfinite(candidate_cost):
+                        cost_usd = candidate_cost
             usage = _usage_from(field_value(message, "usage"), current=usage)
             rounds = int(field_value(message, "num_turns", rounds) or rounds)
             session_id = optional_str(field_value(message, "session_id")) or session_id
@@ -682,11 +692,20 @@ def _assistant_content(
 def _usage_from(value: Any, *, current: Usage) -> Usage:
     if not isinstance(value, Mapping):
         return current
-    input_tokens = int(value.get("input_tokens") or current.input_tokens)
-    output_tokens = int(value.get("output_tokens") or current.output_tokens)
-    cache_creation = int(value.get("cache_creation_input_tokens") or current.cache_creation_tokens)
-    cache_read = int(value.get("cache_read_input_tokens") or current.cache_read_tokens)
-    total = input_tokens + output_tokens + cache_creation + cache_read
+    input_tokens = optional_int(value.get("input_tokens"))
+    output_tokens = optional_int(value.get("output_tokens"))
+    cache_creation = optional_int(value.get("cache_creation_input_tokens"))
+    cache_read = optional_int(value.get("cache_read_input_tokens"))
+    input_tokens = current.input_tokens if input_tokens is None else input_tokens
+    output_tokens = current.output_tokens if output_tokens is None else output_tokens
+    cache_creation = current.cache_creation_tokens if cache_creation is None else cache_creation
+    cache_read = current.cache_read_tokens if cache_read is None else cache_read
+    components = (input_tokens, output_tokens, cache_creation, cache_read)
+    total = (
+        sum(component for component in components if component is not None)
+        if all(component is not None for component in components)
+        else None
+    )
     return Usage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,

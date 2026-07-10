@@ -228,6 +228,77 @@ async def test_antigravity_runtime_runs_with_injected_sdk(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_antigravity_usage_is_unknown_when_sdk_omits_metadata(tmp_path: Path) -> None:
+    class NoUsageAgent(FakeAgent):
+        async def chat(self, prompt: str) -> FakeResponse:
+            response = await super().chat(prompt)
+            response.usage_metadata = None
+            return response
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=NoUsageAgent,
+        config_cls=FakeConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    result = await runtime.run(AgentTask(goal="x"))
+
+    assert result.usage.input_tokens is None
+    assert result.usage.output_tokens is None
+    assert result.usage.total_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_antigravity_partial_and_zero_usage_preserve_presence(tmp_path: Path) -> None:
+    class PartialUsage:
+        prompt_token_count = 5
+        candidates_token_count = 7
+        total_token_count = 12
+
+    class ZeroUsage:
+        prompt_token_count = 0
+        candidates_token_count = 0
+        thoughts_token_count = 0
+        cached_content_token_count = 0
+        total_token_count = 0
+
+    class UsageAgent(FakeAgent):
+        usage: Any = None
+
+        async def chat(self, prompt: str) -> FakeResponse:
+            response = await super().chat(prompt)
+            response.usage_metadata = self.usage
+            return response
+
+    UsageAgent.usage = PartialUsage()
+    partial_runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=UsageAgent,
+        config_cls=FakeConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+    partial = await partial_runtime.run(AgentTask(goal="x"))
+
+    assert partial.usage.input_tokens is None
+    assert partial.usage.output_tokens is None
+    assert partial.usage.cache_read_tokens is None
+    assert partial.usage.total_tokens == 12
+
+    UsageAgent.usage = ZeroUsage()
+    zero = await partial_runtime.run(AgentTask(goal="x"))
+
+    assert zero.usage.input_tokens == 0
+    assert zero.usage.output_tokens == 0
+    assert zero.usage.cache_read_tokens == 0
+    assert zero.usage.total_tokens == 0
+
+
+@pytest.mark.asyncio
 async def test_antigravity_rejects_structured_output_that_misses_schema(tmp_path: Path) -> None:
     runtime = make_runtime(data_dir=tmp_path)
     schema = {

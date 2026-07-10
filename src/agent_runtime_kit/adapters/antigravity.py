@@ -918,14 +918,24 @@ def _default_data_dir() -> Path:
 
 
 def _usage_from(value: Any) -> Usage:
+    if value is None:
+        return Usage()
     prompt_tokens = optional_int(getattr(value, "prompt_token_count", None))
     output_tokens = optional_int(getattr(value, "candidates_token_count", None))
     thoughts = optional_int(getattr(value, "thoughts_token_count", None))
     cache_read = optional_int(getattr(value, "cached_content_token_count", None))
     total = optional_int(getattr(value, "total_token_count", None))
     return Usage(
-        input_tokens=max(prompt_tokens - cache_read, 0),
-        output_tokens=output_tokens + thoughts,
+        input_tokens=(
+            max(prompt_tokens - cache_read, 0)
+            if prompt_tokens is not None and cache_read is not None
+            else None
+        ),
+        output_tokens=(
+            output_tokens + thoughts
+            if output_tokens is not None and thoughts is not None
+            else None
+        ),
         cache_read_tokens=cache_read,
         total_tokens=total,
     )

@@ -584,7 +584,7 @@ def _tool_audit(item: Any) -> ToolCallAudit | None:
             arguments={"command": str(field_value(item, "command", ""))},
             result_preview=str(field_value(item, "aggregated_output", "") or "")[:256],
             status=_tool_status(item),
-            duration_ms=optional_int(field_value(item, "duration_ms")),
+            duration_ms=optional_int(field_value(item, "duration_ms")) or 0,
         )
     if item_type in {_MCP_ITEM, _DYNAMIC_ITEM}:
         return ToolCallAudit(
@@ -592,7 +592,7 @@ def _tool_audit(item: Any) -> ToolCallAudit | None:
             arguments=_tool_arguments(field_value(item, "arguments")),
             result_preview=str(field_value(item, "result", "") or "")[:256],
             status=_tool_status(item),
-            duration_ms=optional_int(field_value(item, "duration_ms")),
+            duration_ms=optional_int(field_value(item, "duration_ms")) or 0,
         )
     if item_type == _WEB_SEARCH_ITEM:
         return ToolCallAudit(
@@ -626,7 +626,9 @@ def _codex_usage(value: Any) -> Usage:
         breakdown = field_value(value, "total")
     if breakdown is None and isinstance(value, Mapping):
         breakdown = value.get("total", value)
-    input_tokens = optional_int(field_value(breakdown, "input_tokens"))
+    if breakdown is None:
+        return Usage()
+    raw_input_tokens = optional_int(field_value(breakdown, "input_tokens"))
     output_tokens = optional_int(field_value(breakdown, "output_tokens"))
     cached = optional_int(field_value(breakdown, "cached_input_tokens"))
     total_tokens = optional_int(field_value(breakdown, "total_tokens"))
@@ -634,11 +636,18 @@ def _codex_usage(value: Any) -> Usage:
     # (and the Antigravity adapter) excludes cache reads from input_tokens and
     # reports them separately. Subtract rather than double-count across the two
     # fields; the raw value still backs the vendor-style total fallback.
+    input_tokens = (
+        max(raw_input_tokens - cached, 0)
+        if raw_input_tokens is not None and cached is not None
+        else None
+    )
+    if total_tokens is None and raw_input_tokens is not None and output_tokens is not None:
+        total_tokens = raw_input_tokens + output_tokens
     return Usage(
-        input_tokens=max(input_tokens - cached, 0),
+        input_tokens=input_tokens,
         output_tokens=output_tokens,
         cache_read_tokens=cached,
-        total_tokens=total_tokens or input_tokens + output_tokens,
+        total_tokens=total_tokens,
     )
 
 

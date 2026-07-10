@@ -21,6 +21,7 @@ from agent_runtime_kit.testing import RecordingEventSink
 
 def test_public_task_can_represent_mestre_vendor_lane_fields(tmp_path: Path) -> None:
     sink = RecordingEventSink()
+    start_task = AgentTask(goal="start a conversation", session_id="session-new")
     task = AgentTask(
         task_id="mestre-task",
         goal="execute the vendor lane task",
@@ -36,7 +37,6 @@ def test_public_task_can_represent_mestre_vendor_lane_fields(tmp_path: Path) -> 
         ),
         sdk_executions=2,
         budget_usd=1.25,
-        session_id="session-1",
         resume_from=SessionResumeState(session_id="session-1", transcript=({"x": 1},)),
         output_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}},
         metadata={
@@ -48,9 +48,12 @@ def test_public_task_can_represent_mestre_vendor_lane_fields(tmp_path: Path) -> 
     )
 
     assert task.task_id == "mestre-task"
+    assert start_task.session_id == "session-new"
+    assert start_task.resume_from is None
     assert task.event_sink is sink
     assert task.mcp_servers[0].name == "repo"
     assert task.resume_from is not None
+    assert task.session_id is None
     assert task.metadata["prompt_context_receipt"] == {"schema_version": 1}
 
 

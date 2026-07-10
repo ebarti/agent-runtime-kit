@@ -23,8 +23,10 @@ from agent_runtime_kit import (
     PermissionProfile,
     RuntimeAvailability,
     RuntimeNotRegisteredError,
+    SessionResumeState,
     ToolCallAudit,
     UnsupportedTaskInputError,
+    Usage,
     create_default_registry,
     runtime_kind_value,
 )
@@ -107,6 +109,75 @@ def test_agent_task_model_fields_are_keyword_only() -> None:
     assert task.model is None
     assert task.reasoning_effort is None
     assert AgentTask("g", model="m-1", reasoning_effort="high").model == "m-1"
+
+
+@pytest.mark.parametrize("goal", ["", "   "])
+def test_agent_task_rejects_blank_goal(goal: str) -> None:
+    with pytest.raises(ValueError, match="AgentTask.goal"):
+        AgentTask(goal=goal)
+
+
+@pytest.mark.parametrize("sdk_executions", [0, -1, True])
+def test_agent_task_requires_positive_sdk_execution_hint(sdk_executions: object) -> None:
+    with pytest.raises(ValueError, match="sdk_executions"):
+        AgentTask(goal="g", sdk_executions=sdk_executions)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("budget", [-1.0, float("inf"), float("nan"), True])
+def test_agent_task_rejects_invalid_budget(budget: object) -> None:
+    with pytest.raises(ValueError, match="budget_usd"):
+        AgentTask(goal="g", budget_usd=budget)  # type: ignore[arg-type]
+
+
+def test_agent_task_rejects_ambiguous_session_and_duplicate_mcp_names() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        AgentTask(
+            goal="g",
+            session_id="session-1",
+            resume_from=SessionResumeState(session_id="session-1"),
+        )
+
+    duplicate_servers = (
+        McpServerConfig(name="repo", command="first"),
+        McpServerConfig(name="repo", command="second"),
+    )
+    with pytest.raises(ValueError, match="duplicate names"):
+        AgentTask(goal="g", mcp_servers=duplicate_servers)
+
+
+def test_value_objects_reject_blank_or_conflicting_identity() -> None:
+    with pytest.raises(ValueError, match="McpServerConfig.name"):
+        McpServerConfig(name=" ", command="mcp")
+    with pytest.raises(ValueError, match="McpServerConfig.command"):
+        McpServerConfig(name="repo", command="")
+    with pytest.raises(ValueError, match="SessionResumeState.session_id"):
+        SessionResumeState(session_id=" ")
+    with pytest.raises(ValueError, match="both allow and disallow"):
+        PermissionProfile(allowed_tools=("Read",), disallowed_tools=("Read",))
+    with pytest.raises(ValueError, match="duplicates"):
+        PermissionProfile(allowed_tools=("Read", "Read"))
+    with pytest.raises(ValueError, match="network"):
+        PermissionProfile(network="yes")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="scalar string"):
+        PermissionProfile(allowed_tools="Read")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="scalar string"):
+        McpServerConfig(name="repo", command="mcp", args="--root")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="args must contain only strings"):
+        McpServerConfig(name="repo", command="mcp", args=(1,))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="env values"):
+        McpServerConfig(name="repo", command="mcp", env={"PORT": 3})  # type: ignore[dict-item]
+    with pytest.raises(ValueError, match="scalar string"):
+        SessionResumeState(session_id="s", transcript="text")  # type: ignore[arg-type]
+
+
+def test_sequence_value_fields_are_canonicalized_to_tuples() -> None:
+    profile = PermissionProfile(allowed_tools=["Read"])  # type: ignore[arg-type]
+    server = McpServerConfig(name="repo", command="mcp", args=["serve"])  # type: ignore[arg-type]
+    resume = SessionResumeState(session_id="s", transcript=[{"x": 1}])  # type: ignore[arg-type]
+
+    assert profile.allowed_tools == ("Read",)
+    assert server.args == ("serve",)
+    assert resume.transcript == ({"x": 1},)
 
 
 def test_agent_task_does_not_leak_caller_mapping() -> None:
@@ -203,6 +274,42 @@ def test_finish_reason_enum_compares_as_string() -> None:
     assert str(FinishReason.FAILED) == "failed"
     assert f"{FinishReason.FAILED}" == "failed"
     assert format(FinishReason.FAILED) == "failed"
+
+
+def test_agent_result_success_is_explicit_and_rounds_are_non_negative() -> None:
+    assert AgentResult(output="ok").is_success is True
+    assert AgentResult(output="", finish_reason="failed").is_success is False
+    assert (
+        AgentResult(output="", finish_reason="failed", error="vendor failed").is_success is False
+    )
+
+    with pytest.raises(ValueError, match="rounds"):
+        AgentResult(output="", rounds=-1)
+    with pytest.raises(ValueError, match="AgentResult.error"):
+        AgentResult(output="", finish_reason="failed", error=" ")
+    with pytest.raises(ValueError, match="non-success"):
+        AgentResult(output="", error="contradictory")
+
+
+def test_usage_distinguishes_unknown_from_reported_zero_and_rejects_negative_values() -> None:
+    unknown = Usage()
+    reported_zero = Usage(
+        input_tokens=0,
+        output_tokens=0,
+        cache_read_tokens=0,
+        cache_creation_tokens=0,
+        total_tokens=0,
+        cost_usd=0.0,
+    )
+
+    assert unknown.input_tokens is None
+    assert unknown.cost_usd is None
+    assert reported_zero.input_tokens == 0
+    assert reported_zero.cost_usd == 0.0
+    with pytest.raises(ValueError, match="input_tokens"):
+        Usage(input_tokens=-1)
+    with pytest.raises(ValueError, match="cost_usd"):
+        Usage(cost_usd=float("inf"))
 
 
 def test_coerce_returns_namespaced_string_and_rejects_blank() -> None:

@@ -145,6 +145,43 @@ async def test_claude_runtime_runs_with_injected_sdk() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_usage_distinguishes_unknown_from_reported_zero() -> None:
+    unknown_runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant("done"), result_message()]),
+        options_cls=FakeClaudeOptions,
+    )
+    unknown = await unknown_runtime.run(AgentTask(goal="x"))
+
+    assert unknown.usage.input_tokens is None
+    assert unknown.usage.cost_usd is None
+
+    zero_runtime = ClaudeAgentRuntime(
+        query_func=make_query(
+            [
+                assistant(
+                    "done",
+                    usage={
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                    },
+                ),
+                result_message(total_cost_usd=0.0),
+            ]
+        ),
+        options_cls=FakeClaudeOptions,
+    )
+    reported_zero = await zero_runtime.run(AgentTask(goal="x"))
+
+    assert reported_zero.usage.input_tokens == 0
+    assert reported_zero.usage.output_tokens == 0
+    assert reported_zero.usage.cache_read_tokens == 0
+    assert reported_zero.usage.total_tokens == 0
+    assert reported_zero.usage.cost_usd == 0.0
+
+
+@pytest.mark.asyncio
 async def test_claude_runtime_can_reuse_process_until_closed() -> None:
     FakeClaudeClient.messages = [assistant("ok"), result_message()]
     runtime = ClaudeAgentRuntime(
@@ -516,6 +553,25 @@ async def test_claude_resume_from_session_id() -> None:
     await runtime.run(AgentTask(goal="x", session_id="sess-1"))
 
     assert RECORDED["options"].resume == "sess-1"
+
+
+@pytest.mark.asyncio
+async def test_claude_result_session_falls_back_to_resume_state_when_sdk_omits_it() -> None:
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query(
+            [
+                assistant("ok"),
+                {"type": "ResultMessage", "num_turns": 1},
+            ]
+        ),
+        options_cls=FakeClaudeOptions,
+    )
+
+    result = await runtime.run(
+        AgentTask(goal="x", resume_from=SessionResumeState(session_id="resume-123"))
+    )
+
+    assert result.session_id == "resume-123"
 
 
 @pytest.mark.asyncio
