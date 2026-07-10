@@ -12,7 +12,8 @@
 
 ## Install Model
 
-The plain `agent-runtime-kit` package is the dependency-free core. Use
+The plain `agent-runtime-kit` package is the vendor-SDK-free core and includes
+lightweight JSON Schema validation. Use
 `agent-runtime-kit[all]` when you want Claude, Codex, and Antigravity adapters
 available in one install, or use a single extra such as
 `agent-runtime-kit[codex]` when your application only needs one runtime.

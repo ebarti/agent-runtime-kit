@@ -4,8 +4,13 @@ import inspect
 
 import pytest
 
-from agent_runtime_kit import AgentRuntimeKind, UnsupportedTaskInputError
-from agent_runtime_kit.adapters._common import filter_supported_kwargs
+from agent_runtime_kit import (
+    AgentRuntimeKind,
+    AgentTask,
+    OutputSchemaError,
+    UnsupportedTaskInputError,
+)
+from agent_runtime_kit.adapters._common import filter_supported_kwargs, output_schema_from
 
 
 def test_filter_supported_kwargs_rejects_required_key_hidden_by_var_kwargs() -> None:
@@ -108,3 +113,15 @@ def test_filter_supported_kwargs_maps_required_key_to_public_field() -> None:
         )
 
     assert exc_info.value.field == "budget_usd"
+
+
+def test_output_schema_from_validates_legacy_aliases_and_nested_mutation() -> None:
+    with pytest.raises(OutputSchemaError, match="invalid output_schema"):
+        output_schema_from(None, {"output_schema": {"required": "not-an-array"}})
+
+    source = {"type": "object", "required": ["ok"]}
+    task = AgentTask(goal="x", output_schema=source)
+    source["required"][0] = 1
+
+    with pytest.raises(OutputSchemaError, match="invalid output_schema"):
+        output_schema_from(task.output_schema, task.metadata)

@@ -20,6 +20,10 @@ The matrix is intentionally not a lowest-common-denominator contract. Adapters
 reject unsupported inputs (see below) when silently dropping them would be
 misleading.
 
+For every provider, malformed schemas are rejected locally before dispatch and
+returned structured values are validated locally after the SDK completes.
+`parsed_output_available` distinguishes valid JSON `null` from no parsed value.
+
 ## Permission mapping
 
 A single portable `PermissionMode` maps to each vendor's native controls. The

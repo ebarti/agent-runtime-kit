@@ -36,9 +36,8 @@ from agent_runtime_kit.adapters._common import (
     optional_str,
     output_schema_from,
     package_availability,
-    parse_json_output,
     reject_unsupported_inputs,
-    structured_output_unsatisfied_error,
+    resolve_structured_output,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -375,8 +374,6 @@ class AntigravityAgentRuntime:
             metadata["dropped_options"] = list(dropped_options)
 
         output = "".join(text_parts).strip()
-        if structured_output is None and schema is not None:
-            structured_output = parse_json_output(output)
 
         # A non-natural stop (token limit, safety block) is a failure, not a
         # successful completion of whatever partial text arrived first.
@@ -386,25 +383,35 @@ class AntigravityAgentRuntime:
                 output=output,
                 finish_reason=terminal_reason,
                 error=terminal_error,
-                parsed_output=structured_output,
                 usage=_usage_from(usage_metadata),
                 tool_calls=tuple(tool_calls),
                 session_id=session_id,
                 rounds=1,
                 metadata=metadata,
             )
-        if schema is not None and structured_output is None:
-            return AgentResult(
-                output=output,
-                finish_reason="failed",
-                error=structured_output_unsatisfied_error("Antigravity SDK"),
-                usage=_usage_from(usage_metadata),
-                tool_calls=tuple(tool_calls),
-                session_id=session_id,
-                rounds=1,
-                metadata=metadata,
+        parsed_output: Any = None
+        parsed_output_available = False
+        if schema is not None:
+            resolution = resolve_structured_output(
+                schema,
+                output,
+                sdk_label="Antigravity SDK",
+                native=structured_output,
             )
-        if not output and not tool_calls and structured_output is None:
+            if resolution.error is not None:
+                return AgentResult(
+                    output=output,
+                    finish_reason="failed",
+                    error=resolution.error,
+                    usage=_usage_from(usage_metadata),
+                    tool_calls=tuple(tool_calls),
+                    session_id=session_id,
+                    rounds=1,
+                    metadata=metadata,
+                )
+            parsed_output = resolution.value
+            parsed_output_available = resolution.available
+        if not output and not tool_calls and not parsed_output_available:
             return AgentResult(
                 output="",
                 finish_reason="failed",
@@ -417,7 +424,8 @@ class AntigravityAgentRuntime:
             )
         return AgentResult(
             output=output,
-            parsed_output=structured_output,
+            parsed_output=parsed_output,
+            parsed_output_available=parsed_output_available,
             usage=_usage_from(usage_metadata),
             tool_calls=tuple(tool_calls),
             session_id=session_id,

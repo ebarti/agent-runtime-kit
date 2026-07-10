@@ -141,10 +141,11 @@ a field (for example only Claude maps `budget_usd`; Codex and Antigravity reject
 it with a typed `UnsupportedTaskInputError`) the adapter raises rather than
 silently dropping it.
 
-`AgentResult` returns output, finish reason (see `FinishReason`), parsed
-structured output, usage, cost, session id, tool-call audits, and provider
-metadata. `artifacts` is a reserved field: no built-in runtime populates it yet,
-so it is always an empty tuple today.
+`AgentResult` returns output, finish reason (see `FinishReason`), locally
+validated structured output, usage, cost, session id, tool-call audits, and
+provider metadata. `parsed_output_available` distinguishes an absent payload
+from valid JSON `null` (both use `parsed_output=None`). `artifacts` is a reserved
+field: no built-in runtime populates it yet, so it is always an empty tuple today.
 
 ## Docs
 

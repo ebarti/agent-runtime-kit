@@ -755,6 +755,49 @@ async def test_claude_unsatisfied_output_schema_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_rejects_structured_output_that_misses_schema() -> None:
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query(
+            [
+                assistant('{"ok": "bad"}'),
+                result_message(
+                    structured_output={"ok": "bad"},
+                    usage={"input_tokens": 3, "output_tokens": 2},
+                ),
+            ]
+        ),
+        options_cls=FakeClaudeOptions,
+    )
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "integer"}},
+        "required": ["ok"],
+    }
+
+    result = await runtime.run(AgentTask(goal="x", output_schema=schema))
+
+    assert result.finish_reason == "failed"
+    assert "does not conform" in (result.error or "")
+    assert result.parsed_output_available is False
+    assert result.session_id == "claude-session"
+    assert result.usage.input_tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_claude_accepts_textual_json_null() -> None:
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant("null"), result_message()]),
+        options_cls=FakeClaudeOptions,
+    )
+
+    result = await runtime.run(AgentTask(goal="x", output_schema={"type": "null"}))
+
+    assert result.finish_reason == "done"
+    assert result.parsed_output is None
+    assert result.parsed_output_available is True
+
+
+@pytest.mark.asyncio
 async def test_claude_empty_completion_fails() -> None:
     # No text, no tool calls, no structured output -> nothing usable -> failure.
     runtime = ClaudeAgentRuntime(
