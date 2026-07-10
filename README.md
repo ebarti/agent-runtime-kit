@@ -178,5 +178,6 @@ built-in runtime populates it yet, so it is always an empty tuple today.
 - [Capability matrix](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/capability-matrix.md)
 - [API stability](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/api-stability.md)
 - [Live smoke tests](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/live-smoke.md)
+- [Deadlines and cancellation](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/task-control.md)
 - [Mestre migration notes](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/mestre-migration.md)
 - [SDK evolution agent](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/sdk-evolution-agent.md)

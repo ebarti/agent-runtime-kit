@@ -8,6 +8,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
+from agent_runtime_kit._control import RuntimeTaskController
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError
 from agent_runtime_kit._types import (
     AgentCapabilities,
@@ -15,6 +16,7 @@ from agent_runtime_kit._types import (
     AgentRuntimeKind,
     AgentTask,
     AvailabilityReason,
+    CancellationReceipt,
     FilesystemAccess,
     PermissionMode,
     ReadinessStatus,
@@ -74,7 +76,7 @@ class CodexAgentRuntime:
         structured_output=True,
         streaming=False,
         tool_audit=True,
-        cancellation=False,
+        cancellation=True,
         reasoning_effort=True,
     )
 
@@ -111,6 +113,7 @@ class CodexAgentRuntime:
         self._sdk_process_reuse_count = 0
         self._codex_client_lock = asyncio.Lock()
         self._codex_run_lock = asyncio.Lock()
+        self._task_controller = RuntimeTaskController(self.kind)
 
     async def __aenter__(self) -> CodexAgentRuntime:
         return self
@@ -192,6 +195,11 @@ class CodexAgentRuntime:
         )
 
     async def run(self, task: AgentTask) -> AgentResult:
+        """Execute one deadline- and cancellation-controlled Codex task."""
+
+        return await self._task_controller.run(task, lambda: self._run_task(task))
+
+    async def _run_task(self, task: AgentTask) -> AgentResult:
         """Execute one task with the Codex SDK."""
 
         await safe_emit(task, task_started_event(task, self.kind))
@@ -239,10 +247,10 @@ class CodexAgentRuntime:
             await safe_emit(task, task_completed_event(task, self.kind, result))
         return result
 
-    async def cancel(self, task_id: str) -> None:
-        """Codex SDK cancellation is not exposed through this portable adapter yet."""
+    async def cancel(self, task_id: str) -> CancellationReceipt:
+        """Request cancellation at the adapter coroutine boundary."""
 
-        del task_id
+        return await self._task_controller.cancel(task_id)
 
     async def aclose(self) -> None:
         """Close any reusable Codex app-server process owned by this runtime.

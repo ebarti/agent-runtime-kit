@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distinguish `READY_TO_ATTEMPT`, `NOT_READY`, and `INDETERMINATE` without
   running an agent task. Registry, `AgentKit`, and provider-diagnostics helpers
   expose the same async checks.
+- Absolute `AgentTask.deadline` values, `AgentKit.run(timeout=...)`, typed
+  `AgentTaskTimeoutError`, and `FinishReason.TIMED_OUT` provide bounded task
+  execution across provider startup and reused-process queueing.
+- Built-in runtimes and `AgentKit.cancel()` now return immutable
+  `CancellationReceipt` values with explicit request dispositions; legacy
+  third-party `cancel()` methods returning `None` remain supported.
 
 ### Changed
 

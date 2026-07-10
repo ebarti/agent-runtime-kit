@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Iterable, Mapping
 from math import isfinite
 from typing import Any
 
+from agent_runtime_kit._control import RuntimeTaskController
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError
 from agent_runtime_kit._types import (
     AgentCapabilities,
@@ -17,6 +18,7 @@ from agent_runtime_kit._types import (
     AgentRuntimeKind,
     AgentTask,
     AvailabilityReason,
+    CancellationReceipt,
     FilesystemAccess,
     PermissionMode,
     PermissionProfile,
@@ -69,7 +71,7 @@ class ClaudeAgentRuntime:
         structured_output=True,
         streaming=True,
         tool_audit=True,
-        cancellation=False,
+        cancellation=True,
         budget=True,
         reasoning_effort=True,
         tool_filters=True,
@@ -102,6 +104,7 @@ class ClaudeAgentRuntime:
         self._sdk_process_reuse_count = 0
         self._client_lock = asyncio.Lock()
         self._client_run_lock = asyncio.Lock()
+        self._task_controller = RuntimeTaskController(self.kind)
 
     async def __aenter__(self) -> ClaudeAgentRuntime:
         return self
@@ -164,6 +167,11 @@ class ClaudeAgentRuntime:
         )
 
     async def run(self, task: AgentTask) -> AgentResult:
+        """Execute one deadline- and cancellation-controlled Claude task."""
+
+        return await self._task_controller.run(task, lambda: self._run_task(task))
+
+    async def _run_task(self, task: AgentTask) -> AgentResult:
         """Execute one task with Claude Agent SDK, streaming events as they arrive."""
 
         await safe_emit(task, task_started_event(task, self.kind))
@@ -219,10 +227,10 @@ class ClaudeAgentRuntime:
             await safe_emit(task, task_completed_event(task, self.kind, result))
         return result
 
-    async def cancel(self, task_id: str) -> None:
-        """Claude ``query`` calls do not expose a portable cancellation handle."""
+    async def cancel(self, task_id: str) -> CancellationReceipt:
+        """Request cancellation at the adapter coroutine boundary."""
 
-        del task_id
+        return await self._task_controller.cancel(task_id)
 
     async def aclose(self) -> None:
         """Close any reusable Claude SDK client process owned by this runtime.

@@ -12,6 +12,7 @@
 | Permission mapping | `permission_mode` | approval mode + sandbox | capabilities + policies |
 | Streaming output events | Yes — incremental `output.delta` while the SDK runs | No — a single `output.delta` at the end (non-streaming SDK) | Yes — from response chunks |
 | Tool audit events | Yes — streamed from message blocks | Yes — emitted from parsed `TurnResult` items after the turn | Yes — from tool chunks |
+| Deadlines and cancellation | Absolute deadline + coroutine cancellation | Absolute deadline + coroutine cancellation | Absolute deadline + coroutine cancellation |
 | `vendor.turn` events | No | No | Yes — from thought/unknown chunks |
 | Package availability | Sync, side-effect-free, package-only | Sync, side-effect-free, package-only | Sync, side-effect-free, package-only; never calls ADC |
 | Async readiness | Direct API key/OAuth/Bedrock bearer signal → `READY_TO_ATTEMPT`; provider/local chains → `INDETERMINATE` | Supported `AsyncCodex.account(refresh_token=False)` probe; absent account → `NOT_READY` | API key or off-loop ADC/project probe; missing → `NOT_READY` |
@@ -32,6 +33,11 @@ allow-list and reports all detectable issues at once.
 For every provider, malformed schemas are rejected locally before dispatch and
 returned structured values are validated locally after the SDK completes.
 `parsed_output_available` distinguishes valid JSON `null` from no parsed value.
+
+Deadlines cover provider startup and waits for a reused process. Cancellation
+receipts acknowledge a request at the coroutine boundary; they do not imply
+rollback of tool side effects that already completed. See
+[Deadlines and cancellation](task-control.md).
 
 ## Permission mapping
 

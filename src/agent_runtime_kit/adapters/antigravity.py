@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent_runtime_kit._control import RuntimeTaskController
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError, UnsupportedTaskInputError
 from agent_runtime_kit._types import (
     AgentCapabilities,
@@ -20,6 +21,7 @@ from agent_runtime_kit._types import (
     AgentRuntimeKind,
     AgentTask,
     AvailabilityReason,
+    CancellationReceipt,
     FilesystemAccess,
     PermissionMode,
     ReadinessStatus,
@@ -72,7 +74,7 @@ class AntigravityAgentRuntime:
         structured_output=True,
         streaming=True,
         tool_audit=True,
-        cancellation=False,
+        cancellation=True,
         tool_filters=True,
     )
 
@@ -113,6 +115,7 @@ class AntigravityAgentRuntime:
         self._sdk_process_reuse_count = 0
         self._agent_lock = asyncio.Lock()
         self._agent_run_lock = asyncio.Lock()
+        self._task_controller = RuntimeTaskController(self.kind)
 
     async def __aenter__(self) -> AntigravityAgentRuntime:
         return self
@@ -227,6 +230,11 @@ class AntigravityAgentRuntime:
         return TaskSupportReport(kind=self.kind, issues=tuple(issues))
 
     async def run(self, task: AgentTask) -> AgentResult:
+        """Execute one deadline- and cancellation-controlled Antigravity task."""
+
+        return await self._task_controller.run(task, lambda: self._run_task(task))
+
+    async def _run_task(self, task: AgentTask) -> AgentResult:
         """Execute one task with Antigravity."""
 
         await safe_emit(task, task_started_event(task, self.kind))
@@ -269,10 +277,10 @@ class AntigravityAgentRuntime:
             await safe_emit(task, task_completed_event(task, self.kind, result))
         return result
 
-    async def cancel(self, task_id: str) -> None:
-        """Antigravity cancellation is not exposed through this portable adapter yet."""
+    async def cancel(self, task_id: str) -> CancellationReceipt:
+        """Request cancellation at the adapter coroutine boundary."""
 
-        del task_id
+        return await self._task_controller.cancel(task_id)
 
     async def aclose(self) -> None:
         """Close any reusable Antigravity agent process owned by this runtime.

@@ -5,10 +5,14 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
+from datetime import datetime, timedelta, timezone
+from math import isfinite
 from pathlib import Path
 from typing import Any, TypeVar, cast, overload
 
+from agent_runtime_kit._control import RuntimeTaskController, run_legacy_with_deadline
 from agent_runtime_kit._errors import OutputTypeError
 from agent_runtime_kit._schema import json_schema_for, parse_as
 from agent_runtime_kit._types import (
@@ -17,6 +21,8 @@ from agent_runtime_kit._types import (
     AgentRuntime,
     AgentRuntimeKind,
     AgentTask,
+    CancellationDisposition,
+    CancellationReceipt,
     EventSink,
     FilesystemAccess,
     FinishReason,
@@ -50,6 +56,13 @@ class _UnsetType:
 
 
 _UNSET = _UnsetType()
+
+
+@dataclass
+class _KitActiveRun:
+    agent: AgentRuntime
+    task: asyncio.Task[Any]
+    cancellation_requested: bool = False
 
 # Short spellings for the built-in kinds, resolved only by AgentKit (the
 # registry itself stays alias-free; the full kind strings always work).
@@ -94,6 +107,8 @@ class AgentKit:
         self._runtimes: dict[AgentRuntimeKind | str, AgentRuntime] = {}
         self._handlers: list[tuple[str, _EventHandler]] = []
         self._cache_lock = asyncio.Lock()
+        self._active_runs: dict[tuple[int, str], _KitActiveRun] = {}
+        self._active_lock = asyncio.Lock()
 
     @property
     def registry(self) -> RuntimeRegistry:
@@ -193,6 +208,8 @@ class AgentKit:
         system: str | None = ...,
         model: str | None = ...,
         reasoning_effort: str | None = ...,
+        deadline: datetime | None = ...,
+        timeout: float | timedelta | None = ...,
         working_directory: Path | str | None = ...,
         permissions: PermissionProfile | PermissionMode | str | None = ...,
         filesystem: FilesystemAccess | str | None = ...,
@@ -220,6 +237,8 @@ class AgentKit:
         system: str | None = ...,
         model: str | None = ...,
         reasoning_effort: str | None = ...,
+        deadline: datetime | None = ...,
+        timeout: float | timedelta | None = ...,
         working_directory: Path | str | None = ...,
         permissions: PermissionProfile | PermissionMode | str | None = ...,
         filesystem: FilesystemAccess | str | None = ...,
@@ -246,6 +265,8 @@ class AgentKit:
         system: str | None | _UnsetType = _UNSET,
         model: str | None | _UnsetType = _UNSET,
         reasoning_effort: str | None | _UnsetType = _UNSET,
+        deadline: datetime | None | _UnsetType = _UNSET,
+        timeout: float | timedelta | None = None,
         working_directory: Path | str | None | _UnsetType = _UNSET,
         permissions: PermissionProfile | PermissionMode | str | None | _UnsetType = _UNSET,
         filesystem: FilesystemAccess | str | None | _UnsetType = _UNSET,
@@ -273,6 +294,18 @@ class AgentKit:
         an exception.
         """
 
+        effective_deadline = _resolve_deadline(deadline, timeout)
+        if (
+            task is not None
+            and task.deadline is not None
+            and effective_deadline is not _UNSET
+            and effective_deadline is not None
+        ):
+            raise ValueError(
+                "task.deadline is mutually exclusive with run(timeout=...) or "
+                "run(deadline=...)"
+            )
+
         if output_type is not None and output_schema is not None:
             raise ValueError("output_type and output_schema are mutually exclusive")
         schema = json_schema_for(output_type) if output_type is not None else output_schema
@@ -284,6 +317,7 @@ class AgentKit:
                 system=system,
                 model=model,
                 reasoning_effort=reasoning_effort,
+                deadline=effective_deadline,
                 working_directory=working_directory,
                 permissions=permissions,
                 filesystem=filesystem,
@@ -331,6 +365,7 @@ class AgentKit:
                 "system": None if system is _UNSET else system,
                 "model": None if model is _UNSET else model,
                 "reasoning_effort": None if reasoning_effort is _UNSET else reasoning_effort,
+                "deadline": None if effective_deadline is _UNSET else effective_deadline,
                 "working_directory": _as_path(normalized_working_directory),
                 "mcp_servers": tuple(normalized_mcp_servers),
                 "permissions": _normalize_permissions(
@@ -352,10 +387,140 @@ class AgentKit:
             built = AgentTask(**task_kwargs)
 
         agent = runtime if not isinstance(runtime, str) else await self._runtime_for(runtime)
-        result = await agent.run(built)
-        if output_type is None:
-            return result
-        return _parse_result(output_type, result)
+        key = (id(agent), built.task_id)
+        current = asyncio.current_task()
+        if current is None:  # pragma: no cover - asyncio always supplies one here
+            raise RuntimeError("AgentKit.run requires an active asyncio task")
+        async with self._active_lock:
+            if key in self._active_runs:
+                raise ValueError(
+                    f"task_id {built.task_id!r} is already active on this runtime"
+                )
+            self._active_runs[key] = _KitActiveRun(agent=agent, task=current)
+        try:
+            if isinstance(getattr(agent, "_task_controller", None), RuntimeTaskController):
+                result = await agent.run(built)
+            else:
+                result = await run_legacy_with_deadline(
+                    built,
+                    agent.kind,
+                    lambda: agent.run(built),
+                )
+            if output_type is None:
+                return result
+            return _parse_result(output_type, result)
+        finally:
+            async with self._active_lock:
+                active = self._active_runs.get(key)
+                if active is not None and active.task is current:
+                    del self._active_runs[key]
+
+    async def cancel(
+        self,
+        runtime: AgentRuntimeKind | str | AgentRuntime,
+        task_id: str,
+    ) -> CancellationReceipt:
+        """Request cancellation without constructing an uncached runtime.
+
+        A receipt acknowledges the request only.  It cannot promise that tools
+        or other external side effects have been rolled back.
+        """
+
+        if not task_id.strip():
+            raise ValueError("task_id must be non-blank")
+        if isinstance(runtime, str):
+            kind = self._normalize_kind(runtime)
+            agent = self._runtimes.get(kind)
+            if agent is None:
+                return CancellationReceipt(
+                    task_id=task_id,
+                    kind=kind,
+                    disposition=CancellationDisposition.NOT_ACTIVE,
+                )
+        else:
+            agent = runtime
+            kind = agent.kind
+
+        key = (id(agent), task_id)
+        async with self._active_lock:
+            active = self._active_runs.get(key)
+            if active is None:
+                return CancellationReceipt(
+                    task_id=task_id,
+                    kind=kind,
+                    disposition=CancellationDisposition.NOT_ACTIVE,
+                )
+            if active.cancellation_requested:
+                return CancellationReceipt(
+                    task_id=task_id,
+                    kind=kind,
+                    disposition=CancellationDisposition.ALREADY_REQUESTED,
+                )
+            active.cancellation_requested = True
+
+        cancel_method = getattr(agent, "cancel", None)
+        if callable(cancel_method):
+            try:
+                receipt = await cancel_method(task_id)
+            except Exception as exc:
+                active.task.cancel()
+                return CancellationReceipt(
+                    task_id=task_id,
+                    kind=kind,
+                    disposition=CancellationDisposition.FAILED,
+                    message=(
+                        "runtime cancellation hook failed; local cancellation "
+                        f"requested: {exc}"
+                    ),
+                )
+            if isinstance(receipt, CancellationReceipt):
+                if receipt.disposition in {
+                    CancellationDisposition.NOT_ACTIVE,
+                    CancellationDisposition.UNSUPPORTED,
+                }:
+                    active.task.cancel()
+                    return CancellationReceipt(
+                        task_id=task_id,
+                        kind=kind,
+                        disposition=CancellationDisposition.REQUESTED,
+                        message=(
+                            "runtime hook could not find the task; local coroutine "
+                            "cancellation was requested"
+                        ),
+                    )
+                return receipt
+            accepted = active.task.cancel()
+            return CancellationReceipt(
+                task_id=task_id,
+                kind=kind,
+                disposition=(
+                    CancellationDisposition.LEGACY_UNCONFIRMED
+                    if accepted
+                    else CancellationDisposition.FAILED
+                ),
+                message=(
+                    "legacy runtime returned no cancellation receipt; local coroutine "
+                    "cancellation was requested"
+                    if accepted
+                    else "the active asyncio task had already completed"
+                ),
+            )
+
+        accepted = active.task.cancel()
+        return CancellationReceipt(
+            task_id=task_id,
+            kind=kind,
+            disposition=(
+                CancellationDisposition.REQUESTED
+                if accepted
+                else CancellationDisposition.FAILED
+            ),
+            message=(
+                "runtime has no cancellation hook; local coroutine cancellation was requested"
+                if accepted
+                else "the active asyncio task had already completed"
+            ),
+        )
 
     async def aclose(self) -> None:
         """Close every runtime this hub constructed and cached."""
@@ -401,6 +566,7 @@ class AgentKit:
         *,
         schema: Mapping[str, Any] | None,
         event_sink: EventSink | None,
+        deadline: datetime | None | _UnsetType,
         **field_kwargs: Any,
     ) -> AgentTask:
         conflicting = sorted(name for name, value in field_kwargs.items() if value is not _UNSET)
@@ -410,6 +576,8 @@ class AgentKit:
                 + ", ".join(conflicting)
             )
         replacements: dict[str, Any] = {}
+        if deadline is not _UNSET:
+            replacements["deadline"] = deadline
         if schema is not None:
             replacements["output_schema"] = schema
         effective_sink = event_sink if event_sink is not None else task.event_sink
@@ -466,6 +634,30 @@ def _as_path(value: Path | str | None) -> Path | None:
     if value is None or isinstance(value, Path):
         return value
     return Path(value)
+
+
+def _resolve_deadline(
+    deadline: datetime | None | _UnsetType,
+    timeout: float | timedelta | None,
+) -> datetime | None | _UnsetType:
+    if timeout is not None and deadline is not _UNSET and deadline is not None:
+        raise ValueError("timeout and deadline are mutually exclusive")
+    if timeout is None:
+        return deadline
+    if isinstance(timeout, bool):
+        raise ValueError("timeout must be a finite non-negative number or timedelta")
+    if isinstance(timeout, timedelta):
+        seconds = timeout.total_seconds()
+    elif isinstance(timeout, (int, float)):
+        seconds = float(timeout)
+    else:
+        raise TypeError("timeout must be a number, timedelta, or None")
+    if not isfinite(seconds) or seconds < 0:
+        raise ValueError("timeout must be finite and non-negative")
+    try:
+        return datetime.now(tz=timezone.utc) + timedelta(seconds=seconds)
+    except OverflowError as exc:
+        raise ValueError("timeout is too large to represent as a deadline") from exc
 
 
 def _normalize_permissions(
