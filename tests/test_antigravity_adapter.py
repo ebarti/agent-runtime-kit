@@ -94,7 +94,15 @@ class FakePolicy:
 
 
 class FakeConfig:
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        capabilities: Any = None,
+        policies: Any = None,
+        workspaces: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        kwargs.update(capabilities=capabilities, policies=policies, workspaces=workspaces)
         self.kwargs = kwargs
 
 

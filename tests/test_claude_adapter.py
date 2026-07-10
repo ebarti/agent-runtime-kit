@@ -610,6 +610,32 @@ async def test_claude_budget_drop_fails_closed_only_when_requested() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_budget_fails_closed_when_only_opaque_kwargs_accept_it() -> None:
+    class OpaqueBudgetOptions:
+        def __init__(
+            self,
+            *,
+            permission_mode: str | None = None,
+            allowed_tools: list[str] | None = None,
+            disallowed_tools: list[str] | None = None,
+            **_kwargs: Any,
+        ) -> None:
+            self.permission_mode = permission_mode
+            self.allowed_tools = allowed_tools or []
+            self.disallowed_tools = disallowed_tools or []
+
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant("ok"), result_message()]),
+        options_cls=OpaqueBudgetOptions,
+    )
+
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(AgentTask(goal="x", budget_usd=2.5))
+
+    assert exc_info.value.field == "budget_usd"
+
+
+@pytest.mark.asyncio
 async def test_claude_streams_events_before_completion() -> None:
     sink = RecordingEventSink()
     messages = [
