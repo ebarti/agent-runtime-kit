@@ -130,11 +130,13 @@ def make_runtime(
     *,
     run_error: BaseException | None = None,
     reuse_process: bool = False,
+    default_model: str | None = None,
 ) -> CodexAgentRuntime:
     def codex_factory(*, config: FakeCodexConfig) -> FakeCodex:
         return FakeCodex(config, run_result, run_error)
 
     return CodexAgentRuntime(
+        default_model=default_model,
         codex_cls=codex_factory,
         config_cls=FakeCodexConfig,
         sandbox_cls=FakeSandbox,
@@ -576,6 +578,49 @@ async def test_codex_typed_model_field_overrides_metadata_alias() -> None:
 
     assert FakeThread.last_run_kwargs is not None
     assert FakeThread.last_run_kwargs["model"] == "from-field"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("default_model", "task", "expected_model", "expected_source"),
+    [
+        (None, AgentTask(goal="x"), None, "provider-native"),
+        ("constructor-model", AgentTask(goal="x"), "constructor-model", "constructor"),
+        (
+            "constructor-model",
+            AgentTask(goal="x", metadata={"model": "metadata-model"}),
+            "metadata-model",
+            "metadata",
+        ),
+        (
+            "constructor-model",
+            AgentTask(goal="x", model="task-model", metadata={"model": "metadata-model"}),
+            "task-model",
+            "task",
+        ),
+    ],
+)
+async def test_codex_model_selection_precedence_and_source(
+    default_model: str | None,
+    task: AgentTask,
+    expected_model: str | None,
+    expected_source: str,
+) -> None:
+    runtime = make_runtime(default_model=default_model)
+
+    result = await runtime.run(task)
+
+    assert FakeCodex.last_started_kwargs is not None
+    assert FakeThread.last_run_kwargs is not None
+    if expected_model is None:
+        assert "model" not in FakeCodex.last_started_kwargs
+        assert "model" not in FakeThread.last_run_kwargs
+        assert "model" not in result.metadata
+    else:
+        assert FakeCodex.last_started_kwargs["model"] == expected_model
+        assert FakeThread.last_run_kwargs["model"] == expected_model
+        assert result.metadata["model"] == expected_model
+    assert result.metadata["model_source"] == expected_source
 
 
 @pytest.mark.asyncio

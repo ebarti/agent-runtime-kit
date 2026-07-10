@@ -87,7 +87,14 @@ to the exact missing extra.
 
 All three adapters map the task's system prompt (Claude `system_prompt`, Codex
 `developer_instructions`, Antigravity `system_instructions`) and the `model`
-field (falling back to the `metadata` aliases of the same names).
+field. Model precedence is `AgentTask.model` > legacy `metadata["model"]` > the
+adapter's `default_model=` constructor override > provider-native selection. At
+the final step the adapter omits the SDK model option; it does not impose a
+library-owned model that can go stale. Results always include
+`metadata["model_source"]` (`task`, `metadata`, `constructor`, or
+`provider-native`) and include `metadata["model"]` only when the selected value
+is known. When `supported_models=` is configured, provider-native selection is
+rejected as unverifiable until the caller chooses an explicit model.
 `reasoning_effort` maps to the Claude and Codex `effort` options; Antigravity
 has no reasoning-effort control and rejects the first-class field with a typed
 error. Its legacy `metadata["reasoning_effort"]` alias is rejected too, rather

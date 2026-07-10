@@ -42,6 +42,27 @@ class FakeClaudeOptions:
 
 # Records the options object passed to query so tests can assert request shape.
 RECORDED: dict[str, Any] = {}
+_MODEL_UNSET = object()
+
+
+class CapturingClaudeOptions:
+    """Options fake that distinguishes an omitted model kwarg from model=None."""
+
+    def __init__(
+        self,
+        *,
+        model: object = _MODEL_UNSET,
+        allowed_tools: list[str] | None = None,
+        disallowed_tools: list[str] | None = None,
+        permission_mode: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.model_was_supplied = model is not _MODEL_UNSET
+        self.model = None if model is _MODEL_UNSET else model
+        self.allowed_tools = allowed_tools or []
+        self.disallowed_tools = disallowed_tools or []
+        self.permission_mode = permission_mode
+        self.kwargs = kwargs
 
 
 class FakeClaudeClient:
@@ -507,6 +528,50 @@ async def test_claude_builds_full_request(tmp_path: Path) -> None:
         "schema": {"type": "object", "properties": {}},
     }
     assert options.mcp_servers["fs"]["type"] == "stdio"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("default_model", "task", "expected_model", "expected_source"),
+    [
+        (None, AgentTask(goal="x"), None, "provider-native"),
+        ("constructor-model", AgentTask(goal="x"), "constructor-model", "constructor"),
+        (
+            "constructor-model",
+            AgentTask(goal="x", metadata={"model": "metadata-model"}),
+            "metadata-model",
+            "metadata",
+        ),
+        (
+            "constructor-model",
+            AgentTask(goal="x", model="task-model", metadata={"model": "metadata-model"}),
+            "task-model",
+            "task",
+        ),
+    ],
+)
+async def test_claude_model_selection_precedence_and_source(
+    default_model: str | None,
+    task: AgentTask,
+    expected_model: str | None,
+    expected_source: str,
+) -> None:
+    runtime = ClaudeAgentRuntime(
+        default_model=default_model,
+        query_func=make_query([assistant("ok"), result_message()]),
+        options_cls=CapturingClaudeOptions,
+    )
+
+    result = await runtime.run(task)
+
+    options = RECORDED["options"]
+    assert options.model_was_supplied is (expected_model is not None)
+    assert options.model == expected_model
+    assert result.metadata["model_source"] == expected_source
+    if expected_model is None:
+        assert "model" not in result.metadata
+    else:
+        assert result.metadata["model"] == expected_model
 
 
 @pytest.mark.asyncio

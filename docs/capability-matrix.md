@@ -4,6 +4,7 @@
 |------------|------------------|------------------|------------------------|
 | Optional extra | `claude` | `codex` | `antigravity` |
 | Core import without extra | Yes | Yes | Yes |
+| Model selection | Provider-native unless task/metadata/constructor overrides it | Provider-native unless task/metadata/constructor overrides it | Provider-native unless task/metadata/constructor overrides it |
 | Working directory | Yes | Yes | Yes |
 | Session resume | Yes | Yes | Yes |
 | Structured output | Native `output_format` when available | Native output schema / JSON parse fallback | Native response schema / JSON parse fallback |

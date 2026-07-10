@@ -7,6 +7,8 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10
     import tomli as tomllib
 
+import pytest
+
 from agent_runtime_kit import (
     COMPATIBILITY_MANIFEST,
     AgentCapabilities,
@@ -177,6 +179,33 @@ def test_adapter_reports_configured_model_allowlist_at_source_field() -> None:
 
         assert first_class.issues[-1].field == "model"
         assert legacy.issues[-1].field == "metadata.model"
+
+
+def test_model_allowlist_rejects_unverifiable_provider_native_selection() -> None:
+    runtimes = (
+        ClaudeAgentRuntime(supported_models=("allowed",)),
+        CodexAgentRuntime(supported_models=("allowed",)),
+        AntigravityAgentRuntime(supported_models=("allowed",)),
+    )
+
+    for runtime in runtimes:
+        report = runtime.validate_task(AgentTask(goal="g"))
+
+        assert report.issues[-1].field == "model"
+        assert "provider-native" in report.issues[-1].message
+
+
+@pytest.mark.parametrize(
+    "runtime_cls",
+    [ClaudeAgentRuntime, CodexAgentRuntime, AntigravityAgentRuntime],
+)
+def test_runtime_model_configuration_rejects_ambiguous_values(runtime_cls: type) -> None:
+    with pytest.raises(ValueError, match="default_model"):
+        runtime_cls(default_model=" ")
+    with pytest.raises(ValueError, match="scalar string"):
+        runtime_cls(supported_models="model")
+    with pytest.raises(ValueError, match="duplicates"):
+        runtime_cls(supported_models=("model", "model"))
 
 
 def test_antigravity_reports_static_provider_constraints() -> None:

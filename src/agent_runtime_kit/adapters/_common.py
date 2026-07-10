@@ -5,9 +5,10 @@ from __future__ import annotations
 import inspect
 import os
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from importlib import metadata
 from math import isfinite
-from typing import Any
+from typing import Any, Literal
 
 from agent_runtime_kit._errors import UnsupportedTaskInputError
 from agent_runtime_kit._schema import (
@@ -25,6 +26,16 @@ from agent_runtime_kit._types import (
     TaskSupportIssue,
 )
 from agent_runtime_kit.compatibility import compatibility_for
+
+ModelSource = Literal["task", "metadata", "constructor", "provider-native"]
+
+
+@dataclass(frozen=True)
+class ModelSelection:
+    """Effective model value and the layer that selected it."""
+
+    value: str | None
+    source: ModelSource
 
 
 def package_availability(kind: AgentRuntimeKind) -> RuntimeAvailability:
@@ -58,26 +69,69 @@ def package_version(package_name: str) -> str | None:
         return None
 
 
+def select_model(task: AgentTask, default_model: str | None) -> ModelSelection:
+    """Resolve model precedence without inventing a provider default."""
+
+    if task.model is not None:
+        return ModelSelection(task.model, "task")
+    metadata_model = metadata_str(task.metadata, "model")
+    if metadata_model is not None:
+        return ModelSelection(metadata_model, "metadata")
+    if default_model is not None:
+        return ModelSelection(default_model, "constructor")
+    return ModelSelection(None, "provider-native")
+
+
+def validate_model_configuration(
+    default_model: str | None,
+    supported_models: tuple[str, ...] | None,
+) -> tuple[str, ...] | None:
+    """Validate and freeze adapter-level model overrides and allow-lists."""
+
+    if default_model is not None and (
+        not isinstance(default_model, str) or not default_model.strip()
+    ):
+        raise ValueError("default_model must be a non-empty string or None")
+    if supported_models is None:
+        return None
+    if isinstance(supported_models, (str, bytes)):
+        raise ValueError("supported_models must be a sequence, not a scalar string")
+    values = tuple(supported_models)
+    if any(not isinstance(value, str) or not value.strip() for value in values):
+        raise ValueError("supported_models must contain only non-empty strings")
+    if len(values) != len(set(values)):
+        raise ValueError("supported_models must not contain duplicates")
+    return values
+
+
 def model_support_issue(
     *,
-    task: AgentTask,
-    model: str,
+    selection: ModelSelection,
     supported_models: tuple[str, ...] | None,
 ) -> TaskSupportIssue | None:
     """Report a configured model allow-list mismatch at the source field."""
 
-    if supported_models is None or model in supported_models:
+    if supported_models is None:
         return None
     supported = ", ".join(supported_models) or "(none)"
-    if task.model is not None:
-        field = "model"
-    elif metadata_str(task.metadata, "model") is not None:
-        field = "metadata.model"
-    else:
-        field = "model"
+    if selection.value is None:
+        return TaskSupportIssue(
+            "model",
+            "runtime has a configured model allow-list, but provider-native "
+            "selection cannot be verified; select an explicit model from: "
+            f"{supported}",
+        )
+    if selection.value in supported_models:
+        return None
+    field = {
+        "task": "model",
+        "metadata": "metadata.model",
+        "constructor": "default_model",
+        "provider-native": "model",
+    }[selection.source]
     return TaskSupportIssue(
         field,
-        f"model {model!r} is not supported by this runtime; supported: {supported}",
+        f"model {selection.value!r} is not supported by this runtime; supported: {supported}",
     )
 
 

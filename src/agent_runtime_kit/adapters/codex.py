@@ -35,6 +35,8 @@ from agent_runtime_kit.adapters._common import (
     output_schema_from,
     package_availability,
     resolve_structured_output,
+    select_model,
+    validate_model_configuration,
 )
 from agent_runtime_kit.events import (
     output_delta_event,
@@ -79,7 +81,7 @@ class CodexAgentRuntime:
     def __init__(
         self,
         *,
-        default_model: str = "gpt-5.5",
+        default_model: str | None = None,
         supported_models: tuple[str, ...] | None = None,
         config_overrides: tuple[str, ...] = ("features.plugins=false",),
         env: Mapping[str, str] | None = None,
@@ -90,7 +92,9 @@ class CodexAgentRuntime:
         reuse_process: bool = False,
     ) -> None:
         self._default_model = default_model
-        self._supported_models = supported_models
+        self._supported_models = validate_model_configuration(
+            default_model, supported_models
+        )
         # Plugins are disabled by default so headless runs are deterministic and do
         # not pick up host-local Codex plugin configuration. Override to opt in.
         self._config_overrides = config_overrides
@@ -177,9 +181,9 @@ class CodexAgentRuntime:
         """Report unsupported fields without loading the vendor SDK."""
 
         report = _validate_declared_task_support(self.kind, self.capabilities, task)
+        selection = select_model(task, self._default_model)
         issue = model_support_issue(
-            task=task,
-            model=self._model(task),
+            selection=selection,
             supported_models=self._supported_models,
         )
         return TaskSupportReport(
@@ -193,11 +197,13 @@ class CodexAgentRuntime:
         await safe_emit(task, task_started_event(task, self.kind))
         try:
             require_task_support(self.validate_task(task))
-            model = self._model(task)
+            selection = select_model(task, self._default_model)
+            model = selection.value
             codex_cls, config_cls, sandbox_cls, approval_mode_cls = self._load_sdk()
             result = await self._run_codex(
                 task,
                 model=model,
+                model_source=selection.source,
                 codex_cls=codex_cls,
                 config_cls=config_cls,
                 sandbox_cls=sandbox_cls,
@@ -304,7 +310,8 @@ class CodexAgentRuntime:
         self,
         task: AgentTask,
         *,
-        model: str,
+        model: str | None,
+        model_source: str,
         codex_cls: Any,
         config_cls: Any,
         sandbox_cls: Any,
@@ -377,6 +384,7 @@ class CodexAgentRuntime:
             task,
             raw_result,
             model=model,
+            model_source=model_source,
             session_id=_thread_id(thread) or _task_session_id(task),
             dropped_options=dropped,
             process_metadata=(
@@ -389,7 +397,7 @@ class CodexAgentRuntime:
         codex: Any,
         task: AgentTask,
         *,
-        model: str,
+        model: str | None,
         cwd: str | None,
         sandbox_cls: Any,
         approval_mode_cls: Any,
@@ -402,12 +410,13 @@ class CodexAgentRuntime:
             sandbox_cls=sandbox_cls,
             approval_mode_cls=approval_mode_cls,
         )
-        run_kwargs = {
+        run_kwargs: dict[str, Any] = {
             "cwd": cwd,
-            "model": model,
             "approval_mode": _approval_mode(task.permissions.mode, approval_mode_cls),
             "sandbox": _sandbox_mode(task.permissions.filesystem, sandbox_cls),
         }
+        if model is not None:
+            run_kwargs["model"] = model
         schema = output_schema_from(task.output_schema, task.metadata)
         if schema is not None:
             run_kwargs["output_schema"] = dict(schema)
@@ -472,18 +481,19 @@ class CodexAgentRuntime:
         codex: Any,
         task: AgentTask,
         *,
-        model: str,
+        model: str | None,
         cwd: str | None,
         sandbox_cls: Any,
         approval_mode_cls: Any,
     ) -> tuple[Any, list[str]]:
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "cwd": cwd,
             "developer_instructions": task.system,
-            "model": model,
             "approval_mode": _approval_mode(task.permissions.mode, approval_mode_cls),
             "sandbox": _sandbox_mode(task.permissions.filesystem, sandbox_cls),
         }
+        if model is not None:
+            kwargs["model"] = model
         thread_id = task.resume_from.session_id if task.resume_from is not None else task.session_id
         if thread_id:
             supported, dropped = filter_supported_kwargs(
@@ -495,15 +505,12 @@ class CodexAgentRuntime:
         )
         return await codex.thread_start(**supported), dropped
 
-    def _model(self, task: AgentTask) -> str:
-        return task.model or metadata_str(task.metadata, "model") or self._default_model
-
-
 def _translate_run_result(
     task: AgentTask,
     raw_result: Any,
     *,
-    model: str,
+    model: str | None,
+    model_source: str,
     session_id: str | None,
     dropped_options: list[str] | None = None,
     process_metadata: Mapping[str, Any] | None = None,
@@ -512,10 +519,12 @@ def _translate_run_result(
     usage = _codex_usage(field_value(raw_result, "usage"))
     tool_calls = tuple(_tool_audits(field_value(raw_result, "items", ()) or ()))
     metadata: dict[str, Any] = {
-        "model": model,
+        "model_source": model_source,
         "sdk": "openai_codex",
         **dict(process_metadata or {}),
     }
+    if model is not None:
+        metadata["model"] = model
     if dropped_options:
         metadata["dropped_options"] = list(dropped_options)
     status = _status_value(field_value(raw_result, "status"))
@@ -738,7 +747,7 @@ def _sandbox_mode(filesystem: FilesystemAccess, sandbox_cls: Any) -> Any:
 def _codex_client_key(
     config_kwargs: Mapping[str, Any],
     *,
-    model: str,
+    model: str | None,
     permissions: Any,
     sandbox_cls: Any,
     approval_mode_cls: Any,
