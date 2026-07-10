@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Iterable, Mapping
 from dataclasses import dataclass
 from importlib import metadata
 from math import isfinite
 from typing import Any, Literal
 
-from agent_runtime_kit._errors import UnsupportedTaskInputError
+from agent_runtime_kit._errors import AgentRuntimeError, UnsupportedTaskInputError
 from agent_runtime_kit._schema import (
     STRUCTURED_OUTPUT_MISSING as STRUCTURED_OUTPUT_MISSING,
 )
@@ -28,6 +29,46 @@ from agent_runtime_kit._types import (
 from agent_runtime_kit.compatibility import compatibility_for
 
 ModelSource = Literal["task", "metadata", "constructor", "provider-native"]
+DEFAULT_VENDOR_CLEANUP_TIMEOUT = 5.0
+
+
+class VendorCleanupTimeoutError(TimeoutError):
+    """A bounded cleanup grace expired while teardown continues in quarantine."""
+
+    def __init__(self, timeout: float, pending: asyncio.Future[Any]) -> None:
+        self.timeout = timeout
+        self.pending = pending
+        super().__init__(f"vendor cleanup did not finish within {timeout:g} seconds")
+
+
+class VendorCleanupQuarantine:
+    """Fail new work fast while detached provider teardown still owns resources."""
+
+    def __init__(self) -> None:
+        self._pending: set[asyncio.Future[Any]] = set()
+
+    def track(self, error: BaseException | None) -> None:
+        if not isinstance(error, VendorCleanupTimeoutError):
+            return
+        pending = error.pending
+        if pending.done():
+            _consume_cleanup_result(pending)
+            return
+        self._pending.add(pending)
+
+        def release(completed: asyncio.Future[Any]) -> None:
+            self._pending.discard(completed)
+            _consume_cleanup_result(completed)
+
+        pending.add_done_callback(release)
+
+    def ensure_ready(self, kind: AgentRuntimeKind | str) -> None:
+        self._pending = {item for item in self._pending if not item.done()}
+        if self._pending:
+            raise AgentRuntimeError(
+                f"{kind} has provider cleanup still pending; wait before reusing "
+                "this runtime instance"
+            )
 
 
 @dataclass(frozen=True)
@@ -374,3 +415,64 @@ async def close_vendor_resource(
         result = close()
         if hasattr(result, "__await__"):
             await result
+
+
+async def finish_vendor_cleanup(
+    operation: Awaitable[Any],
+    *,
+    timeout: float = DEFAULT_VENDOR_CLEANUP_TIMEOUT,
+) -> BaseException | None:
+    """Finish teardown even if the owning run receives repeated cancellation.
+
+    The caller is already handling the original run exception (usually
+    ``CancelledError``). A second ``Task.cancel()`` must not abandon provider
+    teardown and expose a half-closed reusable process to the next run. The
+    grace period is bounded so a wedged vendor close cannot make cancellation
+    permanently non-returning. The original exception remains authoritative; a
+    cleanup failure is returned for logging instead of masking it.
+    """
+
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not isfinite(float(timeout))
+        or timeout <= 0
+    ):
+        raise ValueError("cleanup timeout must be a positive finite number")
+
+    cleanup: asyncio.Future[Any] = asyncio.ensure_future(operation)
+    deadline = asyncio.get_running_loop().time() + float(timeout)
+    while not cleanup.done():
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            cleanup.cancel()
+            cleanup.add_done_callback(_consume_cleanup_result)
+            return VendorCleanupTimeoutError(float(timeout), cleanup)
+        try:
+            await asyncio.wait_for(asyncio.shield(cleanup), timeout=remaining)
+        except asyncio.CancelledError:
+            # shield keeps the cleanup task alive. Consume any number of
+            # additional cancellation requests until teardown settles or the
+            # bounded grace period ends.
+            continue
+        except asyncio.TimeoutError:
+            cleanup.cancel()
+            cleanup.add_done_callback(_consume_cleanup_result)
+            return VendorCleanupTimeoutError(float(timeout), cleanup)
+        except Exception:
+            # The failure is retrieved and returned below so it can be logged
+            # without replacing the run's original exception.
+            break
+    try:
+        return cleanup.exception()
+    except asyncio.CancelledError as exc:
+        return exc
+
+
+def _consume_cleanup_result(cleanup: asyncio.Future[Any]) -> None:
+    """Retrieve a detached cleanup result so asyncio never reports it unhandled."""
+
+    try:
+        cleanup.exception()
+    except BaseException:
+        return

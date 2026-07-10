@@ -8,6 +8,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
+from agent_runtime_kit._control import RuntimeTaskController
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError
 from agent_runtime_kit._types import (
     AgentCapabilities,
@@ -15,6 +16,7 @@ from agent_runtime_kit._types import (
     AgentRuntimeKind,
     AgentTask,
     AvailabilityReason,
+    CancellationReceipt,
     FilesystemAccess,
     PermissionMode,
     ReadinessStatus,
@@ -25,10 +27,12 @@ from agent_runtime_kit._types import (
     Usage,
 )
 from agent_runtime_kit.adapters._common import (
+    VendorCleanupQuarantine,
     close_vendor_resource,
     empty_completion_error,
     field_value,
     filter_supported_kwargs,
+    finish_vendor_cleanup,
     metadata_str,
     model_support_issue,
     optional_int,
@@ -74,7 +78,7 @@ class CodexAgentRuntime:
         structured_output=True,
         streaming=False,
         tool_audit=True,
-        cancellation=False,
+        cancellation=True,
         reasoning_effort=True,
     )
 
@@ -111,6 +115,8 @@ class CodexAgentRuntime:
         self._sdk_process_reuse_count = 0
         self._codex_client_lock = asyncio.Lock()
         self._codex_run_lock = asyncio.Lock()
+        self._task_controller = RuntimeTaskController(self.kind)
+        self._cleanup_quarantine = VendorCleanupQuarantine()
 
     async def __aenter__(self) -> CodexAgentRuntime:
         return self
@@ -192,6 +198,12 @@ class CodexAgentRuntime:
         )
 
     async def run(self, task: AgentTask) -> AgentResult:
+        """Execute one deadline- and cancellation-controlled Codex task."""
+
+        self._cleanup_quarantine.ensure_ready(self.kind)
+        return await self._task_controller.run(task, lambda: self._run_task(task))
+
+    async def _run_task(self, task: AgentTask) -> AgentResult:
         """Execute one task with the Codex SDK."""
 
         await safe_emit(task, task_started_event(task, self.kind))
@@ -239,10 +251,10 @@ class CodexAgentRuntime:
             await safe_emit(task, task_completed_event(task, self.kind, result))
         return result
 
-    async def cancel(self, task_id: str) -> None:
-        """Codex SDK cancellation is not exposed through this portable adapter yet."""
+    async def cancel(self, task_id: str) -> CancellationReceipt:
+        """Request cancellation at the adapter coroutine boundary."""
 
-        del task_id
+        return await self._task_controller.cancel(task_id)
 
     async def aclose(self) -> None:
         """Close any reusable Codex app-server process owned by this runtime.
@@ -251,6 +263,7 @@ class CodexAgentRuntime:
         in-flight ``run()`` instead of closing the process mid-turn.
         """
 
+        self._cleanup_quarantine.ensure_ready(self.kind)
         async with self._codex_run_lock:
             await self._close_codex_client()
 
@@ -359,9 +372,9 @@ class CodexAgentRuntime:
                     # inside the run lock so a queued run cannot observe the
                     # doomed client between failure and eviction; close under
                     # the client lock only and never mask the original error.
-                    try:
-                        await self._close_codex_client()
-                    except Exception as close_exc:
+                    close_exc = await finish_vendor_cleanup(self._close_codex_client())
+                    self._cleanup_quarantine.track(close_exc)
+                    if close_exc is not None:
                         logger.warning(
                             "failed to close Codex app-server after run failure: %s", close_exc
                         )
@@ -447,9 +460,9 @@ class CodexAgentRuntime:
             try:
                 client = await enter() if callable(enter) else context
             except BaseException:
-                try:
-                    await close_vendor_resource(context)
-                except Exception as close_exc:
+                close_exc = await finish_vendor_cleanup(close_vendor_resource(context))
+                self._cleanup_quarantine.track(close_exc)
+                if close_exc is not None:
                     logger.warning(
                         "failed to close Codex app-server after startup failure: %s", close_exc
                     )

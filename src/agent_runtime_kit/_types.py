@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from math import isfinite
 from pathlib import Path
@@ -205,6 +206,50 @@ class FinishReason(str, Enum):
     MAX_TURNS = "max_turns"
     MAX_TOKENS = "max_tokens"
     INTERRUPTED = "interrupted"
+    TIMED_OUT = "timed_out"
+
+
+class CancellationDisposition(str, Enum):
+    """Outcome of a portable task-cancellation request.
+
+    A cancellation receipt describes the request, not transactional rollback:
+    provider tools may already have produced external side effects.
+    """
+
+    __str__ = str.__str__
+    __format__ = str.__format__  # type: ignore[assignment]
+
+    REQUESTED = "requested"
+    ALREADY_REQUESTED = "already_requested"
+    NOT_ACTIVE = "not_active"
+    UNSUPPORTED = "unsupported"
+    FAILED = "failed"
+    LEGACY_UNCONFIRMED = "legacy_unconfirmed"
+
+
+@dataclass(frozen=True)
+class CancellationReceipt:
+    """Immutable acknowledgement returned by ``cancel()`` implementations."""
+
+    task_id: str
+    kind: AgentRuntimeKind | str
+    disposition: CancellationDisposition
+    message: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_nonblank(self.task_id, "CancellationReceipt.task_id")
+        object.__setattr__(self, "kind", AgentRuntimeKind.coerce(self.kind))
+        object.__setattr__(
+            self,
+            "disposition",
+            _coerce_enum(
+                CancellationDisposition,
+                self.disposition,
+                "CancellationReceipt.disposition",
+            ),
+        )
+        if self.message is not None:
+            _require_nonblank(self.message, "CancellationReceipt.message")
 
 
 class FilesystemAccess(str, Enum):
@@ -673,6 +718,9 @@ class AgentTask:
     # working_directory, ...).
     model: str | None = field(default=None, kw_only=True)
     reasoning_effort: str | None = field(default=None, kw_only=True)
+    # An absolute, timezone-aware boundary. Adapters normalize it to UTC and
+    # include startup and process-reuse queueing in the deadline.
+    deadline: datetime | None = field(default=None, kw_only=True)
     working_directory: Path | None = None
     mcp_servers: tuple[McpServerConfig, ...] = ()
     permissions: PermissionProfile = field(default_factory=PermissionProfile)
@@ -694,6 +742,12 @@ class AgentTask:
             _require_nonblank(self.model, "AgentTask.model")
         if self.reasoning_effort is not None:
             _require_nonblank(self.reasoning_effort, "AgentTask.reasoning_effort")
+        if self.deadline is not None:
+            if not isinstance(self.deadline, datetime):
+                raise ValueError("AgentTask.deadline must be a datetime")
+            if self.deadline.tzinfo is None or self.deadline.utcoffset() is None:
+                raise ValueError("AgentTask.deadline must be timezone-aware")
+            object.__setattr__(self, "deadline", self.deadline.astimezone(timezone.utc))
         if isinstance(self.sdk_executions, bool) or not isinstance(self.sdk_executions, int):
             raise ValueError("AgentTask.sdk_executions must be a positive integer")
         if self.sdk_executions < 1:
@@ -813,7 +867,7 @@ class AgentRuntime(Protocol):
     async def run(self, task: AgentTask) -> AgentResult:
         """Execute one task."""
 
-    async def cancel(self, task_id: str) -> None:
+    async def cancel(self, task_id: str) -> CancellationReceipt | None:
         """Request cancellation for a task if supported."""
 
     async def aclose(self) -> None:

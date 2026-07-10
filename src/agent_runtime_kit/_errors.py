@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from agent_runtime_kit._types import AgentRuntimeKind, runtime_kind_value
 
 
@@ -15,6 +17,24 @@ class AgentRuntimeUnavailableError(AgentRuntimeError):
     def __init__(self, kind: AgentRuntimeKind | str, message: str) -> None:
         self.kind: AgentRuntimeKind | str = AgentRuntimeKind.coerce(kind)
         super().__init__(message)
+
+
+class AgentTaskTimeoutError(AgentRuntimeError, TimeoutError):
+    """A task exceeded its absolute deadline."""
+
+    def __init__(
+        self,
+        kind: AgentRuntimeKind | str,
+        task_id: str,
+        deadline: datetime,
+    ) -> None:
+        self.kind: AgentRuntimeKind | str = AgentRuntimeKind.coerce(kind)
+        self.task_id = task_id
+        self.deadline = deadline
+        super().__init__(
+            f"{runtime_kind_value(self.kind)} task {task_id!r} exceeded deadline "
+            f"{deadline.isoformat()}"
+        )
 
 
 class UnsupportedTaskInputError(AgentRuntimeError, ValueError):

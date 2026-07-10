@@ -23,6 +23,11 @@ import the names from the top-level package instead.
   party can ship an adapter for a new runtime without forking the enum.
 - **Every runtime exposes the async lifecycle** (`aclose`, `async with`) declared
   by the `AgentRuntime` protocol. Stateless runtimes implement it as a no-op.
+- **Cancellation receipts describe requests, not rollback.** Built-in runtimes
+  return an immutable `CancellationReceipt`; the protocol still permits `None`
+  for existing third-party runtimes, which `AgentKit` reports as
+  `LEGACY_UNCONFIRMED`. `AgentTask.deadline` is keyword-only and an expired task
+  raises `AgentTaskTimeoutError` with `FinishReason.TIMED_OUT` event semantics.
 - **`finish_reason` values** come from `FinishReason`. The field is typed `str`
   for forward-compatibility, so new reasons can be added without a type break;
   compare against `FinishReason` members rather than bare literals.

@@ -5,12 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from agent_runtime_kit._control import RuntimeTaskController
 from agent_runtime_kit._schema import resolve_structured_output
 from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentResult,
     AgentRuntimeKind,
     AgentTask,
+    CancellationReceipt,
     RuntimeAvailability,
     RuntimeReadiness,
     TaskSupportReport,
@@ -54,6 +56,7 @@ class FakeAgentRuntime:
         self._output = output
         self._metadata = dict(metadata or {})
         self.cancelled_task_ids: set[str] = set()
+        self._task_controller = RuntimeTaskController(self.kind)
 
     def availability(self) -> RuntimeAvailability:
         """Fake runtime is always available."""
@@ -77,6 +80,11 @@ class FakeAgentRuntime:
         )
 
     async def run(self, task: AgentTask) -> AgentResult:
+        """Execute one deadline- and cancellation-controlled fake task."""
+
+        return await self._task_controller.run(task, lambda: self._run_task(task))
+
+    async def _run_task(self, task: AgentTask) -> AgentResult:
         """Return a deterministic result after validating capabilities."""
 
         await safe_emit(task, task_started_event(task, self.kind))
@@ -145,10 +153,11 @@ class FakeAgentRuntime:
         await safe_emit(task, task_completed_event(task, self.kind, result))
         return result
 
-    async def cancel(self, task_id: str) -> None:
-        """Record cancellation requests for assertions."""
+    async def cancel(self, task_id: str) -> CancellationReceipt:
+        """Record and request cancellation for an active fake task."""
 
         self.cancelled_task_ids.add(task_id)
+        return await self._task_controller.cancel(task_id)
 
     async def aclose(self) -> None:
         """No-op: the fake runtime owns no vendor process."""

@@ -112,6 +112,7 @@ include = [
     "docs/quickstart.md",
     "docs/sdk-evolution-agent-design.md",
     "docs/sdk-evolution-agent.md",
+    "docs/task-control.md",
 ]
 
 [tool.ruff]
