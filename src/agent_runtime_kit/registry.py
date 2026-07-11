@@ -127,7 +127,7 @@ def create_default_registry(
     include_fake: bool = True,
     extra_factories: Iterable[tuple[AgentRuntimeKind | str, RuntimeFactory]] = (),
 ) -> RuntimeRegistry:
-    """Create a registry with built-in dependency-free runtimes."""
+    """Create a registry with built-in runtimes that need no provider SDK extras."""
 
     registry = RuntimeRegistry()
     if include_fake:
