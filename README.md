@@ -34,7 +34,7 @@ If you want all first-party runtimes available, install the `all` extra:
 pip install "agent-runtime-kit[all]"
 ```
 
-Install the dependency-free core when you only need the public models, fake
+Install the vendor-SDK-free core when you only need the public models, fake
 runtime, registry, diagnostics types, or you plan to add provider SDKs later:
 
 ```bash
@@ -179,5 +179,4 @@ built-in runtime populates it yet, so it is always an empty tuple today.
 - [API stability](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/api-stability.md)
 - [Live smoke tests](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/live-smoke.md)
 - [Deadlines and cancellation](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/task-control.md)
-- [Mestre migration notes](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/mestre-migration.md)
 - [SDK evolution agent](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/sdk-evolution-agent.md)

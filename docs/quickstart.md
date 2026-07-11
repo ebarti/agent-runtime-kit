@@ -6,7 +6,7 @@ Install all first-party runtime adapters:
 pip install "agent-runtime-kit[all]"
 ```
 
-Or install only the dependency-free core:
+Or install only the vendor-SDK-free core:
 
 ```bash
 pip install agent-runtime-kit
