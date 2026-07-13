@@ -19,7 +19,7 @@ from examples.sdk_evolution_agent.models import ApiDiff, ApiMember, ApiSnapshot
 DEFAULT_MODULES = {
     "claude-agent-sdk": "claude_agent_sdk",
     "openai-codex": "openai_codex",
-    "openai-codex-cli-bin": "openai_codex_cli_bin",
+    "openai-codex-cli-bin": "codex_cli_bin",
     "google-antigravity": "google.antigravity",
 }
 

@@ -6,6 +6,7 @@ import importlib
 import importlib.metadata
 import inspect
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,10 @@ _DETAIL_STRING_SEQUENCE_FIELDS = frozenset(
         "run_params",
         "start_params",
     }
+)
+_SENSITIVE_PATH_START_RE = re.compile(
+    r"(?P<prefix>^|[^A-Za-z0-9_.-])"
+    r"(?P<path>(?:[A-Za-z][A-Za-z0-9+.-]*://|[A-Za-z]:[\\/]|\\\\|/))"
 )
 
 
@@ -848,8 +853,11 @@ def _probe_codex(*, version: str | None, scope: str) -> BehaviorProbeResult:
 
 def _probe_codex_cli_bin(*, version: str | None, scope: str) -> BehaviorProbeResult:
     package = "openai-codex-cli-bin"
+    module_name = DEFAULT_MODULES[package]
     try:
         installed = importlib.metadata.version(package)
+        module = importlib.import_module(module_name)
+        _require_bundled_codex_file(module)
     except Exception as exc:
         return _failed(package, version, scope, "binary-distribution", exc)
     return BehaviorProbeResult(
@@ -858,9 +866,35 @@ def _probe_codex_cli_bin(*, version: str | None, scope: str) -> BehaviorProbeRes
         scope=scope,
         probe="binary-distribution",
         status="pass",
-        summary="Codex CLI binary distribution metadata is available.",
-        details={"installed_version": installed},
+        summary="Codex CLI binary distribution exposes a bundled executable.",
+        details={
+            "installed_version": installed,
+            "module": module_name,
+            "bundled_binary": "regular-file",
+        },
     )
+
+
+def _require_bundled_codex_file(module: Any) -> None:
+    """Require the Codex wheel helper to resolve to a regular file without retaining its path."""
+
+    try:
+        raw_path = module.bundled_codex_path()
+    except Exception as exc:
+        detail = _safe_exception_detail(exc)
+        raise RuntimeError(f"codex_cli_bin.bundled_codex_path() failed ({detail})") from exc
+    try:
+        bundled_path = Path(raw_path)
+        is_file = bundled_path.is_file()
+    except (OSError, TypeError, ValueError) as exc:
+        detail = _safe_exception_detail(exc)
+        raise RuntimeError(
+            f"codex_cli_bin.bundled_codex_path() did not return a usable path ({detail})"
+        ) from exc
+    if not is_file:
+        raise RuntimeError(
+            "codex_cli_bin.bundled_codex_path() did not return an existing regular file"
+        )
 
 
 def _probe_antigravity(*, version: str | None, scope: str) -> BehaviorProbeResult:
@@ -955,7 +989,7 @@ def _failed(
     probe: str,
     exc: Exception,
 ) -> BehaviorProbeResult:
-    error = _bounded_text(exc)
+    error = _safe_exception_detail(exc) if package == "openai-codex-cli-bin" else _bounded_text(exc)
     return BehaviorProbeResult(
         package=package,
         version=version,
@@ -1048,6 +1082,15 @@ def _bounded_text(value: object, *, limit: int = 480) -> str:
     return " ".join(text.split())[:limit]
 
 
+def _safe_exception_detail(exc: Exception, *, limit: int = 240) -> str:
+    """Keep useful failure context while removing path-bearing message suffixes."""
+
+    message = " ".join(str(exc).split())
+    match = _SENSITIVE_PATH_START_RE.search(message)
+    redacted = f"{message[: match.start('path')]}<path>" if match is not None else message
+    return _bounded_text(f"{type(exc).__name__}: {redacted}", limit=limit)
+
+
 def _string_or_none(value: object) -> str | None:
     if value is None:
         return None
@@ -1056,14 +1099,30 @@ def _string_or_none(value: object) -> str | None:
 
 
 _PROBE_SCRIPT = textwrap.dedent(
-    """
+    r"""
     import importlib
     import importlib.metadata
     import inspect
     import json
+    import re
     import sys
+    from pathlib import Path
 
     package, version, scope = sys.argv[1:4]
+    sensitive_path_start_re = re.compile(
+        r"(?P<prefix>^|[^A-Za-z0-9_.-])"
+        r"(?P<path>(?:[A-Za-z][A-Za-z0-9+.-]*://|[A-Za-z]:[\\/]|\\\\|/))"
+    )
+
+    def safe_exception_detail(exc, limit=240):
+        message = " ".join(str(exc).split())
+        match = sensitive_path_start_re.search(message)
+        redacted = (
+            f"{message[:match.start('path')]}<path>"
+            if match is not None
+            else message
+        )
+        return f"{type(exc).__name__}: {redacted}"[:limit]
 
     def fields(cls):
         if hasattr(cls, "model_fields"):
@@ -1076,14 +1135,19 @@ _PROBE_SCRIPT = textwrap.dedent(
             return set()
 
     def failed(probe, exc):
+        detail = (
+            safe_exception_detail(exc)
+            if package == "openai-codex-cli-bin"
+            else str(exc)
+        )
         return {
             "package": package,
             "version": version,
             "scope": scope,
             "probe": probe,
             "status": "fail",
-            "summary": str(exc),
-            "details": {"error": str(exc)},
+            "summary": detail,
+            "details": {"error": detail},
         }
 
     def result(probe, status, summary, details):
@@ -1142,11 +1206,36 @@ _PROBE_SCRIPT = textwrap.dedent(
             )]
         elif package == "openai-codex-cli-bin":
             installed = importlib.metadata.version(package)
+            module = importlib.import_module("codex_cli_bin")
+            try:
+                raw_path = module.bundled_codex_path()
+            except Exception as exc:
+                detail = safe_exception_detail(exc)
+                raise RuntimeError(
+                    f"codex_cli_bin.bundled_codex_path() failed ({detail})"
+                ) from exc
+            try:
+                bundled_path = Path(raw_path)
+                is_file = bundled_path.is_file()
+            except (OSError, TypeError, ValueError) as exc:
+                detail = safe_exception_detail(exc)
+                raise RuntimeError(
+                    "codex_cli_bin.bundled_codex_path() did not return a usable path "
+                    f"({detail})"
+                ) from exc
+            if not is_file:
+                raise RuntimeError(
+                    "codex_cli_bin.bundled_codex_path() did not return an existing regular file"
+                )
             payload = [result(
                 "binary-distribution",
                 "pass",
-                "Codex CLI binary distribution metadata is available.",
-                {"installed_version": installed},
+                "Codex CLI binary distribution exposes a bundled executable.",
+                {
+                    "installed_version": installed,
+                    "module": "codex_cli_bin",
+                    "bundled_binary": "regular-file",
+                },
             )]
         elif package == "google-antigravity":
             importlib.import_module("google.antigravity")
@@ -1178,7 +1267,8 @@ _PROBE_SCRIPT = textwrap.dedent(
         else:
             payload = [result("package-import", "skip", "No behavior probe is defined.", {})]
     except Exception as exc:
-        payload = [failed("adapter-contract", exc)]
+        probe = "binary-distribution" if package == "openai-codex-cli-bin" else "adapter-contract"
+        payload = [failed(probe, exc)]
 
     print(json.dumps(payload, sort_keys=True))
     """
