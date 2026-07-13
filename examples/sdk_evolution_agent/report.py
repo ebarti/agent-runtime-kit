@@ -6,6 +6,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from examples.sdk_evolution_agent.behavior import (
+    assess_behavior_payload,
+    behavior_expectations_from_evidence,
+)
 from examples.sdk_evolution_agent.models import RunContext, to_jsonable
 
 
@@ -44,6 +48,13 @@ def write_run_report(
     write_json(context.report_root / "api_diffs.json", api_diffs)
     write_json(context.report_root / "behavior_probes.json", behavior.get("results", []))
     write_json(context.report_root / "behavior_diffs.json", behavior.get("diffs", []))
+    write_json(
+        context.report_root / "behavior_summary.json",
+        assess_behavior_payload(
+            behavior,
+            expectations=behavior_expectations_from_evidence(evidence),
+        ),
+    )
     write_json(context.report_root / "direction_analysis.json", direction)
     write_json(context.report_root / "architecture_decision.json", architecture)
     write_json(context.report_root / "implementation_summary.json", implementation)
@@ -61,6 +72,7 @@ def write_run_report(
         render_markdown_report(
             config=config,
             evidence=evidence,
+            snapshots=snapshots,
             api_diffs=api_diffs,
             release_notes=release_notes,
             behavior=behavior,
@@ -79,6 +91,7 @@ def render_markdown_report(
     *,
     config: dict[str, Any],
     evidence: dict[str, Any],
+    snapshots: list[dict[str, Any]],
     api_diffs: list[dict[str, Any]],
     release_notes: list[dict[str, Any]],
     behavior: dict[str, Any],
@@ -115,8 +128,31 @@ def render_markdown_report(
         for item in release_notes
         if isinstance(item, dict) and item.get("to_version")
     ]
-    behavior_summary = behavior.get("summary") if isinstance(behavior, dict) else {}
-    behavior_diffs = behavior.get("diffs", []) if isinstance(behavior, dict) else []
+    behavior_summary = assess_behavior_payload(
+        behavior,
+        expectations=behavior_expectations_from_evidence(evidence),
+    )
+    behavior_diffs = behavior.get("diffs", [])
+    behavior_reasons = behavior_summary.get("reasons", [])
+    snapshot_errors = [
+        snapshot
+        for snapshot in snapshots
+        if isinstance(snapshot, dict) and snapshot.get("import_error")
+    ]
+    snapshot_error_lines = [
+        "- {package}@{version} ({source}): {error}".format(
+            package=snapshot.get("package"),
+            version=snapshot.get("version"),
+            source=snapshot.get("source"),
+            error=_one_line(snapshot.get("import_error")),
+        )
+        for snapshot in snapshot_errors
+    ]
+    behavior_reason_lines = [
+        f"- {_one_line(reason)}"
+        for reason in behavior_reasons
+        if isinstance(reason, str) and reason
+    ]
     promotion = current_state.get("promotion", {}) if isinstance(current_state, dict) else {}
     return "\n".join(
         [
@@ -132,6 +168,13 @@ def render_markdown_report(
             "",
             *(package_lines or ["- No package evidence collected."]),
             "",
+            "## API Snapshots",
+            "",
+            f"- Status: `{'incomplete' if snapshot_errors else 'pass'}`",
+            f"- Snapshot count: `{len(snapshots)}`",
+            f"- Import or execution errors: `{len(snapshot_errors)}`",
+            *(snapshot_error_lines or ["- No snapshot errors recorded."]),
+            "",
             "## API Diffs",
             "",
             f"- Diff count: `{len(api_diffs)}`",
@@ -145,7 +188,13 @@ def render_markdown_report(
             f"- Status: `{behavior_summary.get('status')}`",
             f"- Changed contracts: `{behavior_summary.get('changed_count')}`",
             f"- Breaking contracts: `{behavior_summary.get('breaking_count')}`",
+            f"- Contract failures: `{behavior_summary.get('contract_failure_count')}`",
+            f"- Probe errors: `{behavior_summary.get('probe_error_count')}`",
+            f"- Skipped probes: `{behavior_summary.get('skipped_count')}`",
+            f"- Missing comparisons: `{behavior_summary.get('missing_comparison_count')}`",
+            f"- Malformed evidence: `{behavior_summary.get('malformed_count')}`",
             f"- Diff count: `{len(behavior_diffs)}`",
+            *(behavior_reason_lines or ["- No behavior evidence issues recorded."]),
             "",
             "## Direction Of Travel",
             "",
@@ -190,3 +239,7 @@ def render_markdown_report(
             "",
         ]
     )
+
+
+def _one_line(value: object, *, limit: int = 560) -> str:
+    return " ".join(str(value).split())[:limit]
