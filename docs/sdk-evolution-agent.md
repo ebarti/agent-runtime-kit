@@ -11,16 +11,22 @@ changelog strategy, caveats, and alternatives, see
 Run it from the repository:
 
 ```bash
-python -m examples.sdk_evolution_agent --runtime fake
+uv run --locked python -m examples.sdk_evolution_agent --runtime fake
 ```
 
 The `fake` runtime is deterministic and useful for checking the local pipeline
-without credentials. For real AI reasoning, select a configured runtime:
+without credentials. It proves pipeline shape only, never upgrade safety. When
+updates exist, its default no-inspection run records incomplete candidate
+evidence. For real AI reasoning, select a configured runtime and its matching
+uv extra:
 
 ```bash
-python -m examples.sdk_evolution_agent --runtime claude-agent-sdk
-python -m examples.sdk_evolution_agent --runtime codex-agent-sdk
-python -m examples.sdk_evolution_agent --runtime antigravity-agent-sdk
+uv run --locked --extra claude python -m examples.sdk_evolution_agent \
+  --runtime claude-agent-sdk --refresh-preview --inspect-candidates
+uv run --locked --extra codex python -m examples.sdk_evolution_agent \
+  --runtime codex-agent-sdk --refresh-preview --inspect-candidates
+uv run --locked --extra antigravity python -m examples.sdk_evolution_agent \
+  --runtime antigravity-agent-sdk --refresh-preview --inspect-candidates
 ```
 
 Every AI-backed stage is dispatched as an `AgentTask` through a runtime resolved
@@ -37,7 +43,7 @@ Run the auth preflight before real Codex-backed SDK evolution runs:
 
 ```bash
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-  uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+  uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
 ```
 
 The helper checks `codex login status` against the dedicated home and can refresh
@@ -46,9 +52,9 @@ the helper reports that the isolated home is not authenticated, refresh the
 normal Codex login cache and rerun the helper:
 
 ```bash
-uv run --extra codex codex login --device-auth
+uv run --locked --extra codex codex login --device-auth
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-  uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+  uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
 ```
 
 Codex-backed SDK evolution runs explicitly choose `gpt-5.5` with
@@ -113,16 +119,18 @@ cutoff variables must not hide candidate releases.
 
 ## Candidate API Inspection
 
-The command treats `uv.lock` as the current baseline. If the active `.venv`
-contains a different installed version, the agent inspects the locked baseline
-in a temporary isolated virtualenv instead of trusting the drifted environment.
+The command treats `uv.lock` as the current baseline. If the locked SDK is
+missing from the active `.venv` or the installed version differs, the agent can
+inspect the locked baseline in a temporary isolated virtualenv instead of
+trusting the missing or drifted environment.
 When a refresh preview is available, package update candidates come from the
 resolver's `uv lock --dry-run -P ...` output, not only from PyPI's `latest`
-metadata. With `--inspect-candidates`, the agent installs each resolver update
-candidate in a temporary isolated virtualenv — with a credential-scrubbed
-environment (throwaway `HOME`, `PATH` only) — and writes an API snapshot plus
-`api_diffs.json` entry, and runs the behavior probes against the candidate the
-same way. This avoids false downgrade diffs for packages whose locked
+metadata. With `--inspect-candidates`, the agent installs each missing or
+drifted locked baseline and each resolver update candidate in a temporary
+isolated virtualenv — with a credential-scrubbed environment (throwaway `HOME`,
+`PATH` only) — and writes API snapshots plus an `api_diffs.json` entry, and runs
+the behavior probes against the candidate the same way. This avoids false
+downgrade diffs for packages whose locked
 prerelease is newer than PyPI's stable latest field. Candidate inspection is
 opt-in because it executes freshly downloaded upstream code; without the flag,
 candidates are recorded as explicit `skip` entries rather than silently
@@ -163,7 +171,11 @@ a stale or contradictory cached summary is never presented as the run result.
 Report-only mode is the default. To allow the implementation stage, pass:
 
 ```bash
-python -m examples.sdk_evolution_agent --runtime claude-agent-sdk --implementation-enabled
+uv run --locked --extra claude python -m examples.sdk_evolution_agent \
+  --runtime claude-agent-sdk \
+  --refresh-preview \
+  --inspect-candidates \
+  --implementation-enabled
 ```
 
 Implementation is still blocked when:
@@ -172,8 +184,9 @@ Implementation is still blocked when:
 - the reviewer rejects the evidence or design,
 - a resolver-selected update lacks a candidate API diff,
 - required release-note evidence could not be collected,
-- behavior evidence is failed, incomplete, malformed, internally inconsistent,
-  or uses the wrong package/version transition,
+- `behavior_summary.json` is missing, malformed, has an unknown status, reports
+  `fail` / `incomplete`, is internally inconsistent, or uses the wrong
+  package/version transition,
 - required structured output or permission behavior is unsupported by the
   selected runtime,
 - recursive self-adaptation is required but no safe migration plan exists.
@@ -190,8 +203,10 @@ design review.
 Draft PR creation is opt-in:
 
 ```bash
-python -m examples.sdk_evolution_agent \
+uv run --locked --extra claude python -m examples.sdk_evolution_agent \
   --runtime claude-agent-sdk \
+  --refresh-preview \
+  --inspect-candidates \
   --implementation-enabled \
   --create-branch \
   --branch-name sdk-evolution-update \
