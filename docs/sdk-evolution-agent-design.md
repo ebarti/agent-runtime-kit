@@ -150,27 +150,34 @@ evidence, but they should not invent evidence that was not collected.
 The default command should be report-only:
 
 ```bash
-python -m examples.sdk_evolution_agent --runtime fake --refresh-preview
+uv run --locked python -m examples.sdk_evolution_agent \
+  --runtime fake \
+  --refresh-preview
 ```
 
 This mode collects evidence, writes artifacts, runs the analysis stages through
-the selected runtime, and stops before editing the workspace. The fake runtime is
-allowed only as a deterministic development harness. It proves the pipeline and
-schemas, not the quality of AI reasoning.
+the selected runtime, and stops before editing the workspace. The fake runtime
+is allowed only as a deterministic pipeline-shape harness. It proves the
+pipeline and schemas, not upgrade safety or the quality of AI reasoning. When
+updates exist, the default no-inspection run records incomplete candidate
+evidence.
 
 A real analysis run should select one configured runtime:
 
 ```bash
-python -m examples.sdk_evolution_agent --runtime claude-agent-sdk --refresh-preview
-python -m examples.sdk_evolution_agent --runtime codex-agent-sdk --refresh-preview
-python -m examples.sdk_evolution_agent --runtime antigravity-agent-sdk --refresh-preview
+uv run --locked --extra claude python -m examples.sdk_evolution_agent \
+  --runtime claude-agent-sdk --refresh-preview --inspect-candidates
+uv run --locked --extra codex python -m examples.sdk_evolution_agent \
+  --runtime codex-agent-sdk --refresh-preview --inspect-candidates
+uv run --locked --extra antigravity python -m examples.sdk_evolution_agent \
+  --runtime antigravity-agent-sdk --refresh-preview --inspect-candidates
 ```
 
 Before a Codex-backed run, prepare the dedicated SDK evolution auth home:
 
 ```bash
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-  uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+  uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
 ```
 
 This helper owns the operator-readiness boundary for Codex-backed runs. It
@@ -188,9 +195,10 @@ Package filters narrow evidence collection for debugging, but normal evolution
 runs should inspect all tracked packages:
 
 ```bash
-python -m examples.sdk_evolution_agent \
+uv run --locked --extra antigravity python -m examples.sdk_evolution_agent \
   --runtime antigravity-agent-sdk \
   --refresh-preview \
+  --inspect-candidates \
   --package claude-agent-sdk \
   --package openai-codex \
   --package openai-codex-cli-bin \
@@ -201,15 +209,18 @@ python -m examples.sdk_evolution_agent \
 since update candidates without candidate API snapshots are not actionable.
 The shipped behavior deliberately inverts that default: candidate inspection
 installs and imports freshly downloaded upstream code, so it is opt-in and
-runs in a credential-scrubbed environment, with explicit `skip` records when
-it is off.
+runs in a credential-scrubbed environment. The same explicit flag is required
+to install a locked baseline that is missing or drifted in the active
+environment. When inspection is off, those gaps become explicit `skip` records
+rather than claimed observations.
 
 Implementation mode should remain explicitly gated:
 
 ```bash
-python -m examples.sdk_evolution_agent \
+uv run --locked --extra antigravity python -m examples.sdk_evolution_agent \
   --runtime antigravity-agent-sdk \
   --refresh-preview \
+  --inspect-candidates \
   --implementation-enabled
 ```
 
@@ -347,6 +358,7 @@ Behavior probe output should be a first-class report artifact, for example:
 ```text
 behavior_probes.json
 behavior_diffs.json
+behavior_summary.json
 ```
 
 Each probe result should include:
@@ -358,15 +370,21 @@ Each probe result should include:
 - stdout/stderr summary,
 - skipped reason when optional credentials are missing.
 
-`behavior_diffs.json` compares current-environment probes against
-candidate-version probes for resolver-selected updates. Breaking candidate probe
-changes block implementation deterministically before any local lock update.
+`behavior_diffs.json` compares observed locked-baseline probes against
+candidate-version probes for resolver-selected updates. Breaking candidate
+probe changes block implementation deterministically before any local lock
+update.
 
 `behavior_probes.json` may include observed SDK fields or parameters that are
 not part of the adapter contract. `behavior_diffs.json` compares the required
 adapter contract, not every optional field. Public API and signature churn
 remains visible in `api_diffs.json` and probe details, but it should only block
 implementation when the required behavior contract fails or becomes ambiguous.
+`behavior_summary.json` is the deterministic hand-off: `pass` means complete
+unchanged evidence, `changed` means complete non-breaking evidence,
+`incomplete` means required observations could not be proved, and `fail` means
+a required contract failed or a breaking diff was observed. Missing, malformed,
+or unknown summary states also block implementation.
 
 ### 5. Runtime-Generated Analysis
 
@@ -518,6 +536,7 @@ api_snapshots/
 api_diffs.json
 behavior_probes.json
 behavior_diffs.json
+behavior_summary.json
 current_state.json
 direction_analysis.json
 architecture_decision.json
@@ -552,6 +571,7 @@ artifact-aware. It should record:
 - paths or content hashes for current API snapshots,
 - paths or content hashes for release-note evidence,
 - paths or content hashes for behavior probe results,
+- a path or content hash for the deterministic behavior summary,
 - whether the baseline was promoted, refreshed, skipped, or blocked.
 
 Promotion rules should be conservative:
@@ -631,13 +651,16 @@ The example implements the deterministic evidence artifacts described above:
 - `behavior_probes.json` records current and candidate adapter-contract probes.
 - `behavior_diffs.json` records behavior differences between current and
   candidate probes.
+- `behavior_summary.json` records the recomputed deterministic status, counts,
+  and reasons handed to implementation guards and operators.
 - `current_state.json` records the run baseline, lockfile hash, accepted
   package versions, artifact hashes, and promotion status.
 
 The implementation path is gated by deterministic checks before the local
 lockfile update runs. Missing candidate API diffs, unavailable required
-release-note evidence, breaking behavior diffs, reviewer rejection,
-`manual_design_required`, and unresolved recursive self-adaptation all block
-implementation. When implementation is allowed, the example applies the
-resolver-selected SDK lock update locally, runs verification, writes the report
-artifacts, commits them, pushes the branch, and opens a draft PR when configured.
+release-note evidence, behavior summaries that are failed, incomplete, missing,
+malformed, or unknown, reviewer rejection, `manual_design_required`, and
+unresolved recursive self-adaptation all block implementation. When
+implementation is allowed, the example applies the resolver-selected SDK lock
+update locally, runs verification, writes the report artifacts, commits them,
+pushes the branch, and opens a draft PR when configured.
