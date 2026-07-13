@@ -128,49 +128,109 @@ def snapshot_candidate_in_venv(
     """Inspect a candidate version in an isolated temporary virtualenv."""
 
     module_name = DEFAULT_MODULES.get(package, package.replace("-", "_"))
-    with tempfile.TemporaryDirectory(prefix="ark-sdk-snapshot-") as directory:
-        venv = Path(directory) / ".venv"
-        # Scrub the environment for every subprocess that touches freshly downloaded
-        # upstream code: give it a throwaway HOME and only PATH, so a malicious or
-        # buggy candidate package cannot read the caller's credentials/config.
-        env = isolated_env(Path(directory))
-        subprocess.run(
-            (python, "-m", "venv", str(venv)), check=True, timeout=timeout, env=env
+    step = "virtual environment creation"
+    try:
+        with tempfile.TemporaryDirectory(prefix="ark-sdk-snapshot-") as directory:
+            venv = Path(directory) / ".venv"
+            # Scrub the environment for every subprocess that touches freshly downloaded
+            # upstream code: give it a throwaway HOME and only PATH, so a malicious or
+            # buggy candidate package cannot read the caller's credentials/config.
+            env = isolated_env(Path(directory))
+            subprocess.run(
+                (python, "-m", "venv", str(venv)),
+                check=True,
+                timeout=timeout,
+                env=env,
+            )
+            bin_dir = "Scripts" if sys.platform == "win32" else "bin"
+            venv_python = venv / bin_dir / "python"
+            step = "package installation"
+            subprocess.run(
+                (str(venv_python), "-m", "pip", "install", f"{package}=={version}"),
+                check=True,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                env=env,
+            )
+            step = "snapshot execution"
+            completed = subprocess.run(
+                (
+                    str(venv_python),
+                    "-c",
+                    _SNAPSHOT_SCRIPT,
+                    package,
+                    version,
+                    module_name,
+                ),
+                check=True,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                env=env,
+            )
+    except subprocess.TimeoutExpired as exc:
+        return _failed_isolated_snapshot(
+            package,
+            version,
+            module_name,
+            f"{step} timed out after {exc.timeout}s",
         )
-        bin_dir = "Scripts" if sys.platform == "win32" else "bin"
-        venv_python = venv / bin_dir / "python"
-        subprocess.run(
-            (str(venv_python), "-m", "pip", "install", f"{package}=={version}"),
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            env=env,
+    except subprocess.CalledProcessError as exc:
+        detail = _bounded_failure_detail(exc.stderr or exc.stdout or str(exc))
+        return _failed_isolated_snapshot(
+            package,
+            version,
+            module_name,
+            f"{step} failed: {detail}",
         )
-        completed = subprocess.run(
-            (
-                str(venv_python),
-                "-c",
-                _SNAPSHOT_SCRIPT,
-                package,
-                version,
-                module_name,
-            ),
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            env=env,
+    except OSError as exc:
+        return _failed_isolated_snapshot(
+            package,
+            version,
+            module_name,
+            f"{step} failed: {_bounded_failure_detail(exc)}",
         )
-    raw = json.loads(completed.stdout)
+
+    try:
+        raw = json.loads(completed.stdout)
+        return ApiSnapshot(
+            package=raw["package"],
+            version=raw["version"],
+            module=raw["module"],
+            members=tuple(ApiMember(**item) for item in raw.get("members", ())),
+            import_error=raw.get("import_error"),
+            source="isolated-venv",
+        )
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        output = _bounded_failure_detail(completed.stdout)
+        detail = f"malformed snapshot output: {exc}"
+        if output:
+            detail += f"; stdout={output}"
+        return _failed_isolated_snapshot(package, version, module_name, detail)
+
+
+def _failed_isolated_snapshot(
+    package: str,
+    version: str,
+    module_name: str,
+    error: str,
+) -> ApiSnapshot:
     return ApiSnapshot(
-        package=raw["package"],
-        version=raw["version"],
-        module=raw["module"],
-        members=tuple(ApiMember(**item) for item in raw.get("members", ())),
-        import_error=raw.get("import_error"),
+        package=package,
+        version=version,
+        module=module_name,
+        import_error=_bounded_failure_detail(error, limit=560),
         source="isolated-venv",
     )
+
+
+def _bounded_failure_detail(value: object, *, limit: int = 480) -> str:
+    if isinstance(value, bytes):
+        text = value.decode(errors="replace")
+    else:
+        text = str(value)
+    return " ".join(text.split())[:limit]
 
 
 def _member_kind(value: Any) -> str:
