@@ -82,6 +82,7 @@ Each run writes a timestamped directory under `reports/sdk-evolution/` with:
 - `api_diffs.json`
 - `behavior_probes.json`
 - `behavior_diffs.json`
+- `behavior_summary.json`
 - `current_state.json`
 - `direction_analysis.json`
 - `architecture_decision.json`
@@ -135,8 +136,27 @@ removed / changed diff is valid; a missing diff object is not.
 Behavior probes intentionally separate observed SDK surface churn from adapter
 contract breakage. `behavior_probes.json` records fields and parameters seen in
 current and candidate packages, while `behavior_diffs.json` compares the
-required adapter contract. Optional field changes remain visible in the report
-and API diffs, but only breaking adapter-contract diffs block implementation.
+required adapter contract. `behavior_summary.json` records the deterministic
+assessment, counts, and reasons used by the implementation gate. Its status is
+`pass` for complete unchanged evidence, `changed` for complete non-breaking
+changes, `incomplete` for probe errors, skips, malformed records, or missing
+exact-version comparisons, and `fail` for a failed required contract or a
+breaking diff. A package with no resolver-selected update needs only a valid
+current baseline at the locked version (or the observed installed version when
+no lock entry exists); it does not need a candidate probe. An ambient SDK that
+has drifted away from the lock therefore produces `incomplete`, not `pass`.
+Optional field changes remain visible in the report and API diffs without being
+treated as a contract failure.
+
+Resolver transitions are parsed once as exact `(package, from, to)` triples and
+shared by snapshot collection, behavior assessment, and implementation gates.
+An API diff or behavior comparison for a different package or version does not
+satisfy the expected transition. Snapshot import and execution errors are also
+shown explicitly in `report.md` instead of being hidden behind the snapshot
+count. Behavior expectations come from deterministic package and resolver
+evidence; a behavior payload cannot narrow that scope itself. The report and
+`behavior_summary.json` recompute their assessment from raw probes and diffs, so
+a stale or contradictory cached summary is never presented as the run result.
 
 ## Implementation Gates
 
@@ -152,7 +172,8 @@ Implementation is still blocked when:
 - the reviewer rejects the evidence or design,
 - a resolver-selected update lacks a candidate API diff,
 - required release-note evidence could not be collected,
-- candidate behavior probes show a breaking adapter-contract difference,
+- behavior evidence is failed, incomplete, malformed, internally inconsistent,
+  or uses the wrong package/version transition,
 - required structured output or permission behavior is unsupported by the
   selected runtime,
 - recursive self-adaptation is required but no safe migration plan exists.
