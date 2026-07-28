@@ -48,12 +48,12 @@ dependencies = ["jsonschema>=4.18,<5"]
 claude = ["claude-agent-sdk>=0.2.87,<0.3"]
 # 0.1.0b3 floor: earlier betas pin a codex binary with no manylinux wheels,
 # making the extra uninstallable on glibc Linux.
-codex = ["openai-codex>=0.1.0b3,<0.2"]
+codex = ["openai-codex>=0.1.0b3,<0.145"]
 antigravity = ["google-antigravity>=0.1.2,<0.2"]
 all = [
     "claude-agent-sdk>=0.2.87,<0.3",
     "google-antigravity>=0.1.2,<0.2",
-    "openai-codex>=0.1.0b3,<0.2",
+    "openai-codex>=0.1.0b3,<0.145",
 ]
 
 [project.urls]
@@ -79,9 +79,15 @@ dev = [
 # freshly compromised upload cannot reach the lockfile before the ecosystem has
 # had time to notice. Committed here (not just a developer env var) so CI and
 # every contributor resolve under the same policy and `uv sync --locked` agrees
-# everywhere. The SDK-evolution agent strips env-level cutoffs for its refresh
-# preview; this project-level floor still applies to what it may lock.
+# everywhere. Monitored vendor SDK/runtime packages are exempt so the audited
+# evolution workflow and ordinary locked CI share one current dependency state.
 exclude-newer = "8 days"
+exclude-newer-package = {
+    claude-agent-sdk = false,
+    google-antigravity = false,
+    openai-codex = false,
+    openai-codex-cli-bin = false,
+}
 # openai-codex-cli-bin ships per-platform binary wheels; require the platforms we
 # develop and run CI on so resolution never locks a version missing one of them.
 required-environments = [

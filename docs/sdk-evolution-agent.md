@@ -106,9 +106,11 @@ installed distributions, then compares it with upstream package metadata for:
 - `google-antigravity`
 
 When `--refresh-preview` is used, the targeted `uv lock --dry-run -P ...`
-preview runs with freshness cutoff environment variables removed, including
-`UV_EXCLUDE_NEWER`. This workflow needs fresh upstream SDK information, so local
-cutoff variables must not hide candidate releases.
+preview removes freshness cutoff environment variables, including
+`UV_EXCLUDE_NEWER`, and passes `--exclude-newer-package <package>=false` for
+each monitored SDK/runtime package. The project declares the same package-scoped
+exemptions, so approved lock updates and ordinary locked CI agree while all other
+dependencies retain the repository's eight-day delay.
 
 ## Candidate API Inspection
 

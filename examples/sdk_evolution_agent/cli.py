@@ -47,9 +47,9 @@ from examples.sdk_evolution_agent.stages import (
 )
 
 DEFAULT_VERIFICATION_COMMANDS = (
-    "uv run ruff check .",
-    "uv run mypy",
-    "uv run pytest",
+    "uv run --locked ruff check .",
+    "uv run --locked mypy",
+    "uv run --locked pytest",
     "uv lock --check",
 )
 

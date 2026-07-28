@@ -81,6 +81,11 @@ Default runtime for this Codex skill: `codex-agent-sdk`.
 Always run a report-only pass before implementation. Explicitly bypass uv
 freshness cutoffs:
 
+The runner removes environment cutoffs and passes
+`--exclude-newer-package <package>=false` for every monitored vendor package.
+The project declares the same package-scoped exemptions, while every other
+dependency keeps the repository's normal eight-day delay.
+
 ```bash
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
   uv run python -m examples.sdk_evolution_agent \
@@ -152,9 +157,9 @@ Run or verify:
 
 ```bash
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv lock --check
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run ruff check .
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run mypy
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run pytest
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run --locked ruff check .
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run --locked mypy
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run --locked pytest
 ```
 
 If a draft PR was created, watch CI until it finishes or clearly report that it
