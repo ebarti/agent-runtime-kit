@@ -28,12 +28,14 @@ from agent_runtime_kit.adapters import (
     CodexAgentRuntime,
 )
 from examples.sdk_evolution_agent import auth as auth_module
+from examples.sdk_evolution_agent import behavior as behavior_module
 from examples.sdk_evolution_agent.auth import CodexAuthResult, ensure_codex_sdk_auth
 from examples.sdk_evolution_agent.behavior import (
     assess_behavior_payload,
     collect_behavior_evidence,
     diff_behavior_results,
     probe_candidate_in_venv,
+    probe_current_package,
     summarize_behavior,
 )
 from examples.sdk_evolution_agent.cli import RunOptions, _collect_snapshots, parse_args, run_agent
@@ -69,6 +71,7 @@ from examples.sdk_evolution_agent.schemas import (
     validate_mapping,
 )
 from examples.sdk_evolution_agent.snapshots import (
+    DEFAULT_MODULES,
     diff_snapshots,
     snapshot_candidate_in_venv,
     snapshot_current_api,
@@ -945,6 +948,335 @@ def test_candidate_behavior_probe_contains_malformed_output(
     assert len(result.summary) <= 560
 
 
+@pytest.mark.parametrize(
+    ("private_path", "secret_suffix"),
+    [
+        ("/tmp/private folder/POSIX_SECRET_SUFFIX", "POSIX_SECRET_SUFFIX"),
+        (r"C:\Program Files\Private\DRIVE_SECRET_SUFFIX", "DRIVE_SECRET_SUFFIX"),
+        (r"\\server\Private Share\UNC_SECRET_SUFFIX", "UNC_SECRET_SUFFIX"),
+        (
+            "https://example.invalid/private folder/URL_SECRET_SUFFIX",
+            "URL_SECRET_SUFFIX",
+        ),
+    ],
+)
+def test_codex_cli_exception_redaction_discards_entire_path_suffix(
+    private_path: str,
+    secret_suffix: str,
+) -> None:
+    detail = behavior_module._safe_exception_detail(
+        ValueError(
+            f"REDACTION_SENTINEL at {private_path} trailing {secret_suffix} "
+            + ("x" * 1_000)
+        )
+    )
+
+    assert detail == "ValueError: REDACTION_SENTINEL at <path>"
+    assert private_path not in detail
+    assert secret_suffix not in detail
+    assert len(detail) <= 240
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_summary"),
+    [
+        ("metadata", "RuntimeError: METADATA_SENTINEL"),
+        ("module", "ModuleNotFoundError: MODULE_SENTINEL"),
+        ("helper-missing", "bundled_codex_path() failed"),
+        ("helper-error", "ValueError: HELPER_SENTINEL"),
+        ("invalid-return", "TypeError"),
+        ("missing-file", "existing regular file"),
+        ("directory", "existing regular file"),
+    ],
+)
+def test_codex_cli_binary_probe_contains_each_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    expected_summary: str,
+) -> None:
+    metadata_path = tmp_path / "private metadata" / "METADATA_SECRET_SUFFIX"
+    drive_path = r"C:\Program Files\Private\MODULE_SECRET_SUFFIX"
+    unc_path = r"\\server\Private Share\HELPER_SECRET_SUFFIX"
+
+    def metadata_version(package: str) -> str:
+        assert package == "openai-codex-cli-bin"
+        if failure == "metadata":
+            raise RuntimeError(
+                f"METADATA_SENTINEL at {metadata_path} " + ("m" * 1_000)
+            )
+        return "1.2.3"
+
+    def helper_error() -> Path:
+        raise ValueError(
+            f"HELPER_SENTINEL at {unc_path} " + ("h" * 1_000)
+        )
+
+    module = types.SimpleNamespace(bundled_codex_path=lambda: tmp_path / "codex")
+    if failure == "helper-missing":
+        module = types.SimpleNamespace()
+    elif failure == "helper-error":
+        module = types.SimpleNamespace(bundled_codex_path=helper_error)
+    elif failure == "invalid-return":
+        module = types.SimpleNamespace(bundled_codex_path=lambda: None)
+    elif failure == "directory":
+        module = types.SimpleNamespace(bundled_codex_path=lambda: tmp_path)
+
+    def import_module(name: str) -> Any:
+        assert name == "codex_cli_bin"
+        if failure == "module":
+            raise ModuleNotFoundError(
+                f"MODULE_SENTINEL: No module named codex_cli_bin at {drive_path} "
+                + ("i" * 1_000)
+            )
+        return module
+
+    monkeypatch.setattr(behavior_module.importlib.metadata, "version", metadata_version)
+    monkeypatch.setattr(behavior_module.importlib, "import_module", import_module)
+
+    (result,) = probe_current_package("openai-codex-cli-bin", version="1.2.3")
+
+    assert result.probe == "binary-distribution"
+    assert result.status == "fail"
+    assert expected_summary in result.summary
+    assert str(tmp_path) not in result.summary
+    assert drive_path not in result.summary
+    assert unc_path not in result.summary
+    serialized_details = json.dumps(result.details)
+    assert str(tmp_path) not in serialized_details
+    assert drive_path not in serialized_details
+    assert unc_path not in serialized_details
+    for secret in (
+        "METADATA_SECRET_SUFFIX",
+        "MODULE_SECRET_SUFFIX",
+        "HELPER_SECRET_SUFFIX",
+    ):
+        assert secret not in result.summary
+        assert secret not in serialized_details
+    assert result.details["error"] == result.summary
+    assert len(result.summary) <= 240
+    assert len(result.details["error"]) <= 240
+    if failure in {"metadata", "module", "helper-error"}:
+        assert "<path>" in result.summary
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_summary", "secret_suffix"),
+    [
+        ("conversion", "ValueError: CONVERSION_SENTINEL", "CONVERSION_SECRET_SUFFIX"),
+        ("file-check", "OSError: FILE_CHECK_SENTINEL", "FILE_CHECK_SECRET_SUFFIX"),
+    ],
+)
+def test_codex_cli_binary_probe_redacts_path_conversion_and_file_check_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    expected_summary: str,
+    secret_suffix: str,
+) -> None:
+    conversion_url = (
+        "https://example.invalid/private folder/CONVERSION_SECRET_SUFFIX"
+    )
+    file_check_path = tmp_path / "private file check" / "FILE_CHECK_SECRET_SUFFIX"
+
+    class InvalidPath:
+        def __fspath__(self) -> str:
+            raise ValueError(
+                f"CONVERSION_SENTINEL at {conversion_url} " + ("c" * 1_000)
+            )
+
+    if failure == "file-check":
+
+        def fail_file_check(self: Path) -> bool:
+            del self
+            raise OSError(
+                f"FILE_CHECK_SENTINEL at {file_check_path} " + ("f" * 1_000)
+            )
+
+        monkeypatch.setattr(Path, "is_file", fail_file_check)
+
+    raw_path: object = InvalidPath() if failure == "conversion" else tmp_path / "codex"
+    module = types.SimpleNamespace(bundled_codex_path=lambda: raw_path)
+    monkeypatch.setattr(
+        behavior_module.importlib.metadata,
+        "version",
+        lambda package: "1.2.3",
+    )
+    monkeypatch.setattr(
+        behavior_module.importlib,
+        "import_module",
+        lambda name: module,
+    )
+
+    (result,) = probe_current_package("openai-codex-cli-bin", version="1.2.3")
+
+    assert result.probe == "binary-distribution"
+    assert result.status == "fail"
+    assert expected_summary in result.summary
+    assert "<path>" in result.summary
+    assert secret_suffix not in result.summary
+    assert secret_suffix not in json.dumps(result.details)
+    assert result.details["error"] == result.summary
+    assert len(result.summary) <= 240
+    assert len(result.details["error"]) <= 240
+
+
+def test_codex_cli_binary_probe_requires_only_a_regular_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = tmp_path / "codex"
+    binary.write_bytes(b"bundled binary")
+    module = types.SimpleNamespace(bundled_codex_path=lambda: binary)
+    monkeypatch.setattr(
+        behavior_module.importlib.metadata,
+        "version",
+        lambda package: "1.2.3",
+    )
+    monkeypatch.setattr(
+        behavior_module.importlib,
+        "import_module",
+        lambda name: module,
+    )
+
+    (result,) = probe_current_package("openai-codex-cli-bin", version="1.2.3")
+
+    assert result.status == "pass"
+    assert result.probe == "binary-distribution"
+    assert result.details == {
+        "installed_version": "1.2.3",
+        "module": "codex_cli_bin",
+        "bundled_binary": "regular-file",
+    }
+    assert str(binary) not in json.dumps(result.details)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_summary", "secret_suffix"),
+    [
+        (
+            "metadata",
+            "RuntimeError: EMBEDDED_METADATA_SENTINEL",
+            "EMBEDDED_METADATA_SECRET_SUFFIX",
+        ),
+        (
+            "module",
+            "ModuleNotFoundError: EMBEDDED_MODULE_SENTINEL",
+            "EMBEDDED_MODULE_SECRET_SUFFIX",
+        ),
+        (
+            "helper-error",
+            "ValueError: EMBEDDED_HELPER_SENTINEL",
+            "EMBEDDED_HELPER_SECRET_SUFFIX",
+        ),
+        (
+            "conversion-error",
+            "ValueError: EMBEDDED_CONVERSION_SENTINEL",
+            "EMBEDDED_CONVERSION_SECRET_SUFFIX",
+        ),
+        (
+            "file-check-error",
+            "OSError: EMBEDDED_FILE_CHECK_SENTINEL",
+            "EMBEDDED_FILE_CHECK_SECRET_SUFFIX",
+        ),
+        ("missing-file", "existing regular file", None),
+    ],
+)
+def test_embedded_codex_cli_failures_keep_binary_probe_label(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+    expected_summary: str,
+    secret_suffix: str | None,
+) -> None:
+    metadata_path = (
+        tmp_path / "private metadata" / "EMBEDDED_METADATA_SECRET_SUFFIX"
+    )
+    drive_path = r"D:\Program Files\Private\EMBEDDED_MODULE_SECRET_SUFFIX"
+    unc_path = r"\\candidate-host\Private Share\EMBEDDED_HELPER_SECRET_SUFFIX"
+    conversion_url = (
+        "https://example.invalid/private folder/EMBEDDED_CONVERSION_SECRET_SUFFIX"
+    )
+    file_check_path = (
+        tmp_path / "private file check" / "EMBEDDED_FILE_CHECK_SECRET_SUFFIX"
+    )
+
+    def fail_metadata(package: str) -> str:
+        if failure == "metadata":
+            raise RuntimeError(
+                f"EMBEDDED_METADATA_SENTINEL for {package} at {metadata_path} "
+                + ("m" * 1_000)
+            )
+        return "1.2.3"
+
+    def helper_error() -> Path:
+        raise ValueError(
+            f"EMBEDDED_HELPER_SENTINEL at {unc_path} " + ("h" * 1_000)
+        )
+
+    class InvalidPath:
+        def __fspath__(self) -> str:
+            raise ValueError(
+                f"EMBEDDED_CONVERSION_SENTINEL at {conversion_url} "
+                + ("c" * 1_000)
+            )
+
+    def bundled_path() -> object:
+        if failure == "helper-error":
+            return helper_error()
+        if failure == "conversion-error":
+            return InvalidPath()
+        return tmp_path / "missing"
+
+    if failure == "file-check-error":
+
+        def fail_file_check(self: Path) -> bool:
+            del self
+            raise OSError(
+                f"EMBEDDED_FILE_CHECK_SENTINEL at {file_check_path} "
+                + ("f" * 1_000)
+            )
+
+        monkeypatch.setattr(Path, "is_file", fail_file_check)
+
+    def import_module(name: str) -> Any:
+        assert name == "codex_cli_bin"
+        if failure == "module":
+            raise ModuleNotFoundError(
+                f"EMBEDDED_MODULE_SENTINEL at {drive_path} " + ("i" * 1_000)
+            )
+        return module
+
+    helper = bundled_path
+    module = types.SimpleNamespace(bundled_codex_path=helper)
+
+    monkeypatch.setattr(behavior_module.importlib.metadata, "version", fail_metadata)
+    monkeypatch.setattr(behavior_module.importlib, "import_module", import_module)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["probe", "openai-codex-cli-bin", "1.2.3", "candidate"],
+    )
+
+    exec(behavior_module._PROBE_SCRIPT, {})
+
+    [result] = json.loads(capsys.readouterr().out)
+    assert result["probe"] == "binary-distribution"
+    assert result["status"] == "fail"
+    assert expected_summary in result["summary"]
+    assert str(tmp_path) not in result["summary"]
+    assert drive_path not in result["summary"]
+    assert unc_path not in result["summary"]
+    if secret_suffix is not None:
+        assert secret_suffix not in result["summary"]
+        assert secret_suffix not in json.dumps(result["details"])
+        assert "<path>" in result["summary"]
+    assert result["details"]["error"] == result["summary"]
+    assert len(result["summary"]) <= 240
+    assert len(result["details"]["error"]) <= 240
+
+
 def test_behavior_summary_accepts_valid_no_update_and_unchanged_evidence() -> None:
     baseline = _probe(
         "claude-agent-sdk",
@@ -1533,6 +1865,73 @@ def test_report_persists_and_renders_recomputed_behavior_summary(tmp_path: Path)
     assert persisted["contract_failure_count"] == 1
     assert "- Status: `fail`" in report
     assert "failed the required contract" in report
+
+
+def test_snapshot_module_mapping_preserves_distribution_identities() -> None:
+    expected = {
+        "claude-agent-sdk": "claude_agent_sdk",
+        "openai-codex": "openai_codex",
+        "openai-codex-cli-bin": "codex_cli_bin",
+        "google-antigravity": "google.antigravity",
+    }
+
+    assert {package: DEFAULT_MODULES[package] for package in expected} == expected
+
+
+def test_current_codex_cli_snapshot_uses_real_import_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = types.ModuleType("codex_cli_bin")
+    module.bundled_codex_path = lambda: Path("unused")
+    monkeypatch.setitem(sys.modules, "codex_cli_bin", module)
+
+    snapshot = snapshot_current_api("openai-codex-cli-bin", version="1.2.3")
+
+    assert snapshot.package == "openai-codex-cli-bin"
+    assert snapshot.module == "codex_cli_bin"
+    assert snapshot.import_error is None
+
+
+def test_isolated_codex_cli_snapshot_receives_real_import_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[Any, ...]] = []
+
+    def fake_run(args: Any, **kwargs: Any) -> Any:
+        del kwargs
+        calls.append(tuple(args))
+        payload = (
+            '{"package":"openai-codex-cli-bin","version":"1.2.3",'
+            '"module":"codex_cli_bin","members":[],"import_error":null}'
+        )
+        return types.SimpleNamespace(
+            stdout=payload if len(calls) == 3 else "",
+            stderr="",
+            returncode=0,
+        )
+
+    monkeypatch.setattr("examples.sdk_evolution_agent.snapshots.subprocess.run", fake_run)
+
+    snapshot = snapshot_candidate_in_venv("openai-codex-cli-bin", "1.2.3")
+
+    assert calls[1][-1] == "openai-codex-cli-bin==1.2.3"
+    assert calls[2][-1] == "codex_cli_bin"
+    assert snapshot.package == "openai-codex-cli-bin"
+    assert snapshot.module == "codex_cli_bin"
+    assert snapshot.import_error is None
+
+
+def test_real_codex_cli_snapshot_and_probe_when_extra_is_installed() -> None:
+    pytest.importorskip("codex_cli_bin", reason="Codex extra is not installed")
+
+    snapshot = snapshot_current_api("openai-codex-cli-bin")
+    (probe,) = probe_current_package("openai-codex-cli-bin", version=snapshot.version)
+
+    assert snapshot.module == "codex_cli_bin"
+    assert snapshot.import_error is None
+    assert probe.probe == "binary-distribution"
+    assert probe.status == "pass"
+    assert probe.details["bundled_binary"] == "regular-file"
 
 
 def test_snapshot_and_diff_public_api(monkeypatch: pytest.MonkeyPatch) -> None:
