@@ -23,6 +23,7 @@ from examples.sdk_evolution_agent.models import (
 )
 
 FRESHNESS_CUTOFF_ENV_VARS = ("UV_EXCLUDE_NEWER",)
+SDK_EVOLUTION_EXCLUDE_NEWER_PACKAGE = "false"
 
 _REFRESH_TRANSITION_RE = re.compile(
     r"^[ \t]*Update[ \t]+(?P<package>[A-Za-z0-9_.-]+)[ \t]+"
@@ -261,6 +262,13 @@ def build_refresh_preview_command(packages: Sequence[str]) -> tuple[str, ...]:
     command = ["uv", "lock", "--dry-run"]
     for package in packages:
         command.extend(("-P", package))
+    for package in packages:
+        command.extend(
+            (
+                "--exclude-newer-package",
+                f"{package}={SDK_EVOLUTION_EXCLUDE_NEWER_PACKAGE}",
+            )
+        )
     return tuple(command)
 
 
@@ -325,6 +333,13 @@ def run_lock_update(
     command = ["uv", "lock"]
     for package in packages:
         command.extend(("-P", package))
+    for package in packages:
+        command.extend(
+            (
+                "--exclude-newer-package",
+                f"{package}={SDK_EVOLUTION_EXCLUDE_NEWER_PACKAGE}",
+            )
+        )
     result = command_runner(tuple(command), cwd=root, env=env)
     return CommandResult(
         command=result.command,
