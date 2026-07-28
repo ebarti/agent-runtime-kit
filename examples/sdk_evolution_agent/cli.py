@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,8 @@ from examples.sdk_evolution_agent.collectors import (
     CommandRunner,
     PypiClient,
     collect_evidence,
+    parse_refresh_transitions,
+    refresh_update_versions,
     run_lock_update,
     run_verification_commands,
 )
@@ -183,7 +184,8 @@ async def run_agent(
             pypi_client=pypi_client,
             command_runner=command_runner,
         )
-        update_versions = _refresh_update_versions(evidence)
+        transitions = parse_refresh_transitions(evidence)
+        update_versions = refresh_update_versions(evidence)
         snapshots = _collect_snapshots(evidence, inspect_candidates=options.inspect_candidates)
         api_diffs = [to_jsonable(diff) for diff in diff_snapshot_groups(snapshots)]
         release_notes = [
@@ -195,6 +197,7 @@ async def run_agent(
                 evidence.get("packages", []),
                 update_versions,
                 inspect_candidates=options.inspect_candidates,
+                expected_transitions=transitions,
             )
         )
         direction, architecture, review = await run_analysis_pipeline(
@@ -517,7 +520,7 @@ def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = F
     # off, every snapshot uses the already-installed version via snapshot_current_api,
     # which imports nothing new.
     snapshots = []
-    update_versions = _refresh_update_versions(evidence)
+    update_versions = refresh_update_versions(evidence)
     refresh_preview_seen = evidence.get("refresh_preview") is not None
     for package in evidence.get("packages", []):
         if not isinstance(package, dict):
@@ -543,14 +546,6 @@ def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = F
 
 
 def _refresh_update_versions(evidence: dict[str, Any]) -> dict[str, str]:
-    preview = evidence.get("refresh_preview")
-    if not isinstance(preview, dict):
-        return {}
-    text = f"{preview.get('stdout') or ''}\n{preview.get('stderr') or ''}"
-    return {
-        package: version
-        for package, version in re.findall(
-            r"Update\s+([A-Za-z0-9_.-]+)\s+v\S+\s+->\s+v(\S+)",
-            text,
-        )
-    }
+    """Compatibility wrapper around the shared exact transition parser."""
+
+    return refresh_update_versions(evidence)
