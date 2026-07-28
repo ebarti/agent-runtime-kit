@@ -82,12 +82,6 @@ dev = [
 # everywhere. Monitored vendor SDK/runtime packages are exempt so the audited
 # evolution workflow and ordinary locked CI share one current dependency state.
 exclude-newer = "8 days"
-exclude-newer-package = {
-    claude-agent-sdk = false,
-    google-antigravity = false,
-    openai-codex = false,
-    openai-codex-cli-bin = false,
-}
 # openai-codex-cli-bin ships per-platform binary wheels; require the platforms we
 # develop and run CI on so resolution never locks a version missing one of them.
 required-environments = [
@@ -97,6 +91,12 @@ required-environments = [
 # openai-codex pins exact pre-release builds of its CLI binary; the pre-release
 # marker here opts that one package into pre-release resolution.
 constraint-dependencies = ["openai-codex-cli-bin>=0.134.0a1"]
+
+[tool.uv.exclude-newer-package]
+claude-agent-sdk = false
+google-antigravity = false
+openai-codex = false
+openai-codex-cli-bin = false
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_runtime_kit"]
