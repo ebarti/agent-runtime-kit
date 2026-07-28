@@ -41,16 +41,14 @@ def collect_behavior_evidence(
             continue
         locked_version = _string_or_none(package.get("locked_version"))
         installed_version = _string_or_none(package.get("installed_version"))
-        current_version = locked_version or installed_version
         if (
             inspect_candidates
             and locked_version
-            and installed_version
             and locked_version != installed_version
         ):
             results.extend(probe_candidate_in_venv(name, locked_version, scope="current-baseline"))
         else:
-            results.extend(probe_current_package(name, version=current_version))
+            results.extend(probe_current_package(name, version=installed_version))
         candidate = update_versions.get(name)
         if candidate:
             if inspect_candidates:

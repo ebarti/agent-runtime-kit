@@ -526,10 +526,10 @@ def _collect_snapshots(evidence: dict[str, Any], *, inspect_candidates: bool = F
         locked = package.get("locked_version")
         installed = package.get("installed_version")
         baseline = locked or installed
-        if inspect_candidates and locked and installed and locked != installed:
+        if inspect_candidates and locked and locked != installed:
             snapshots.append(snapshot_candidate_in_venv(name, str(locked)))
         else:
-            snapshots.append(snapshot_current_api(name, version=baseline))
+            snapshots.append(snapshot_current_api(name, version=installed))
         if not inspect_candidates:
             continue
         candidate = update_versions.get(name)

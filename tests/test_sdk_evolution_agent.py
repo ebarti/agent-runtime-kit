@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -53,7 +54,11 @@ from examples.sdk_evolution_agent.schemas import (
     SchemaValidationError,
     validate_mapping,
 )
-from examples.sdk_evolution_agent.snapshots import diff_snapshots, snapshot_current_api
+from examples.sdk_evolution_agent.snapshots import (
+    diff_snapshots,
+    snapshot_candidate_in_venv,
+    snapshot_current_api,
+)
 from examples.sdk_evolution_agent.stages import (
     SDK_EVOLUTION_CODEX_HOME,
     SDK_EVOLUTION_CODEX_MODEL,
@@ -492,6 +497,156 @@ def test_behavior_evidence_uses_locked_baseline_when_environment_drifted(
     assert behavior["diffs"][0].severity == "changed"
 
 
+def test_behavior_evidence_uses_locked_baseline_when_sdk_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def isolated(package: str, version: str, *, scope: str = "candidate"):
+        calls.append((package, version, scope))
+        return (_probe(package, version, scope, "pass", {"scope": scope}),)
+
+    def current(package: str, *, version: str | None = None):
+        raise AssertionError(f"ambient probe must not represent {package} {version}")
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_candidate_in_venv",
+        isolated,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_current_package",
+        current,
+    )
+
+    collect_behavior_evidence(
+        [
+            {
+                "name": "claude-agent-sdk",
+                "locked_version": "0.2.106",
+                "installed_version": None,
+            }
+        ],
+        {"claude-agent-sdk": "0.2.110"},
+        inspect_candidates=True,
+    )
+
+    assert calls == [
+        ("claude-agent-sdk", "0.2.106", "current-baseline"),
+        ("claude-agent-sdk", "0.2.110", "candidate"),
+    ]
+
+
+def test_behavior_evidence_without_opt_in_reports_actual_ambient_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    def current(package: str, *, version: str | None = None):
+        calls.append((package, version))
+        return (_probe(package, version, "current-environment", "fail", {}),)
+
+    def isolated(package: str, version: str, *, scope: str = "candidate"):
+        raise AssertionError(f"isolated probe must not run for {package} {version} {scope}")
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_current_package",
+        current,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_candidate_in_venv",
+        isolated,
+    )
+
+    behavior = collect_behavior_evidence(
+        [
+            {
+                "name": "claude-agent-sdk",
+                "locked_version": "0.2.106",
+                "installed_version": None,
+            }
+        ],
+        {"claude-agent-sdk": "0.2.110"},
+    )
+
+    assert calls == [("claude-agent-sdk", None)]
+    assert [result.status for result in behavior["results"]] == ["fail", "skip"]
+
+
+def test_behavior_evidence_without_opt_in_uses_drifted_installed_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    def current(package: str, *, version: str | None = None):
+        calls.append((package, version))
+        return (_probe(package, version, "current-environment", "pass", {}),)
+
+    def isolated(package: str, version: str, *, scope: str = "candidate"):
+        raise AssertionError(f"isolated probe must not run for {package} {version} {scope}")
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_current_package",
+        current,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_candidate_in_venv",
+        isolated,
+    )
+
+    collect_behavior_evidence(
+        [
+            {
+                "name": "claude-agent-sdk",
+                "locked_version": "0.2.96",
+                "installed_version": "0.2.106",
+            }
+        ],
+        {"claude-agent-sdk": "0.2.110"},
+    )
+
+    assert calls == [("claude-agent-sdk", "0.2.106")]
+
+
+def test_behavior_evidence_reuses_matching_ambient_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str | None]] = []
+
+    def current(package: str, *, version: str | None = None):
+        calls.append(("current", package, version))
+        return (_probe(package, version, "current-environment", "pass", {}),)
+
+    def isolated(package: str, version: str, *, scope: str = "candidate"):
+        calls.append((scope, package, version))
+        return (_probe(package, version, scope, "pass", {}),)
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_current_package",
+        current,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_candidate_in_venv",
+        isolated,
+    )
+
+    collect_behavior_evidence(
+        [
+            {
+                "name": "claude-agent-sdk",
+                "locked_version": "0.2.106",
+                "installed_version": "0.2.106",
+            }
+        ],
+        {"claude-agent-sdk": "0.2.110"},
+        inspect_candidates=True,
+    )
+
+    assert calls == [
+        ("current", "claude-agent-sdk", "0.2.106"),
+        ("candidate", "claude-agent-sdk", "0.2.110"),
+    ]
+
+
 def test_behavior_candidate_probes_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     # Probing a candidate pip-installs and imports freshly downloaded upstream
     # code; without --inspect-candidates that must never happen, and the gap
@@ -644,6 +799,111 @@ def test_snapshot_and_diff_public_api(monkeypatch: pytest.MonkeyPatch) -> None:
     diff = diff_snapshots(before, after)
     assert diff.added == ("extra",)
     assert diff.changed == ("run",)
+
+
+@pytest.mark.parametrize(
+    ("failure_call", "detail"),
+    [
+        (1, "venv creation failed"),
+        (2, "package install failed"),
+        (3, "snapshot execution failed"),
+    ],
+)
+def test_candidate_snapshot_records_subprocess_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_call: int,
+    detail: str,
+) -> None:
+    calls = 0
+
+    def fake_run(args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == failure_call:
+            raise subprocess.CalledProcessError(
+                returncode=1,
+                cmd=args,
+                stderr=(detail + " ") * 100,
+            )
+        return types.SimpleNamespace(stdout="{}", stderr="", returncode=0)
+
+    monkeypatch.setattr("examples.sdk_evolution_agent.snapshots.subprocess.run", fake_run)
+
+    snapshot = snapshot_candidate_in_venv("claude-agent-sdk", "0.2.110")
+
+    assert snapshot.package == "claude-agent-sdk"
+    assert snapshot.version == "0.2.110"
+    assert snapshot.source == "isolated-venv"
+    assert snapshot.import_error is not None
+    assert detail in snapshot.import_error
+    assert len(snapshot.import_error) <= 600
+
+
+def test_candidate_snapshot_records_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(args: Any, **kwargs: Any) -> Any:
+        raise subprocess.TimeoutExpired(cmd=args, timeout=kwargs["timeout"])
+
+    monkeypatch.setattr("examples.sdk_evolution_agent.snapshots.subprocess.run", fake_run)
+
+    snapshot = snapshot_candidate_in_venv("claude-agent-sdk", "0.2.110", timeout=7)
+
+    assert snapshot.import_error is not None
+    assert "timed out after 7s" in snapshot.import_error
+    assert snapshot.source == "isolated-venv"
+
+
+def test_candidate_snapshot_records_malformed_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def fake_run(args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return types.SimpleNamespace(
+            stdout="not-json" if calls == 3 else "",
+            stderr="",
+            returncode=0,
+        )
+
+    monkeypatch.setattr("examples.sdk_evolution_agent.snapshots.subprocess.run", fake_run)
+
+    snapshot = snapshot_candidate_in_venv("claude-agent-sdk", "0.2.110")
+
+    assert snapshot.import_error is not None
+    assert "malformed snapshot output" in snapshot.import_error
+    assert snapshot.source == "isolated-venv"
+
+
+def test_candidate_snapshot_scrubs_subprocess_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_envs: list[dict[str, str] | None] = []
+    calls = 0
+
+    def fake_run(args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        captured_envs.append(kwargs.get("env"))
+        payload = (
+            '{"package":"claude-agent-sdk","version":"0.2.110",'
+            '"module":"claude_agent_sdk","members":[],"import_error":null}'
+        )
+        return types.SimpleNamespace(
+            stdout=payload if calls == 3 else "",
+            stderr="",
+            returncode=0,
+        )
+
+    monkeypatch.setenv("ARK_FAKE_SECRET", "not-for-snapshots")
+    monkeypatch.setattr("examples.sdk_evolution_agent.snapshots.subprocess.run", fake_run)
+
+    snapshot = snapshot_candidate_in_venv("claude-agent-sdk", "0.2.110")
+
+    assert snapshot.import_error is None
+    assert len(captured_envs) == 3
+    for env in captured_envs:
+        assert env is not None
+        assert "ARK_FAKE_SECRET" not in env
+        assert env.get("HOME") != os.environ.get("HOME")
 
 
 def test_parse_args_candidate_inspection_is_opt_in() -> None:
@@ -803,6 +1063,56 @@ def test_collect_snapshots_uses_locked_baseline_when_environment_drifted(
     ]
 
 
+def test_collect_snapshots_uses_locked_baseline_when_sdk_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str | None]] = []
+
+    def current_snapshot(package: str, *, version: str | None = None) -> ApiSnapshot:
+        raise AssertionError(f"ambient snapshot must not represent {package} {version}")
+
+    def isolated_snapshot(package: str, version: str) -> ApiSnapshot:
+        calls.append(("isolated", package, version))
+        return ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+            source="isolated-venv",
+        )
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        current_snapshot,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        isolated_snapshot,
+    )
+
+    _collect_snapshots(
+        {
+            "packages": [
+                {
+                    "name": "claude-agent-sdk",
+                    "locked_version": "0.2.106",
+                    "installed_version": None,
+                    "latest_version": "0.2.110",
+                },
+            ],
+            "refresh_preview": {
+                "stdout": "",
+                "stderr": "Update claude-agent-sdk v0.2.106 -> v0.2.110\n",
+            },
+        },
+        inspect_candidates=True,
+    )
+
+    assert calls == [
+        ("isolated", "claude-agent-sdk", "0.2.106"),
+        ("isolated", "claude-agent-sdk", "0.2.110"),
+    ]
+
+
 def test_collect_snapshots_without_opt_in_never_installs_even_when_lock_drifted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -846,7 +1156,55 @@ def test_collect_snapshots_without_opt_in_never_installs_even_when_lock_drifted(
         inspect_candidates=False,
     )
 
-    assert calls == [("current", "claude-agent-sdk", "0.2.96")]
+    assert calls == [("current", "claude-agent-sdk", "0.2.106")]
+
+
+def test_collect_snapshots_without_opt_in_reports_missing_ambient_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str | None]] = []
+
+    def current_snapshot(package: str, *, version: str | None = None) -> ApiSnapshot:
+        calls.append(("current", package, version))
+        return ApiSnapshot(
+            package=package,
+            version=version,
+            module=package.replace("-", "_"),
+            import_error="not installed",
+        )
+
+    def isolated_snapshot(package: str, version: str) -> ApiSnapshot:
+        raise AssertionError(f"isolated snapshot must not run for {package} {version}")
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        current_snapshot,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        isolated_snapshot,
+    )
+
+    snapshots = _collect_snapshots(
+        {
+            "packages": [
+                {
+                    "name": "claude-agent-sdk",
+                    "locked_version": "0.2.106",
+                    "installed_version": None,
+                    "latest_version": "0.2.110",
+                }
+            ],
+            "refresh_preview": {
+                "stdout": "",
+                "stderr": "Update claude-agent-sdk v0.2.106 -> v0.2.110\n",
+            },
+        },
+        inspect_candidates=False,
+    )
+
+    assert calls == [("current", "claude-agent-sdk", None)]
+    assert snapshots[0].import_error == "not installed"
 
 
 def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
