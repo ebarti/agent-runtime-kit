@@ -66,7 +66,7 @@ COMPATIBILITY_MANIFEST: tuple[RuntimeCompatibility, ...] = (
         package="claude-agent-sdk",
         module="claude_agent_sdk",
         version_specifier=">=0.2.87,<0.3",
-        tested_version="0.2.106",
+        tested_version="0.2.123",
     ),
     RuntimeCompatibility(
         kind=AgentRuntimeKind.CODEX_AGENT_SDK,
@@ -85,7 +85,7 @@ COMPATIBILITY_MANIFEST: tuple[RuntimeCompatibility, ...] = (
         package="google-antigravity",
         module="google.antigravity",
         version_specifier=">=0.1.2,<0.2",
-        tested_version="0.1.4",
+        tested_version="0.1.7",
     ),
 )
 
