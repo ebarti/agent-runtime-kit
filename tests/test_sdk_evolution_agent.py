@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -29,26 +30,39 @@ from agent_runtime_kit.adapters import (
 from examples.sdk_evolution_agent import auth as auth_module
 from examples.sdk_evolution_agent.auth import CodexAuthResult, ensure_codex_sdk_auth
 from examples.sdk_evolution_agent.behavior import (
+    assess_behavior_payload,
     collect_behavior_evidence,
     diff_behavior_results,
     probe_candidate_in_venv,
+    summarize_behavior,
 )
 from examples.sdk_evolution_agent.cli import RunOptions, _collect_snapshots, parse_args, run_agent
 from examples.sdk_evolution_agent.collectors import (
+    ResolverTransition,
     build_refresh_preview_command,
     collect_evidence,
     cutoff_free_env,
+    parse_refresh_transitions,
     run_lock_update,
     run_refresh_preview,
 )
 from examples.sdk_evolution_agent.current_state import build_current_state
-from examples.sdk_evolution_agent.models import ApiSnapshot, CommandResult, RunContext, SourceRef
+from examples.sdk_evolution_agent.models import (
+    ApiSnapshot,
+    BehaviorDiff,
+    BehaviorProbeResult,
+    CommandResult,
+    RunContext,
+    SourceRef,
+    to_jsonable,
+)
 from examples.sdk_evolution_agent.pr import build_draft_pr_body
 from examples.sdk_evolution_agent.release_notes import (
     _fetch_source_text,
     _format_github_discussions_index,
     collect_release_notes,
 )
+from examples.sdk_evolution_agent.report import render_markdown_report, write_run_report
 from examples.sdk_evolution_agent.schemas import (
     DIRECTION_ANALYSIS_SCHEMA,
     SchemaValidationError,
@@ -127,6 +141,47 @@ def test_refresh_preview_uses_targeted_packages_and_clean_env(
     )
     assert "UV_EXCLUDE_NEWER" not in seen["env"]
     assert result.removed_env == ("UV_EXCLUDE_NEWER",)
+
+
+def test_refresh_transition_parser_reads_exact_stdout_and_stderr_updates() -> None:
+    transitions = parse_refresh_transitions(
+        {
+            "refresh_preview": {
+                "stdout": (
+                    "Update claude-agent-sdk v0.2.96 -> v0.2.106\n"
+                    "Update openai-codex v0.1.0b3 -> v0.1.0rc1\n"
+                ),
+                "stderr": (
+                    "Update google-antigravity v0.1.2 -> v0.1.4\n"
+                    "Update claude-agent-sdk v0.2.96 -> v0.2.106\n"
+                ),
+            }
+        }
+    )
+
+    assert transitions == (
+        ResolverTransition("claude-agent-sdk", "0.2.96", "0.2.106"),
+        ResolverTransition("google-antigravity", "0.1.2", "0.1.4"),
+        ResolverTransition("openai-codex", "0.1.0b3", "0.1.0rc1"),
+    )
+
+
+def test_refresh_transition_parser_rejects_partial_or_decorated_lines() -> None:
+    transitions = parse_refresh_transitions(
+        {
+            "refresh_preview": {
+                "stdout": (
+                    "NotUpdate claude-agent-sdk v1 -> v2\n"
+                    "Update claude-agent-sdk v1 -> v2 trailing\n"
+                    "prefix Update claude-agent-sdk v1 -> v2\n"
+                    "Update claude-agent-sdk-extra v1 -> v2\n"
+                ),
+                "stderr": "",
+            }
+        }
+    )
+
+    assert transitions == (ResolverTransition("claude-agent-sdk-extra", "1", "2"),)
 
 
 def test_lock_update_uses_targeted_packages_and_clean_env(
@@ -325,9 +380,7 @@ def test_fetch_source_text_uses_plain_fetch_without_token(
         url="https://github.com/o/r/discussions/categories/announcements",
     )
 
-    text = _fetch_source_text(
-        source, fetcher=lambda url: "html fallback", use_github_graphql=True
-    )
+    text = _fetch_source_text(source, fetcher=lambda url: "html fallback", use_github_graphql=True)
 
     assert text == "html fallback"
 
@@ -419,7 +472,7 @@ def test_behavior_diffs_track_candidate_contract_changes() -> None:
         ],
         {},
     )
-    assert behavior["summary"]["status"] == "pass"
+    assert behavior["summary"]["status"] == "incomplete"
 
     diffs = diff_behavior_results(
         [
@@ -495,6 +548,14 @@ def test_behavior_evidence_uses_locked_baseline_when_environment_drifted(
         ("claude-agent-sdk", "0.2.106", "candidate"),
     ]
     assert behavior["diffs"][0].severity == "changed"
+    assert behavior["expected_packages"] == ["claude-agent-sdk"]
+    assert behavior["expected_transitions"] == [
+        {
+            "package": "claude-agent-sdk",
+            "from_version": "0.2.96",
+            "to_version": "0.2.106",
+        }
+    ]
 
 
 def test_behavior_evidence_uses_locked_baseline_when_sdk_not_installed(
@@ -607,6 +668,58 @@ def test_behavior_evidence_without_opt_in_uses_drifted_installed_version(
     assert calls == [("claude-agent-sdk", "0.2.106")]
 
 
+def test_behavior_no_update_is_incomplete_when_ambient_version_drifted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_current_package",
+        lambda package, *, version=None: (
+            _probe(package, version, "current-environment", "pass", {"missing": []}),
+        ),
+    )
+
+    behavior = collect_behavior_evidence(
+        [
+            {
+                "name": "claude-agent-sdk",
+                "locked_version": "1.0.0",
+                "installed_version": "2.0.0",
+            }
+        ],
+        {},
+    )
+
+    assert behavior["expected_baselines"] == {"claude-agent-sdk": "1.0.0"}
+    assert behavior["summary"]["status"] == "incomplete"
+    assert behavior["summary"]["missing_comparison_count"] == 1
+    assert "observed: 2.0.0" in " ".join(behavior["summary"]["reasons"])
+
+
+def test_behavior_no_update_passes_when_ambient_matches_locked_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.behavior.probe_current_package",
+        lambda package, *, version=None: (
+            _probe(package, version, "current-environment", "pass", {"missing": []}),
+        ),
+    )
+
+    behavior = collect_behavior_evidence(
+        [
+            {
+                "name": "claude-agent-sdk",
+                "locked_version": "1.0.0",
+                "installed_version": "1.0.0",
+            }
+        ],
+        {},
+    )
+
+    assert behavior["summary"]["status"] == "pass"
+    assert behavior["summary"]["missing_comparison_count"] == 0
+
+
 def test_behavior_evidence_reuses_matching_ambient_baseline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -697,14 +810,22 @@ def test_candidate_behavior_probe_scrubs_subprocess_env(
 
     def fake_run(args: Any, **kwargs: Any) -> Any:
         captured_envs.append(kwargs.get("env"))
-        return types.SimpleNamespace(stdout="[]", returncode=0)
+        return types.SimpleNamespace(
+            stdout=(
+                '[{"package":"claude-agent-sdk","version":"9.9.9",'
+                '"scope":"candidate","probe":"adapter-contract","status":"pass",'
+                '"summary":"ok","details":{}}]'
+            ),
+            returncode=0,
+        )
 
     monkeypatch.setenv("ARK_FAKE_SECRET", "not-for-candidates")
     monkeypatch.setattr("examples.sdk_evolution_agent.behavior.subprocess.run", fake_run)
 
     results = probe_candidate_in_venv("claude-agent-sdk", "9.9.9")
 
-    assert results == ()
+    assert len(results) == 1
+    assert results[0].status == "pass"
     # venv create, pip install, probe script: every subprocess that touches the
     # freshly downloaded candidate runs with the scrubbed environment.
     assert len(captured_envs) == 3
@@ -714,7 +835,390 @@ def test_candidate_behavior_probe_scrubs_subprocess_env(
         assert env.get("HOME") != os.environ.get("HOME")
 
 
-def test_behavior_probe_guard_blocks_breaking_candidate_diff() -> None:
+@pytest.mark.parametrize(
+    ("package", "failure_call", "error", "failure_step", "probe"),
+    [
+        (
+            "claude-agent-sdk",
+            1,
+            subprocess.CalledProcessError(
+                1,
+                ("python", "-m", "venv"),
+                stderr="venv failed " + ("x" * 1_000),
+            ),
+            "virtual-environment-creation",
+            "adapter-contract",
+        ),
+        (
+            "openai-codex-cli-bin",
+            2,
+            OSError("installer unavailable " + ("x" * 1_000)),
+            "package-installation",
+            "binary-distribution",
+        ),
+        (
+            "google-antigravity",
+            3,
+            subprocess.TimeoutExpired(("python", "-c", "probe"), 7),
+            "probe-execution",
+            "adapter-contract",
+        ),
+    ],
+)
+def test_candidate_behavior_probe_contains_subprocess_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    package: str,
+    failure_call: int,
+    error: BaseException,
+    failure_step: str,
+    probe: str,
+) -> None:
+    calls = 0
+
+    def fake_run(args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        if calls == failure_call:
+            raise error
+        return types.SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr("examples.sdk_evolution_agent.behavior.subprocess.run", fake_run)
+
+    results = probe_candidate_in_venv(package, "9.9.9", timeout=7)
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.package == package
+    assert result.version == "9.9.9"
+    assert result.scope == "candidate"
+    assert result.probe == probe
+    assert result.status == "fail"
+    assert result.details["failure_step"] == failure_step
+    assert result.details["error"] == result.summary
+    assert len(result.summary) <= 560
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "not-json",
+        "[]",
+        (
+            '[{"package":"wrong-sdk","version":"9.9.9","scope":"candidate",'
+            '"probe":"adapter-contract","status":"pass","summary":"ok","details":{}}]'
+        ),
+        (
+            '[{"package":"claude-agent-sdk","version":"9.9.9","scope":"candidate",'
+            '"probe":"adapter-contract","status":"pass","summary":null,"details":{}}]'
+        ),
+        (
+            '[{"package":"claude-agent-sdk","version":"9.9.9","scope":"candidate",'
+            '"probe":"adapter-contract","status":"unknown","summary":"ok","details":{}}]'
+        ),
+        (
+            '[{"package":"claude-agent-sdk","version":"9.9.9","scope":"candidate",'
+            '"probe":"adapter-contract","status":"fail","summary":"missing",'
+            '"details":{"missing":7}}]'
+        ),
+    ],
+)
+def test_candidate_behavior_probe_contains_malformed_output(
+    monkeypatch: pytest.MonkeyPatch,
+    output: str,
+) -> None:
+    def fake_run(args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        return types.SimpleNamespace(stdout=output, stderr="", returncode=0)
+
+    monkeypatch.setattr("examples.sdk_evolution_agent.behavior.subprocess.run", fake_run)
+
+    (result,) = probe_candidate_in_venv("claude-agent-sdk", "9.9.9")
+
+    assert result.package == "claude-agent-sdk"
+    assert result.version == "9.9.9"
+    assert result.scope == "candidate"
+    assert result.probe == "adapter-contract"
+    assert result.status == "fail"
+    assert result.details["failure_step"] == "probe-output-validation"
+    assert "malformed probe output" in result.summary
+    assert len(result.summary) <= 560
+
+
+def test_behavior_summary_accepts_valid_no_update_and_unchanged_evidence() -> None:
+    baseline = _probe(
+        "claude-agent-sdk",
+        "1.0.0",
+        "current-environment",
+        "pass",
+        {"missing": []},
+    )
+    no_update = summarize_behavior(
+        [baseline],
+        [],
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+    assert no_update["status"] == "pass"
+    assert no_update["missing_comparison_count"] == 0
+
+    candidate = _probe(
+        "claude-agent-sdk",
+        "2.0.0",
+        "candidate",
+        "pass",
+        {"missing": []},
+    )
+    diffs = diff_behavior_results([baseline, candidate])
+    unchanged = summarize_behavior(
+        [baseline, candidate],
+        diffs,
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+    assert unchanged["status"] == "pass"
+    assert unchanged["unchanged_count"] == 1
+
+
+def test_behavior_summary_reports_changed_only_for_complete_evidence() -> None:
+    baseline = _probe(
+        "claude-agent-sdk",
+        "1.0.0",
+        "current-baseline",
+        "pass",
+        {"missing": [], "required_fields": ["a"]},
+    )
+    candidate = _probe(
+        "claude-agent-sdk",
+        "2.0.0",
+        "candidate",
+        "pass",
+        {"missing": [], "required_fields": ["a", "b"]},
+    )
+    diffs = diff_behavior_results([baseline, candidate])
+
+    summary = summarize_behavior(
+        [baseline, candidate],
+        diffs,
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+
+    assert summary["status"] == "changed"
+    assert summary["changed_count"] == 1
+
+
+def test_behavior_summary_marks_errors_skips_missing_and_malformed_as_incomplete() -> None:
+    transition = ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")
+    baseline = _probe("claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []})
+    error = _probe(
+        "claude-agent-sdk",
+        "2.0.0",
+        "candidate",
+        "fail",
+        {"error": "probe crashed", "failure_step": "probe-execution"},
+    )
+    skipped = _probe("claude-agent-sdk", "2.0.0", "candidate", "skip", {"reason": "opt-in"})
+    wrong_version = _probe("claude-agent-sdk", "3.0.0", "candidate", "pass", {"missing": []})
+
+    probe_error = summarize_behavior(
+        [baseline, error],
+        [],
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[transition],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+    probe_skip = summarize_behavior(
+        [baseline, skipped],
+        [],
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[transition],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+    missing = summarize_behavior(
+        [baseline, wrong_version],
+        diff_behavior_results([baseline, wrong_version]),
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[transition],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+    malformed = summarize_behavior(
+        [{"package": "claude-agent-sdk", "summary": None}],
+        [],
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+
+    assert probe_error["status"] == "incomplete"
+    assert probe_error["probe_error_count"] == 1
+    assert probe_skip["status"] == "incomplete"
+    assert probe_skip["skipped_count"] == 1
+    assert missing["status"] == "incomplete"
+    assert missing["missing_comparison_count"] == 1
+    assert malformed["status"] == "incomplete"
+    assert malformed["malformed_count"] == 1
+
+
+def test_behavior_summary_contains_malformed_nested_contract_details() -> None:
+    transition = ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")
+    baseline = _probe(
+        "claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []}
+    )
+    malformed_candidate = BehaviorProbeResult(
+        package="claude-agent-sdk",
+        version="2.0.0",
+        scope="candidate",
+        probe="adapter-contract",
+        status="fail",
+        summary="missing fields",
+        details={"missing": 7},
+    )
+    supplied_diffs = diff_behavior_results([baseline, malformed_candidate])
+
+    summary = summarize_behavior(
+        [baseline, malformed_candidate],
+        supplied_diffs,
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[transition],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+
+    assert summary["status"] == "incomplete"
+    assert summary["malformed_count"] == 2
+    assert "details.missing" in " ".join(summary["reasons"])
+
+
+def test_behavior_summary_treats_missing_fields_plus_error_as_contract_failure() -> None:
+    transition = ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")
+    baseline = _probe(
+        "claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []}
+    )
+    candidate = _probe(
+        "claude-agent-sdk",
+        "2.0.0",
+        "candidate",
+        "fail",
+        {"missing": ["required_field"], "error": "secondary diagnostic"},
+    )
+    diffs = diff_behavior_results([baseline, candidate])
+
+    summary = summarize_behavior(
+        [baseline, candidate],
+        diffs,
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[transition],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+
+    assert diffs[0].severity == "breaking"
+    assert summary["status"] == "fail"
+    assert summary["contract_failure_count"] == 1
+    assert summary["probe_error_count"] == 0
+
+
+def test_behavior_summary_requires_complete_probe_sets_for_transition() -> None:
+    transition = ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")
+    results = [
+        _probe(
+            "claude-agent-sdk",
+            "1.0.0",
+            "current-baseline",
+            "pass",
+            {"missing": []},
+        ),
+        BehaviorProbeResult(
+            package="claude-agent-sdk",
+            version="1.0.0",
+            scope="current-baseline",
+            probe="package-import",
+            status="pass",
+            summary="imported",
+            details={},
+        ),
+        _probe(
+            "claude-agent-sdk",
+            "2.0.0",
+            "candidate",
+            "pass",
+            {"missing": []},
+        ),
+    ]
+    diffs = diff_behavior_results(results)
+
+    summary = summarize_behavior(
+        results,
+        diffs,
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[transition],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+
+    assert {diff.probe for diff in diffs} == {"adapter-contract"}
+    assert summary["status"] == "incomplete"
+    assert summary["missing_comparison_count"] == 1
+
+
+def test_behavior_summary_status_precedence_is_fail_then_incomplete_then_changed() -> None:
+    baseline = _probe("claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []})
+    contract_failure = _probe(
+        "claude-agent-sdk",
+        "2.0.0",
+        "candidate",
+        "fail",
+        {"missing": ["required_field"]},
+    )
+    extra_skip = _probe("fake-sdk", "1.0.0", "candidate", "skip", {"reason": "missing"})
+    failed = summarize_behavior(
+        [baseline, contract_failure, extra_skip],
+        diff_behavior_results([baseline, contract_failure, extra_skip]),
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+    assert failed["status"] == "fail"
+    assert failed["contract_failure_count"] == 1
+    assert failed["skipped_count"] == 1
+
+    changed_candidate = _probe(
+        "claude-agent-sdk",
+        "2.0.0",
+        "candidate",
+        "pass",
+        {"missing": [], "required_fields": ["new"]},
+    )
+    changed_diffs = diff_behavior_results([baseline, changed_candidate])
+    incomplete = summarize_behavior(
+        [baseline, changed_candidate, extra_skip],
+        changed_diffs,
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")],
+        expected_baselines={"claude-agent-sdk": "1.0.0"},
+    )
+    assert incomplete["status"] == "incomplete"
+    assert incomplete["changed_count"] == 1
+
+
+def test_behavior_probe_guard_blocks_complete_breaking_candidate_payload() -> None:
+    baseline = _probe(
+        "google-antigravity", "1.0.0", "current-baseline", "pass", {"missing": []}
+    )
+    candidate = _probe(
+        "google-antigravity",
+        "2.0.0",
+        "candidate",
+        "fail",
+        {"missing": ["required_field"]},
+    )
+    transition = ResolverTransition("google-antigravity", "1.0.0", "2.0.0")
+    behavior = _behavior_payload(
+        [baseline, candidate],
+        expected_packages=["google-antigravity"],
+        expected_transitions=[transition],
+    )
     guarded = with_behavior_probe_guard(
         {
             "findings": [],
@@ -722,20 +1226,155 @@ def test_behavior_probe_guard_blocks_breaking_candidate_diff() -> None:
             "manual_design_required": False,
             "uncertainty": [],
         },
-        {
-            "diffs": [
-                {
-                    "package": "google-antigravity",
-                    "probe": "adapter-contract",
-                    "severity": "breaking",
-                    "summary": "Candidate probe changed from pass to fail.",
-                }
-            ]
-        },
+        _sdk_evidence(
+            package="google-antigravity",
+            locked_version="1.0.0",
+            installed_version="1.0.0",
+            candidate_version="2.0.0",
+        ),
+        behavior,
     )
 
     assert guarded["safe_to_implement"] is False
     assert guarded["manual_design_required"] is True
+    assert behavior["summary"]["status"] == "fail"
+    assert "breaking" in " ".join(guarded["findings"][-1]["evidence"])
+
+
+def test_behavior_probe_guard_allows_valid_pass_and_changed_evidence() -> None:
+    architecture = {
+        "findings": [],
+        "safe_to_implement": True,
+        "manual_design_required": False,
+        "uncertainty": [],
+    }
+    baseline = _probe("claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []})
+    pass_payload = _behavior_payload(
+        [baseline],
+        expected_packages=["claude-agent-sdk"],
+    )
+    changed_candidate = _probe(
+        "claude-agent-sdk",
+        "2.0.0",
+        "candidate",
+        "pass",
+        {"missing": [], "required_fields": ["new"]},
+    )
+    transition = ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")
+    changed_payload = _behavior_payload(
+        [baseline, changed_candidate],
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[transition],
+    )
+
+    assert (
+        with_behavior_probe_guard(architecture, _sdk_evidence(), pass_payload)[
+            "safe_to_implement"
+        ]
+        is True
+    )
+    assert (
+        with_behavior_probe_guard(
+            architecture,
+            _sdk_evidence(candidate_version="2.0.0"),
+            changed_payload,
+        )["safe_to_implement"]
+        is True
+    )
+
+
+def test_behavior_probe_guard_blocks_self_declared_empty_expectations() -> None:
+    behavior = _behavior_payload([], expected_packages=[])
+    assert behavior["summary"]["status"] == "pass"
+
+    guarded = with_behavior_probe_guard(
+        {
+            "findings": [],
+            "safe_to_implement": True,
+            "manual_design_required": False,
+            "uncertainty": [],
+        },
+        _sdk_evidence(),
+        behavior,
+    )
+
+    assert guarded["safe_to_implement"] is False
+    assert guarded["manual_design_required"] is True
+    assert "contradicts deterministic evidence" in " ".join(
+        guarded["findings"][-1]["evidence"]
+    )
+
+
+def test_behavior_probe_guard_blocks_failed_incomplete_and_invalid_evidence() -> None:
+    architecture = {
+        "findings": [],
+        "safe_to_implement": True,
+        "manual_design_required": False,
+        "uncertainty": [],
+    }
+    baseline = _probe("claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []})
+    transition = ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")
+    failed_payload = _behavior_payload(
+        [
+            baseline,
+            _probe(
+                "claude-agent-sdk",
+                "2.0.0",
+                "candidate",
+                "fail",
+                {"missing": ["required_field"]},
+            ),
+        ],
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[transition],
+    )
+    incomplete_payload = _behavior_payload(
+        [
+            baseline,
+            _probe(
+                "claude-agent-sdk",
+                "2.0.0",
+                "candidate",
+                "skip",
+                {"reason": "opt-in"},
+            ),
+        ],
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[transition],
+    )
+    missing_summary = _behavior_payload(
+        [baseline],
+        expected_packages=["claude-agent-sdk"],
+    )
+    missing_summary.pop("summary")
+    unknown_status = _behavior_payload(
+        [baseline],
+        expected_packages=["claude-agent-sdk"],
+    )
+    unknown_status["summary"]["status"] = "mystery"
+    contradictory = _behavior_payload(
+        [baseline],
+        expected_packages=["claude-agent-sdk"],
+    )
+    contradictory["results"] = failed_payload["results"]
+    contradictory["expected_transitions"] = failed_payload["expected_transitions"]
+    malformed = _behavior_payload(
+        [baseline],
+        expected_packages=["claude-agent-sdk"],
+    )
+    malformed["results"] = [{"package": "claude-agent-sdk", "summary": None}]
+
+    for evidence, payload in (
+        (_sdk_evidence(candidate_version="2.0.0"), failed_payload),
+        (_sdk_evidence(candidate_version="2.0.0"), incomplete_payload),
+        (_sdk_evidence(), missing_summary),
+        (_sdk_evidence(), unknown_status),
+        (_sdk_evidence(), contradictory),
+        (_sdk_evidence(), malformed),
+    ):
+        guarded = with_behavior_probe_guard(architecture, evidence, payload)
+        assert guarded["safe_to_implement"] is False
+        assert guarded["manual_design_required"] is True
 
 
 def test_current_state_artifact_paths_are_repo_relative(tmp_path: Path) -> None:
@@ -750,6 +1389,7 @@ version = "0.2.106"
     report_root = tmp_path / "reports" / "sdk-evolution" / "run-1"
     report_root.mkdir(parents=True)
     (report_root / "evidence.json").write_text("{}", encoding="utf-8")
+    (report_root / "behavior_summary.json").write_text('{"status":"pass"}', encoding="utf-8")
     snapshots = report_root / "api_snapshots"
     snapshots.mkdir()
     (snapshots / "01-claude-agent-sdk.json").write_text("{}", encoding="utf-8")
@@ -772,9 +1412,127 @@ version = "0.2.106"
 
     paths = [artifact["path"] for artifact in state["artifacts"].values()]
     assert "reports/sdk-evolution/run-1/evidence.json" in paths
+    assert "reports/sdk-evolution/run-1/behavior_summary.json" in paths
     assert "reports/sdk-evolution/run-1/api_snapshots/01-claude-agent-sdk.json" in paths
+    assert state["artifacts"]["behavior_summary.json"]["sha256"]
     assert all(not path.startswith("/") for path in paths)
     assert all("/private/tmp" not in path and "/tmp/" not in path for path in paths)
+
+
+def test_report_exposes_snapshot_and_behavior_evidence_failures() -> None:
+    behavior = _behavior_payload(
+        [
+            BehaviorProbeResult(
+                package="claude-agent-sdk",
+                version="2.0.0",
+                scope="candidate",
+                probe="adapter-contract",
+                status="fail",
+                summary="probe crashed",
+                details={"error": "probe crashed", "failure_step": "probe-execution"},
+            )
+        ],
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")],
+    )
+
+    report = render_markdown_report(
+        config={"runtime": "fake", "implementation_enabled": False, "draft_pr": False},
+        evidence=_sdk_evidence(candidate_version="2.0.0"),
+        snapshots=[
+            {
+                "package": "claude-agent-sdk",
+                "version": "2.0.0",
+                "source": "isolated-venv",
+                "import_error": "candidate import failed\nwith details",
+            }
+        ],
+        api_diffs=[],
+        release_notes=[],
+        behavior=behavior,
+        current_state={"promotion": {"status": "skipped", "promoted": False}},
+        direction={},
+        architecture={
+            "manual_design_required": True,
+            "recursive_self_adaptation_impact": False,
+            "safe_to_implement": False,
+        },
+        implementation={},
+        review={},
+    )
+
+    assert "## API Snapshots" in report
+    assert "- Status: `incomplete`" in report
+    assert "- Snapshot count: `1`" in report
+    assert "- Import or execution errors: `1`" in report
+    assert "candidate import failed with details" in report
+    assert "## Behavior Probes" in report
+    assert "- Probe errors: `1`" in report
+    assert "- Missing comparisons: `1`" in report
+    assert "probe crashed" in report
+
+
+def test_report_persists_and_renders_recomputed_behavior_summary(tmp_path: Path) -> None:
+    baseline = _probe(
+        "claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []}
+    )
+    transition = ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")
+    behavior = _behavior_payload(
+        [
+            baseline,
+            _probe(
+                "claude-agent-sdk",
+                "2.0.0",
+                "candidate",
+                "fail",
+                {"missing": ["required_field"]},
+            ),
+        ],
+        expected_packages=["claude-agent-sdk"],
+        expected_transitions=[transition],
+    )
+    behavior["summary"] = _behavior_payload(
+        [baseline], expected_packages=["claude-agent-sdk"]
+    )["summary"]
+    assert behavior["summary"]["status"] == "pass"
+
+    report_root = tmp_path / "reports" / "run-1"
+    context = RunContext(
+        run_id="run-1",
+        workspace=tmp_path,
+        report_root=report_root,
+        runtime="fake",
+        event_log_path=report_root / "events.jsonl",
+        implementation_enabled=False,
+        draft_pr=False,
+    )
+    report_path = write_run_report(
+        context,
+        config={"runtime": "fake", "implementation_enabled": False, "draft_pr": False},
+        evidence=_sdk_evidence(candidate_version="2.0.0"),
+        snapshots=[],
+        api_diffs=[],
+        release_notes=[],
+        behavior=behavior,
+        current_state={"promotion": {"status": "skipped", "promoted": False}},
+        direction={},
+        architecture={
+            "manual_design_required": True,
+            "recursive_self_adaptation_impact": False,
+            "safe_to_implement": False,
+        },
+        implementation={},
+        review={},
+    )
+
+    persisted = json.loads(
+        (report_root / "behavior_summary.json").read_text(encoding="utf-8")
+    )
+    report = report_path.read_text(encoding="utf-8")
+    assert persisted["status"] == "fail"
+    assert persisted["contract_failure_count"] == 1
+    assert "- Status: `fail`" in report
+    assert "failed the required contract" in report
 
 
 def test_snapshot_and_diff_public_api(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1227,7 +1985,52 @@ def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
 
     assert guarded["safe_to_implement"] is False
     assert guarded["manual_design_required"] is True
-    assert "missing api_diffs for google-antigravity" in guarded["findings"][-1]["evidence"]
+    assert (
+        guarded["findings"][-1]["evidence"][0]
+        == "missing api_diffs for google-antigravity 0.1.2 -> 0.1.4"
+    )
+
+
+@pytest.mark.parametrize(
+    "api_diff",
+    [
+        {
+            "package": "google-antigravity",
+            "from_version": "0.1.1",
+            "to_version": "0.1.4",
+        },
+        {
+            "package": "google-antigravity",
+            "from_version": "0.1.2",
+            "to_version": "0.1.5",
+        },
+        {
+            "package": "google-antigravity-extra",
+            "from_version": "0.1.2",
+            "to_version": "0.1.4",
+        },
+    ],
+)
+def test_candidate_api_diff_guard_requires_exact_transition(api_diff: dict[str, str]) -> None:
+    guarded = with_candidate_api_diff_guard(
+        {
+            "findings": [],
+            "safe_to_implement": True,
+            "manual_design_required": False,
+            "uncertainty": [],
+            "self_adaptation_plan": [],
+        },
+        {
+            "refresh_preview": {
+                "stdout": "",
+                "stderr": "Update google-antigravity v0.1.2 -> v0.1.4\n",
+            }
+        },
+        [api_diff],
+    )
+
+    assert guarded["safe_to_implement"] is False
+    assert guarded["manual_design_required"] is True
 
 
 def test_candidate_api_diff_guard_accepts_empty_update_diff() -> None:
@@ -1500,6 +2303,7 @@ claude = ["claude-agent-sdk>=0.2"]
     assert (report_path.parent / "api_diffs.json").exists()
     assert (report_path.parent / "behavior_probes.json").exists()
     assert (report_path.parent / "behavior_diffs.json").exists()
+    assert (report_path.parent / "behavior_summary.json").exists()
     assert (report_path.parent / "current_state.json").exists()
     assert (report_path.parent / "direction_analysis.json").exists()
     assert (report_path.parent / "architecture_decision.json").exists()
@@ -1540,11 +2344,21 @@ async def test_run_agent_does_not_install_candidates_by_default(
     )
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.cli.collect_behavior_evidence",
-        lambda packages, updates, *, inspect_candidates=False: {
-            "results": [],
-            "diffs": [],
-            "summary": {"status": "pass"},
-        },
+        lambda packages, updates, *, inspect_candidates=False, expected_transitions=None: (
+            _behavior_payload(
+                [
+                    _probe(
+                        "claude-agent-sdk",
+                        None,
+                        "current-environment",
+                        "pass",
+                        {},
+                    )
+                ],
+                expected_packages=["claude-agent-sdk"],
+                expected_transitions=expected_transitions,
+            )
+        ),
     )
 
     # Default run (no inspect_candidates) must never pip-install/import upstream code.
@@ -1667,11 +2481,28 @@ version = "0.2.1"
     )
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.cli.collect_behavior_evidence",
-        lambda packages, updates, *, inspect_candidates=False: {
-            "results": [],
-            "diffs": [],
-            "summary": {"status": "pass"},
-        },
+        lambda packages, updates, *, inspect_candidates=False, expected_transitions=None: (
+            _behavior_payload(
+                [
+                    _probe(
+                        "claude-agent-sdk",
+                        "0.2.1",
+                        "current-environment",
+                        "pass",
+                        {"missing": []},
+                    ),
+                    _probe(
+                        "claude-agent-sdk",
+                        "0.3.0",
+                        "candidate",
+                        "pass",
+                        {"missing": []},
+                    ),
+                ],
+                expected_packages=["claude-agent-sdk"],
+                expected_transitions=expected_transitions,
+            )
+        ),
     )
     commands: list[tuple[str, ...]] = []
 
@@ -2062,13 +2893,11 @@ class PermissiveRuntime(RecordingRuntime):
 
 def _probe(
     package: str,
-    version: str,
+    version: str | None,
     scope: str,
     status: str,
     details: dict[str, Any],
-):
-    from examples.sdk_evolution_agent.models import BehaviorProbeResult
-
+) -> BehaviorProbeResult:
     return BehaviorProbeResult(
         package=package,
         version=version,
@@ -2078,6 +2907,76 @@ def _probe(
         summary=status,
         details=details,
     )
+
+
+def _behavior_payload(
+    results: list[BehaviorProbeResult],
+    *,
+    diffs: list[BehaviorDiff] | None = None,
+    expected_packages: list[str] | None = None,
+    expected_transitions: list[ResolverTransition] | tuple[ResolverTransition, ...] | None = None,
+    expected_baselines: dict[str, str | None] | None = None,
+) -> dict[str, Any]:
+    observed_diffs = diffs if diffs is not None else list(diff_behavior_results(results))
+    packages = expected_packages or []
+    transitions = list(expected_transitions or [])
+    baselines = dict(expected_baselines or {})
+    for package in packages:
+        transition = next(
+            (item for item in transitions if item.package == package),
+            None,
+        )
+        if transition is not None:
+            baselines.setdefault(package, transition.from_version)
+            continue
+        observation = next(
+            (
+                result
+                for result in results
+                if result.package == package
+                and result.scope in {"current-baseline", "current-environment"}
+            ),
+            None,
+        )
+        baselines.setdefault(package, observation.version if observation is not None else None)
+    payload: dict[str, Any] = to_jsonable(
+        {
+            "results": results,
+            "diffs": observed_diffs,
+            "expected_packages": packages,
+            "expected_transitions": transitions,
+            "expected_baselines": baselines,
+        }
+    )
+    payload["summary"] = assess_behavior_payload(payload)
+    return payload
+
+
+def _sdk_evidence(
+    *,
+    package: str = "claude-agent-sdk",
+    locked_version: str | None = "1.0.0",
+    installed_version: str | None = "1.0.0",
+    candidate_version: str | None = None,
+) -> dict[str, Any]:
+    evidence: dict[str, Any] = {
+        "packages": [
+            {
+                "name": package,
+                "locked_version": locked_version,
+                "installed_version": installed_version,
+            }
+        ]
+    }
+    if candidate_version is not None:
+        evidence["refresh_preview"] = {
+            "stdout": "",
+            "stderr": (
+                f"Update {package} v{locked_version or installed_version} "
+                f"-> v{candidate_version}\n"
+            ),
+        }
+    return evidence
 
 
 def _fake_pypi(package: str) -> dict[str, Any]:

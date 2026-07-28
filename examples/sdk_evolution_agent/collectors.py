@@ -10,6 +10,7 @@ import shlex
 import subprocess
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,22 @@ from examples.sdk_evolution_agent.models import (
 )
 
 FRESHNESS_CUTOFF_ENV_VARS = ("UV_EXCLUDE_NEWER",)
+
+_REFRESH_TRANSITION_RE = re.compile(
+    r"^[ \t]*Update[ \t]+(?P<package>[A-Za-z0-9_.-]+)[ \t]+"
+    r"v(?P<from_version>\S+)[ \t]+->[ \t]+v(?P<to_version>\S+)[ \t]*$",
+    re.MULTILINE,
+)
+
+
+@dataclass(frozen=True, order=True)
+class ResolverTransition:
+    """One exact package transition selected by the uv refresh preview."""
+
+    package: str
+    from_version: str
+    to_version: str
+
 
 PACKAGE_SOURCE_HINTS: dict[str, tuple[SourceRef, ...]] = {
     "claude-agent-sdk": (
@@ -266,6 +283,33 @@ def run_refresh_preview(
         stderr=result.stderr,
         removed_env=removed,
     )
+
+
+def parse_refresh_transitions(evidence: Mapping[str, Any]) -> tuple[ResolverTransition, ...]:
+    """Parse exact resolver transitions from refresh-preview stdout and stderr."""
+
+    preview = evidence.get("refresh_preview")
+    if not isinstance(preview, Mapping):
+        return ()
+    text = f"{preview.get('stdout') or ''}\n{preview.get('stderr') or ''}"
+    transitions = {
+        ResolverTransition(
+            package=match.group("package"),
+            from_version=match.group("from_version"),
+            to_version=match.group("to_version"),
+        )
+        for match in _REFRESH_TRANSITION_RE.finditer(text)
+    }
+    return tuple(sorted(transitions))
+
+
+def refresh_update_versions(evidence: Mapping[str, Any]) -> dict[str, str]:
+    """Return resolver-selected target versions keyed by exact package name."""
+
+    return {
+        transition.package: transition.to_version
+        for transition in parse_refresh_transitions(evidence)
+    }
 
 
 def run_lock_update(

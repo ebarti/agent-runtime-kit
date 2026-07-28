@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -30,6 +29,11 @@ from agent_runtime_kit.adapters import (
 from agent_runtime_kit.events import safe_emit, task_completed_event, task_started_event
 from agent_runtime_kit.registry import create_default_registry
 from examples.sdk_evolution_agent.auth import prepare_isolated_codex_home
+from examples.sdk_evolution_agent.behavior import (
+    assess_behavior_payload,
+    behavior_expectations_from_evidence,
+)
+from examples.sdk_evolution_agent.collectors import parse_refresh_transitions
 from examples.sdk_evolution_agent.models import (
     RUNTIME_CONTRACT_SYMBOLS,
     ApiDiff,
@@ -242,7 +246,7 @@ async def run_analysis_pipeline(
     architecture = with_recursive_impact(architecture, api_diffs)
     architecture = with_candidate_api_diff_guard(architecture, evidence, api_diffs)
     architecture = with_release_note_guard(architecture, release_notes)
-    architecture = with_behavior_probe_guard(architecture, behavior)
+    architecture = with_behavior_probe_guard(architecture, evidence, behavior)
     architecture = with_manual_design_gate(architecture)
     architecture = _compact_stage_output(architecture)
     review = await run_stage(
@@ -380,14 +384,34 @@ def with_candidate_api_diff_guard(
 ) -> dict[str, Any]:
     """Block SDK update implementation when candidate API evidence is missing."""
 
-    update_packages = _refresh_update_packages(evidence)
-    if not update_packages:
+    transitions = parse_refresh_transitions(evidence)
+    if not transitions:
         return dict(architecture)
-    diff_packages = {
-        diff.package if isinstance(diff, ApiDiff) else str(diff.get("package") or "")
+    observed = {
+        (
+            diff.package,
+            str(diff.from_version or ""),
+            str(diff.to_version or ""),
+        )
+        if isinstance(diff, ApiDiff)
+        else (
+            str(diff.get("package") or ""),
+            str(diff.get("from_version") or ""),
+            str(diff.get("to_version") or ""),
+        )
         for diff in api_diffs
+        if isinstance(diff, ApiDiff | Mapping)
     }
-    missing = tuple(sorted(package for package in update_packages if package not in diff_packages))
+    missing = tuple(
+        transition
+        for transition in transitions
+        if (
+            transition.package,
+            transition.from_version,
+            transition.to_version,
+        )
+        not in observed
+    )
     if not missing:
         return dict(architecture)
 
@@ -402,14 +426,21 @@ def with_candidate_api_diff_guard(
                 "SDK update candidates require candidate-version API snapshot diffs "
                 "before implementation can be considered safe."
             ),
-            "evidence": [f"missing api_diffs for {package}" for package in missing],
+            "evidence": [
+                f"missing api_diffs for {transition.package} "
+                f"{transition.from_version} -> {transition.to_version}"
+                for transition in missing
+            ],
         }
     )
     result["findings"] = findings
     uncertainty = list(result.get("uncertainty") or [])
     uncertainty.append(
-        "Candidate API diffs were not available for update candidate(s): "
-        + ", ".join(missing)
+        "Exact candidate API transitions were not available for: "
+        + ", ".join(
+            f"{transition.package} {transition.from_version} -> {transition.to_version}"
+            for transition in missing
+        )
     )
     result["uncertainty"] = uncertainty
     plan = list(result.get("self_adaptation_plan") or [])
@@ -454,37 +485,76 @@ def with_release_note_guard(
 
 def with_behavior_probe_guard(
     architecture: Mapping[str, Any],
+    evidence: Mapping[str, Any],
     behavior: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Block implementation when candidate behavior probes fail."""
+    """Block implementation unless raw behavior evidence is complete and consistent."""
 
-    diffs = behavior.get("diffs")
-    if not isinstance(diffs, list):
+    validation_issues: list[str] = []
+    computed = assess_behavior_payload(
+        behavior,
+        expectations=behavior_expectations_from_evidence(evidence),
+    )
+    supplied = behavior.get("summary")
+    required_summary_keys = (
+        "status",
+        "breaking_count",
+        "changed_count",
+        "unchanged_count",
+        "contract_failure_count",
+        "probe_error_count",
+        "skipped_count",
+        "missing_comparison_count",
+        "malformed_count",
+        "reasons",
+    )
+    count_keys = required_summary_keys[1:-1]
+    if not isinstance(supplied, Mapping):
+        validation_issues.append("behavior summary must be an object")
+    else:
+        status = supplied.get("status")
+        if status not in {"pass", "changed", "incomplete", "fail"}:
+            validation_issues.append(f"unknown behavior summary status {status!r}")
+        for key in count_keys:
+            value = supplied.get(key)
+            if type(value) is not int or value < 0:
+                validation_issues.append(f"behavior summary {key} must be a non-negative integer")
+        reasons = supplied.get("reasons")
+        if not isinstance(reasons, list) or not all(isinstance(reason, str) for reason in reasons):
+            validation_issues.append("behavior summary reasons must be an array of strings")
+        for key in required_summary_keys:
+            if key not in supplied:
+                validation_issues.append(f"behavior summary is missing {key}")
+            elif supplied.get(key) != computed.get(key):
+                validation_issues.append(
+                    f"behavior summary {key} contradicts raw evidence: "
+                    f"supplied={supplied.get(key)!r} computed={computed.get(key)!r}"
+                )
+
+    status = str(computed.get("status") or "incomplete")
+    if not validation_issues and status in {"pass", "changed"}:
         return dict(architecture)
-    breaking = [
-        diff
-        for diff in diffs
-        if isinstance(diff, Mapping) and str(diff.get("severity")) == "breaking"
-    ]
-    if not breaking:
-        return dict(architecture)
+
     result = dict(architecture)
     result["safe_to_implement"] = False
     result["manual_design_required"] = True
     findings = list(result.get("findings") or [])
+    evidence_items = validation_issues + [
+        str(reason) for reason in computed.get("reasons", []) if reason
+    ]
     findings.append(
         {
             "classification": "manual-design-required",
-            "summary": "Candidate SDK behavior probes detected breaking adapter-contract drift.",
-            "evidence": [
-                f"{diff.get('package')}:{diff.get('probe')} {diff.get('summary')}"
-                for diff in breaking
-            ],
+            "summary": ("SDK behavior evidence is incomplete or failed deterministic validation."),
+            "evidence": evidence_items or [f"computed behavior status is {status}"],
         }
     )
     result["findings"] = findings
     uncertainty = list(result.get("uncertainty") or [])
-    uncertainty.append("Breaking behavior probes require manual adapter design review.")
+    uncertainty.append(
+        "Behavior evidence must be complete, internally consistent, and non-breaking "
+        "before implementation."
+    )
     result["uncertainty"] = uncertainty
     return result
 
@@ -496,16 +566,6 @@ def with_manual_design_gate(architecture: Mapping[str, Any]) -> dict[str, Any]:
     if result.get("manual_design_required"):
         result["safe_to_implement"] = False
     return result
-
-
-def _refresh_update_packages(evidence: Mapping[str, Any]) -> tuple[str, ...]:
-    preview = evidence.get("refresh_preview")
-    if not isinstance(preview, Mapping):
-        return ()
-    text = f"{preview.get('stdout') or ''}\n{preview.get('stderr') or ''}"
-    return tuple(
-        sorted(set(re.findall(r"Update\s+([A-Za-z0-9_.-]+)\s+v\S+\s+->\s+v\S+", text)))
-    )
 
 
 def _compact_stage_output(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -554,8 +614,9 @@ def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
             "Do not mark manual_design_required, unsafe, or review rejection solely "
             "because public top-level symbols were added or removed when behavior "
             "probes pass before and after and there is no adapter-source evidence "
-            "that the removed symbols are used. Breaking behavior_diffs, missing "
-            "candidate API diffs, unavailable required release-note evidence, "
+            "that the removed symbols are used. Failed, incomplete, malformed, or "
+            "internally inconsistent behavior evidence; missing exact candidate API "
+            "transitions; unavailable required release-note evidence; "
             "reviewer-identified unsupported vendor behavior, or recursive "
             "runtime-contract impact remain hard blockers. Release-note status found "
             "is direct release-note evidence. Status no-matching-version is source "
