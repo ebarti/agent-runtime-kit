@@ -39,11 +39,15 @@ Default runtime for this Codex skill: `codex-agent-sdk`.
    ```bash
    gh auth status
    env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-     uv run python -m examples.sdk_evolution_agent --help
+     uv run --locked python -m examples.sdk_evolution_agent --help
    ```
 
 4. Resolve the runtime that will run the AI-backed stages. Use
    `codex-agent-sdk` unless the user explicitly selected another runtime.
+   Change the runtime and uv extra together:
+   - `claude-agent-sdk` -> `--extra claude`
+   - `codex-agent-sdk` -> `--extra codex`
+   - `antigravity-agent-sdk` -> `--extra antigravity`
 
 5. Use supported provider auth only:
    - Claude: Anthropic API key, Claude Code auth, or Claude Code provider
@@ -61,7 +65,7 @@ Default runtime for this Codex skill: `codex-agent-sdk`.
 
    ```bash
    env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-     uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+     uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
    ```
 
    The helper creates `~/.codex_agent_runtime_sdk`, removes uv freshness cutoff
@@ -71,9 +75,9 @@ Default runtime for this Codex skill: `codex-agent-sdk`.
    and refresh the normal Codex login cache:
 
    ```bash
-   uv run --extra codex codex login --device-auth
+   uv run --locked --extra codex codex login --device-auth
    env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-     uv run --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+     uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
    ```
 
 ## Report-Only First
@@ -83,17 +87,23 @@ freshness cutoffs:
 
 ```bash
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-  uv run python -m examples.sdk_evolution_agent \
+  uv run --locked --extra codex python -m examples.sdk_evolution_agent \
     --runtime codex-agent-sdk \
     --refresh-preview \
+    --inspect-candidates \
     --package claude-agent-sdk \
     --package openai-codex \
     --package openai-codex-cli-bin \
     --package google-antigravity
 ```
 
-If the user explicitly chooses another runtime, replace only the `--runtime`
-value. Codex-backed runs should use the runner's built-in `gpt-5.5` and
+`--inspect-candidates` is explicit consent to install and import a missing or
+drifted locked baseline and resolver-selected candidates in credential-scrubbed
+temporary environments.
+
+If the user explicitly chooses another runtime, replace both the `--runtime`
+value and the matching uv extra using the mapping above. Codex-backed runs
+should use the runner's built-in `gpt-5.5` and
 `reasoning_effort=xhigh` policy; do not implement model selection outside the
 runner.
 
@@ -104,6 +114,7 @@ Inspect the newest `reports/sdk-evolution/<timestamp>/` directory:
 - `api_diffs.json`
 - `behavior_probes.json`
 - `behavior_diffs.json`
+- `behavior_summary.json`
 - `current_state.json`
 - `direction_analysis.json`
 - `architecture_decision.json`
@@ -111,9 +122,13 @@ Inspect the newest `reports/sdk-evolution/<timestamp>/` directory:
 - `report.md`
 
 Stop before implementation when candidate API diffs are missing, required
-release-note evidence is missing, behavior probes show breaking adapter-contract
-drift, `manual_design_required` is true, the reviewer rejects the evidence or
-design, or recursive self-adaptation lacks a safe migration plan.
+release-note evidence is missing, `behavior_summary.json` is missing, malformed,
+has an unknown status, or reports `fail` / `incomplete`,
+`manual_design_required` is true, the reviewer rejects the evidence or design,
+or recursive self-adaptation lacks a safe migration plan. `pass` means complete
+unchanged evidence; `changed` means complete non-breaking evidence;
+`incomplete` means required observations could not be proved; and `fail` means
+a required contract failed or a breaking diff was observed.
 
 Recursive self-adaptation means the upgrade affects the runner's own use of
 `AgentTask`, `RuntimeRegistry`, adapters, output schemas, event sinks,
@@ -130,9 +145,10 @@ an upgrade branch or PR:
 BRANCH="sdk-evolution-upgrade-$(date +%Y%m%d-%H%M%S)"
 
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-  uv run python -m examples.sdk_evolution_agent \
+  uv run --locked --extra codex python -m examples.sdk_evolution_agent \
     --runtime codex-agent-sdk \
     --refresh-preview \
+    --inspect-candidates \
     --implementation-enabled \
     --create-branch \
     --branch-name "$BRANCH" \
@@ -152,12 +168,12 @@ Run or verify:
 
 ```bash
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv lock --check
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run ruff check .
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run mypy
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run pytest
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run --locked ruff check .
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run --locked mypy
+env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run --locked pytest
 ```
 
 If a draft PR was created, watch CI until it finishes or clearly report that it
 is still running. Final output should include the PR URL, report path, changed
-SDK versions, architecture decision, reviewer result, test results, uncertainty,
-and manual review checklist.
+SDK versions, `behavior_summary.json` status and reasons, architecture decision,
+reviewer result, test results, uncertainty, and manual review checklist.
