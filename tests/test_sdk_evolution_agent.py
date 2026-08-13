@@ -142,6 +142,12 @@ def test_refresh_preview_uses_targeted_packages_and_clean_env(
     assert seen["command"] == build_refresh_preview_command(
         ("claude-agent-sdk", "google-antigravity")
     )
+    assert seen["command"][-4:] == (
+        "--exclude-newer-package",
+        "claude-agent-sdk=false",
+        "--exclude-newer-package",
+        "google-antigravity=false",
+    )
     assert "UV_EXCLUDE_NEWER" not in seen["env"]
     assert result.removed_env == ("UV_EXCLUDE_NEWER",)
 
@@ -218,6 +224,10 @@ def test_lock_update_uses_targeted_packages_and_clean_env(
         "claude-agent-sdk",
         "-P",
         "google-antigravity",
+        "--exclude-newer-package",
+        "claude-agent-sdk=false",
+        "--exclude-newer-package",
+        "google-antigravity=false",
     )
     assert "UV_EXCLUDE_NEWER" not in seen["env"]
     assert result.removed_env == ("UV_EXCLUDE_NEWER",)
@@ -2063,6 +2073,12 @@ def test_candidate_snapshot_scrubs_subprocess_env(
         assert env.get("HOME") != os.environ.get("HOME")
 
 
+def test_codex_cli_snapshot_uses_distribution_module_name() -> None:
+    snapshot = snapshot_current_api("openai-codex-cli-bin", version="0.144.4")
+
+    assert snapshot.module == "codex_cli_bin"
+
+
 def test_parse_args_candidate_inspection_is_opt_in() -> None:
     # Candidate inspection pip-installs+imports upstream code, so it is off by
     # default and only enabled with the explicit flag.
@@ -2947,7 +2963,14 @@ version = "0.2.1"
 
     assert report_path.exists()
     assert ("git", "switch", "-c", "sdk-update-test") in commands
-    assert ("uv", "lock", "-P", "claude-agent-sdk") in commands
+    assert (
+        "uv",
+        "lock",
+        "-P",
+        "claude-agent-sdk",
+        "--exclude-newer-package",
+        "claude-agent-sdk=false",
+    ) in commands
     assert any(command[:3] == ("git", "commit", "-m") for command in commands)
     assert any(command[:4] == ("gh", "pr", "create", "--draft") for command in commands)
     assert ("git", "commit", "-m", "Finalize SDK evolution report") in commands
