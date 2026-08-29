@@ -46,6 +46,7 @@ def _artifact_refs(report_root: Path, *, workspace: Path) -> dict[str, dict[str,
         "evidence.json",
         "release_notes.json",
         "api_diffs.json",
+        "implementation_diffs.json",
         "behavior_probes.json",
         "behavior_diffs.json",
         "behavior_summary.json",
@@ -67,6 +68,13 @@ def _artifact_refs(report_root: Path, *, workspace: Path) -> dict[str, dict[str,
     if snapshots_dir.exists():
         for path in sorted(snapshots_dir.glob("*.json")):
             refs[f"api_snapshots/{path.name}"] = {
+                "path": _portable_path(path, workspace=workspace),
+                "sha256": _sha256(path),
+            }
+    implementation_snapshots_dir = report_root / "implementation_snapshots"
+    if implementation_snapshots_dir.exists():
+        for path in sorted(implementation_snapshots_dir.glob("*.json")):
+            refs[f"implementation_snapshots/{path.name}"] = {
                 "path": _portable_path(path, workspace=workspace),
                 "sha256": _sha256(path),
             }

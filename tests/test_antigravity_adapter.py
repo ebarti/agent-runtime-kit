@@ -19,6 +19,7 @@ from agent_runtime_kit import (
 )
 from agent_runtime_kit._errors import UnsupportedTaskInputError
 from agent_runtime_kit.adapters import AntigravityAgentRuntime
+from agent_runtime_kit.adapters.antigravity import _provider_conversation_id
 from agent_runtime_kit.testing import RecordingEventSink
 
 
@@ -389,7 +390,7 @@ async def test_antigravity_tolerates_config_option_drift(tmp_path: Path) -> None
         def __init__(
             self,
             *,
-                model: str | None = None,
+            model: str | None = None,
             api_key: str | None = None,
             capabilities: Any = None,
             policies: Any = None,
@@ -480,7 +481,7 @@ async def test_antigravity_fails_closed_when_sdk_drops_workspaces(tmp_path: Path
         def __init__(
             self,
             *,
-                model: str | None = None,
+            model: str | None = None,
             api_key: str | None = None,
             capabilities: Any = None,
             policies: Any = None,
@@ -590,6 +591,53 @@ async def test_antigravity_session_id_falls_back_to_task(tmp_path: Path) -> None
 
     result = await runtime.run(AgentTask(goal="x", session_id="conv-77"))
 
+    assert result.session_id == "conv-77"
+
+
+def test_antigravity_short_public_session_ids_map_to_stable_provider_ids() -> None:
+    first = _provider_conversation_id("conv-77")
+    second = _provider_conversation_id("conv-77")
+
+    assert first == second
+    assert first != "conv-77"
+    assert first is not None
+    assert len(first) >= 32
+    assert _provider_conversation_id(None) is None
+    assert _provider_conversation_id("a" * 32) == "a" * 32
+
+
+@pytest.mark.asyncio
+async def test_antigravity_maps_provider_id_but_preserves_public_session_id(
+    tmp_path: Path,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    class NoIdAgent:
+        def __init__(self, config: FakeConfig) -> None:
+            seen.update(config.kwargs)
+            self.conversation_id = None
+
+        async def __aenter__(self) -> NoIdAgent:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def chat(self, prompt: str) -> FakeResponse:
+            return FakeResponse(prompt, _chunks)
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=NoIdAgent,
+        config_cls=FakeConfig,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    result = await runtime.run(AgentTask(goal="x", session_id="conv-77"))
+
+    assert seen["conversation_id"] == _provider_conversation_id("conv-77")
     assert result.session_id == "conv-77"
 
 
@@ -1076,9 +1124,7 @@ async def test_antigravity_strict_honors_read_only_allow_list(tmp_path: Path) ->
     await runtime.run(
         AgentTask(
             goal="task",
-            permissions=PermissionProfile(
-                mode=PermissionMode.STRICT, allowed_tools=("view_file",)
-            ),
+            permissions=PermissionProfile(mode=PermissionMode.STRICT, allowed_tools=("view_file",)),
         )
     )
 
@@ -1251,9 +1297,7 @@ async def test_antigravity_rejects_network(tmp_path: Path) -> None:
     runtime = make_runtime(data_dir=tmp_path)
 
     with pytest.raises(UnsupportedTaskInputError):
-        await runtime.run(
-            AgentTask(goal="task", permissions=PermissionProfile(network=True))
-        )
+        await runtime.run(AgentTask(goal="task", permissions=PermissionProfile(network=True)))
 
 
 @pytest.mark.asyncio

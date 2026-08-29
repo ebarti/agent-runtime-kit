@@ -42,7 +42,7 @@ directory is created with private permissions before the Codex runtime starts.
 Run the auth preflight before real Codex-backed SDK evolution runs:
 
 ```bash
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+env -u UV_EXCLUDE_NEWER \
   uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
 ```
 
@@ -53,13 +53,14 @@ normal Codex login cache and rerun the helper:
 
 ```bash
 uv run --locked --extra codex codex login --device-auth
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+env -u UV_EXCLUDE_NEWER \
   uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
 ```
 
 Codex-backed SDK evolution runs explicitly choose `gpt-5.5` with
 `reasoning_effort=xhigh` for the AI stages that analyze direction, decide the
-update plan, implement allowed changes, and review the result. This model policy
+update plan, and review the result. Dependency application and verification are
+deterministic. This model policy
 is applied only to `codex-agent-sdk`; Claude and Antigravity runs keep their
 provider-native model selection because `gpt-5.5` is not a valid model override
 for those adapters.
@@ -86,6 +87,8 @@ Each run writes a timestamped directory under `reports/sdk-evolution/` with:
 - `release_notes.json`
 - `api_snapshots/`
 - `api_diffs.json`
+- `implementation_snapshots/`
+- `implementation_diffs.json`
 - `behavior_probes.json`
 - `behavior_diffs.json`
 - `behavior_summary.json`
@@ -98,7 +101,7 @@ Each run writes a timestamped directory under `reports/sdk-evolution/` with:
 - `report.md`
 
 The report separates deterministic facts from runtime-generated analysis and
-calls out uncertainty, release-note coverage, API diffs, behavior diffs,
+calls out uncertainty, release-note coverage, API diffs, implementation trends, behavior diffs,
 baseline promotion, recursive self-adaptation impact, implementation status,
 test results, reviewer output, and manual review items.
 
@@ -112,53 +115,84 @@ installed distributions, then compares it with upstream package metadata for:
 - `openai-codex-cli-bin`
 - `google-antigravity`
 
-When `--refresh-preview` is used, the targeted `uv lock --dry-run -P ...`
-preview removes freshness cutoff environment variables, including
-`UV_EXCLUDE_NEWER`, and passes `--exclude-newer-package <package>=false` for
-each monitored SDK/runtime package. The project declares the same package-scoped
-exemptions, so approved lock updates and ordinary locked CI agree while all other
-dependencies retain the repository's eight-day delay.
+When `--refresh-preview` is used, the runner removes freshness-cutoff
+environment variables and executes `uv lock --dry-run --exclude-newer false -P
+...`. The repository no longer declares the retired eight-day cooloff or
+package-specific exemptions, so candidate research, applied locks, and ordinary
+locked CI use one policy.
 
 ## Candidate API Inspection
 
-The command treats `uv.lock` as the current baseline. If the locked SDK is
+The command treats `uv.lock` as the current baseline and PyPI package metadata
+as an independent candidate source. If the locked SDK is
 missing from the active `.venv` or the installed version differs, the agent can
 inspect the locked baseline in a temporary isolated virtualenv instead of
 trusting the missing or drifted environment.
-When a refresh preview is available, package update candidates come from the
-resolver's `uv lock --dry-run -P ...` output, not only from PyPI's `latest`
-metadata. With `--inspect-candidates`, the agent installs each missing or
-drifted locked baseline and each resolver update candidate in a temporary
-isolated virtualenv — with a credential-scrubbed environment (throwaway `HOME`,
-`PATH` only) — and writes API snapshots plus an `api_diffs.json` entry, and runs
-the behavior probes against the candidate the same way. This avoids false
-downgrade diffs for packages whose locked
-prerelease is newer than PyPI's stable latest field. Candidate inspection is
-opt-in because it executes freshly downloaded upstream code; without the flag,
-candidates are recorded as explicit `skip` entries rather than silently
-missing evidence.
+The current constrained preview is evidence, not the candidate inventory. When
+an upstream release is excluded by an upper bound, the runner copies the
+manifest and lock into a temporary workspace, widens only that excluding bound,
+and performs a prospective no-cooloff preview. The original checkout is not
+mutated during research. The Codex CLI candidate is the exact runtime selected
+by the latest published Codex SDK. A newer standalone CLI wheel is recorded as
+`sdk-coupled-no-update`: it is a release-staging artifact, not a blocked or
+SDK-usable candidate. It may be inspected in a disposable environment for
+implementation-history evidence, but it is never selected into the project
+unless a published Codex SDK requires it.
 
-If `uv lock --dry-run -P ...` reports an SDK update but the run cannot produce a
-candidate-version API diff for that package, implementation is blocked and the
+With `--inspect-candidates`, the agent installs each missing or drifted locked
+baseline, every exact compatible candidate, and the three most recent published
+releases in credential-scrubbed temporary virtualenvs (throwaway `HOME`, `PATH`
+only). One package/version environment is reused wherever API, behavior, and
+implementation-history inspection overlap, and transient metadata/install
+failures are retried. Candidate inspection writes the exact compatibility
+transition to `api_diffs.json` and executes the adapter contract against that
+same version. Independently, recent-release inspection fingerprints shipped
+files and Python AST definitions, compares adjacent releases, and writes the
+result to `implementation_diffs.json`. Source is never copied into the report;
+only paths, counts, sizes, and hashes are retained. Candidate inspection is
+opt-in because it executes freshly downloaded upstream code; historical
+inspection uses the same explicit consent. Without the flag, missing trend
+evidence is reported as `no-transition` rather than being replaced with
+dependency advice.
+
+## Upstream Implementation Trends
+
+`direction_analysis.json` is an implementation-trend report. It answers what
+changed across actual recent SDK implementations: modules and files, Python
+definitions, source size, runtime artifacts, public API, observed adapter
+behavior, capabilities, and deprecations. It does not recommend upgrading,
+holding, resolving, or changing the lockfile; those decisions belong to
+`architecture_decision.json` and the deterministic implementation gates.
+
+The direction stage receives `implementation_diffs.json` as its primary
+evidence. A deterministic postcondition replaces any release-operation advice
+that leaks into an implementation-trend field. Opaque executables are reported
+as opaque: artifact changes can be proved by hashes, but their internal design
+cannot be inferred from a wheel.
+
+If the independent candidate inventory contains an SDK update but the run cannot
+produce an exact candidate-version API diff for that package, implementation is blocked and the
 architecture decision is marked `manual_design_required`. An empty added /
 removed / changed diff is valid; a missing diff object is not.
 
 Behavior probes intentionally separate observed SDK surface churn from adapter
-contract breakage. `behavior_probes.json` records fields and parameters seen in
-current and candidate packages, while `behavior_diffs.json` compares the
-required adapter contract. `behavior_summary.json` records the deterministic
+contract breakage. `behavior_probes.json` records fields and parameters and
+constructs provider configurations with adapter-owned values; this catches
+validation changes that field-presence inspection misses. `behavior_diffs.json`
+compares the required adapter contract. `behavior_summary.json` records the deterministic
 assessment, counts, and reasons used by the implementation gate. Its status is
 `pass` for complete unchanged evidence, `changed` for complete non-breaking
 changes, `incomplete` for probe errors, skips, malformed records, or missing
 exact-version comparisons, and `fail` for a failed required contract or a
-breaking diff. A package with no resolver-selected update needs only a valid
+breaking diff. A package with no compatible candidate update needs only a valid
 current baseline at the locked version (or the observed installed version when
 no lock entry exists); it does not need a candidate probe. An ambient SDK that
 has drifted away from the lock therefore produces `incomplete`, not `pass`.
 Optional field changes remain visible in the report and API diffs without being
 treated as a contract failure.
 
-Resolver transitions are parsed once as exact `(package, from, to)` triples and
+Candidate transitions are built once as exact `(package, from, to)` triples from
+the independent package inventory plus successful prospective resolution, then
 shared by snapshot collection, behavior assessment, and implementation gates.
 An API diff or behavior comparison for a different package or version does not
 satisfy the expected transition. Snapshot import and execution errors are also
@@ -184,7 +218,8 @@ Implementation is still blocked when:
 
 - the architecture decision sets `manual_design_required`,
 - the reviewer rejects the evidence or design,
-- a resolver-selected update lacks a candidate API diff,
+- the no-cooloff prospective resolver preview is missing or failed,
+- an independently discovered compatible update lacks an exact candidate API diff,
 - required release-note evidence could not be collected,
 - `behavior_summary.json` is missing, malformed, has an unknown status, reports
   `fail` / `incomplete`, is internally inconsistent, or uses the wrong
@@ -216,9 +251,14 @@ uv run --locked --extra claude python -m examples.sdk_evolution_agent \
   --draft-pr
 ```
 
-When `--draft-pr` is set, the agent stages `uv.lock` and the run report
-directory, commits them with `--commit-message`, pushes the branch, and opens a
-draft PR with `gh`. It never auto-merges.
+When `--draft-pr` is set, publication occurs only after an applied, verified,
+non-empty update. The agent stages only the `changed_paths` reported by the
+implementation (normally `pyproject.toml`, `uv.lock`, and
+`src/agent_runtime_kit/compatibility.py`), commits them with `--commit-message`,
+pushes the branch, and opens a draft PR with `gh`. The gitignored report is
+embedded in the PR body rather than blindly staged. A requested PR is skipped
+when the update was blocked, empty, rolled back, or failed verification. It
+never auto-merges.
 
 The command uses local Git and `gh` authentication. It never auto-merges,
 auto-publishes, or scrapes unsupported credentials.

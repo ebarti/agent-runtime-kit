@@ -10,8 +10,8 @@ CODEX_RUNBOOK = Path(".codex/skills/agent-runtime-kit-upgrade/SKILL.md")
 CLAUDE_RUNBOOK = Path(".claude/commands/agent-runtime-kit/upgrade.md")
 PUBLIC_GUIDE = Path("docs/sdk-evolution-agent.md")
 DESIGN_GUIDE = Path("docs/sdk-evolution-agent-design.md")
-AUTHORITATIVE_DOCS = (CODEX_RUNBOOK, CLAUDE_RUNBOOK, PUBLIC_GUIDE, DESIGN_GUIDE)
-RUNBOOKS = (CODEX_RUNBOOK, CLAUDE_RUNBOOK)
+AUTHORITATIVE_DOCS = (CODEX_RUNBOOK, PUBLIC_GUIDE, DESIGN_GUIDE)
+RUNBOOKS = (CODEX_RUNBOOK,)
 PUBLIC_DOCS = (PUBLIC_GUIDE, DESIGN_GUIDE)
 RUNTIME_EXTRAS = {
     "claude-agent-sdk": "claude",
@@ -51,10 +51,7 @@ def test_public_guides_cover_every_runtime_extra_mapping() -> None:
 
 
 def test_runbooks_include_report_and_implementation_commands() -> None:
-    defaults = {
-        CODEX_RUNBOOK: "codex-agent-sdk",
-        CLAUDE_RUNBOOK: "claude-agent-sdk",
-    }
+    defaults = {CODEX_RUNBOOK: "codex-agent-sdk"}
     for path, runtime in defaults.items():
         commands = [
             command
@@ -99,11 +96,19 @@ def test_behavior_summary_is_in_artifacts_and_runbook_handoffs() -> None:
     for path in RUNBOOKS:
         text = _read(path)
         normalized = " ".join(text.split())
-        assert "`behavior_summary.json` status and reasons" in text
-        assert "a missing or drifted locked baseline" in normalized
+        assert "behavior_summary.json" in text
         assert "credential-scrubbed" in text
-        for blocker in ("missing", "malformed", "unknown status", "`fail`", "`incomplete`"):
+        assert "exact" in normalized
+        for blocker in ("missing", "failed", "`fail`", "`incomplete`"):
             assert blocker in text
+
+
+def test_claude_command_delegates_to_the_canonical_workflow() -> None:
+    text = _read(CLAUDE_RUNBOOK)
+
+    assert ".codex/skills/agent-runtime-kit-upgrade/SKILL.md" in text
+    assert "`claude-agent-sdk` with `--extra claude`" in text
+    assert "publication" in text
 
 
 def test_codex_auth_commands_use_the_locked_codex_extra() -> None:

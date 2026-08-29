@@ -21,11 +21,25 @@ DIRECTION_ANALYSIS_SCHEMA: JsonSchema = {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["name", "direction", "evidence"],
+                "required": [
+                    "name",
+                    "evidence_status",
+                    "implementation_trend",
+                    "observed_transitions",
+                    "evidence",
+                ],
                 "additionalProperties": False,
                 "properties": {
                     "name": {"type": "string"},
-                    "direction": {"type": "string"},
+                    "evidence_status": {
+                        "type": "string",
+                        "enum": ["observed", "opaque-runtime", "no-transition", "unavailable"],
+                    },
+                    "implementation_trend": {"type": "string"},
+                    "observed_transitions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "evidence": {"type": "array", "items": {"type": "string"}},
                 },
             },
@@ -34,11 +48,13 @@ DIRECTION_ANALYSIS_SCHEMA: JsonSchema = {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["name", "summary"],
+                "required": ["name", "implementation_pattern", "packages", "evidence"],
                 "additionalProperties": False,
                 "properties": {
                     "name": {"type": "string"},
-                    "summary": {"type": "string"},
+                    "implementation_pattern": {"type": "string"},
+                    "packages": {"type": "array", "items": {"type": "string"}},
+                    "evidence": {"type": "array", "items": {"type": "string"}},
                 },
             },
         },

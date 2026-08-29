@@ -8,6 +8,7 @@ import importlib
 import logging
 import os
 import re
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,7 @@ from agent_runtime_kit.support import _validate_declared_task_support, require_t
 logger = logging.getLogger(__name__)
 
 _MCP_SERVER_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+_ANTIGRAVITY_CONVERSATION_NAMESPACE = uuid.UUID("7e47bc2d-a8c4-4d2b-9c27-3aeef32142ba")
 
 
 class AntigravityAgentRuntime:
@@ -97,9 +99,7 @@ class AntigravityAgentRuntime:
         reuse_process: bool = False,
     ) -> None:
         self._default_model = default_model
-        self._supported_models = validate_model_configuration(
-            default_model, supported_models
-        )
+        self._supported_models = validate_model_configuration(default_model, supported_models)
         self._api_key = api_key
         self._vertex = vertex
         self._project = project
@@ -170,9 +170,7 @@ class AntigravityAgentRuntime:
                 metadata={"failure": "adc-probe", "error_type": type(exc).__name__},
             )
         project = (
-            self._project
-            or _env_first("GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT")
-            or adc.project
+            self._project or _env_first("GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT") or adc.project
         )
         if not adc.credentials_available or not project:
             return self._missing_credentials_readiness(availability)
@@ -187,9 +185,7 @@ class AntigravityAgentRuntime:
             },
         )
 
-    def _missing_credentials_readiness(
-        self, availability: RuntimeAvailability
-    ) -> RuntimeReadiness:
+    def _missing_credentials_readiness(self, availability: RuntimeAvailability) -> RuntimeReadiness:
         return RuntimeReadiness.not_ready(
             self.kind,
             reason=AvailabilityReason.MISSING_CREDENTIALS,
@@ -351,7 +347,7 @@ class AntigravityAgentRuntime:
             "capabilities": capabilities,
             "policies": policies,
             "workspaces": _workspaces(task),
-            "conversation_id": _conversation_id(task),
+            "conversation_id": _provider_conversation_id(_conversation_id(task)),
             "save_dir": str(self._runtime_dir("antigravity-sessions")),
             "app_data_dir": str(self._runtime_dir("antigravity-app-data")),
             "response_schema": dict(schema) if schema is not None else None,
@@ -405,15 +401,18 @@ class AntigravityAgentRuntime:
                         sdk=sdk,
                         config=config,
                     )
-                    structured_output, usage_metadata, session_id, stop_reason = (
-                        await self._chat_agent(
-                            task,
-                            agent=agent,
-                            sdk=sdk,
-                            text_parts=text_parts,
-                            tool_calls=tool_calls,
-                            wants_structured=schema is not None,
-                        )
+                    (
+                        structured_output,
+                        usage_metadata,
+                        session_id,
+                        stop_reason,
+                    ) = await self._chat_agent(
+                        task,
+                        agent=agent,
+                        sdk=sdk,
+                        text_parts=text_parts,
+                        tool_calls=tool_calls,
+                        wants_structured=schema is not None,
                     )
                 except BaseException:
                     # Evict the reused agent on any non-normal exit — including
@@ -431,20 +430,19 @@ class AntigravityAgentRuntime:
                     raise
         else:
             async with sdk.agent_cls(config) as agent:
-                structured_output, usage_metadata, session_id, stop_reason = (
-                    await self._chat_agent(
-                        task,
-                        agent=agent,
-                        sdk=sdk,
-                        text_parts=text_parts,
-                        tool_calls=tool_calls,
-                        wants_structured=schema is not None,
-                    )
+                structured_output, usage_metadata, session_id, stop_reason = await self._chat_agent(
+                    task,
+                    agent=agent,
+                    sdk=sdk,
+                    text_parts=text_parts,
+                    tool_calls=tool_calls,
+                    wants_structured=schema is not None,
                 )
 
-        # Fall back to the caller's conversation id when the SDK does not echo one,
-        # so a resumed task always returns a usable session_id (matches Claude).
-        session_id = session_id or _conversation_id(task)
+        # Keep the public runtime session id stable even when the provider-facing
+        # value had to be expanded to satisfy Antigravity's minimum-length rule.
+        # A provider-created id is still returned when the caller supplied none.
+        session_id = _conversation_id(task) or session_id
 
         process_metadata = (
             self._process_reuse_metadata(process_reused) if self._reuse_process else None
@@ -856,9 +854,8 @@ def _google_adc_project() -> str | None:
 
 
 def _is_missing_google_credentials(exc: Exception) -> bool:
-    return (
-        type(exc).__name__ == "DefaultCredentialsError"
-        and type(exc).__module__.startswith("google.auth")
+    return type(exc).__name__ == "DefaultCredentialsError" and type(exc).__module__.startswith(
+        "google.auth"
     )
 
 
@@ -1004,6 +1001,20 @@ def _conversation_id(task: AgentTask) -> str | None:
     return task.session_id
 
 
+def _provider_conversation_id(conversation_id: str | None) -> str | None:
+    """Map short public session ids to stable Antigravity-compatible ids.
+
+    Antigravity validates ``conversation_id`` at config construction time and
+    currently requires at least 32 characters. The public runtime contract does
+    not impose that vendor-specific restriction, so short ids are deterministically
+    namespaced while already-compatible ids pass through unchanged.
+    """
+
+    if conversation_id is None or len(conversation_id) >= 32:
+        return conversation_id
+    return str(uuid.uuid5(_ANTIGRAVITY_CONVERSATION_NAMESPACE, conversation_id))
+
+
 def _agent_key(task: AgentTask, config: Any) -> tuple[Any, ...]:
     conversation_id = _conversation_id(task)
     if conversation_id:
@@ -1036,9 +1047,7 @@ def _usage_from(value: Any) -> Usage:
             else None
         ),
         output_tokens=(
-            output_tokens + thoughts
-            if output_tokens is not None and thoughts is not None
-            else None
+            output_tokens + thoughts if output_tokens is not None and thoughts is not None else None
         ),
         cache_read_tokens=cache_read,
         total_tokens=total,

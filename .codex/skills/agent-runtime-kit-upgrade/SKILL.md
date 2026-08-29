@@ -1,97 +1,97 @@
 ---
 name: agent-runtime-kit-upgrade
-description: Run the local agent-runtime-kit SDK evolution workflow to inspect and safely upgrade Claude Agent SDK, OpenAI Codex SDK, Codex CLI binary, and Google Antigravity SDK dependencies. Use when the user asks to upgrade, refresh, evolve, or create a PR for agent-runtime-kit against current upstream agent SDK releases.
+description: Inspect and safely upgrade agent-runtime-kit's Claude Agent SDK, OpenAI Codex SDK and coupled CLI binary, and Google Antigravity SDK dependencies. Use for SDK freshness checks, upgrades, compatibility repairs, or upgrade PRs in agent-runtime-kit.
 ---
 
-# Agent Runtime Kit Upgrade
+# Agent Runtime Kit SDK Upgrade
 
-Run the local SDK evolution agent for `agent-runtime-kit`.
+Use the repository-owned evolution runner for evidence collection, candidate
+inspection, compatibility gates, dependency updates, and verification.
 
-Default runtime for this Codex skill: `codex-agent-sdk`.
+## Authorization
 
-## Non-Negotiables
+- Always run a report-only pass before changing dependencies.
+- An explicit request to upgrade, refresh, or update the SDKs authorizes the
+  gated local `pyproject.toml`, `uv.lock`, and compatibility-manifest update
+  after the report passes.
+- A bare skill invocation or freshness question is report-only.
+- Creating a branch, commit, push, or pull request requires an explicit request
+  for that publication action. Never auto-merge or publish a release.
 
-- Route all AI reasoning, planning, implementation decisions, structured output,
-  and review through `python -m examples.sdk_evolution_agent`.
-- Do not call OpenAI, Anthropic, Google, Bedrock, Vertex, or other model APIs
-  directly from this skill.
-- Use local tools only for deterministic work: Git, `gh`, `uv`, Python, package
-  metadata fetching, filesystem inspection, SDK introspection, tests, and report
-  inspection.
-- Do not scrape unsupported credentials.
-- Do not auto-merge or publish releases.
-- Do not run from a dirty or divergent checkout. Create a fresh worktree from
-  `origin/main` unless the user explicitly gives another base.
+## Invariants
 
-## Preflight
+- Discover each monitored package's latest upstream release independently of
+  the repository's current constraints. A constraint that excludes a newer
+  release is a result to investigate, not proof that the repository is current.
+- Keep these facts separate in the report: upstream latest, compatible
+  candidate, current resolver result, prospective resolver result, and applied
+  lock version.
+- `openai-codex-cli-bin` is coupled to the exact version required by the
+  latest published `openai-codex`. Record a newer standalone CLI release as a
+  staged artifact, not a blocked candidate. It may be fingerprinted in a
+  credential-scrubbed disposable environment for implementation-history
+  analysis, but never select it into the project unless the SDK requires it.
+- Direction-of-travel means trends in actual upstream implementations. Inspect
+  recent release files and Python definitions even when no dependency update is
+  pending. Never turn the direction report into upgrade, hold, resolver, or
+  lockfile advice; that belongs to the architecture and implementation stages.
+- Run UV without freshness delays. The runner removes cutoff environment
+  variables and uses `uv lock --exclude-newer false`; do not reintroduce the
+  retired repository cooloff or package-specific exemptions.
+- Candidate API snapshots and behavior probes must cover every exact
+  `(package, baseline, candidate)` transition. Field presence alone is not a
+  semantic probe: construct the provider configuration and exercise the
+  adapter-owned contract.
+- Never promote or create a PR unless the update produced a non-empty diff, the
+  lock contains every inspected compatible candidate exactly, and all
+  verification commands passed.
 
-1. Announce the active checkout and the new worktree path.
-2. Fetch remote state and create a fresh worktree:
+## Checkout Preflight
 
-   ```bash
-   git fetch origin --prune
-   git worktree add -b "sdk-evolution-upgrade-$(date +%Y%m%d-%H%M%S)" \
-     /tmp/ark-sdk-evolution-upgrade origin/main
-   ```
-
-3. In the new worktree, verify local tooling:
-
-   ```bash
-   gh auth status
-   env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-     uv run --locked python -m examples.sdk_evolution_agent --help
-   ```
-
-4. Resolve the runtime that will run the AI-backed stages. Use
-   `codex-agent-sdk` unless the user explicitly selected another runtime.
-   Change the runtime and uv extra together:
-   - `claude-agent-sdk` -> `--extra claude`
-   - `codex-agent-sdk` -> `--extra codex`
-   - `antigravity-agent-sdk` -> `--extra antigravity`
-
-5. Use supported provider auth only:
-   - Claude: Anthropic API key, Claude Code auth, or Claude Code provider
-     settings such as Bedrock or Vertex. Bedrock must use the AWS SDK credential
-     chain; Vertex must use Google Application Default Credentials or supported
-     environment variables.
-   - Codex: supported local Codex login cache. The runner injects
-     `CODEX_HOME=~/.codex_agent_runtime_sdk` for Codex-backed stages and mirrors
-     the normal `~/.codex/auth.json` cache into that isolated home before use.
-   - Antigravity: `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or Google Application
-     Default Credentials with a project and optional location variables.
-
-6. If the selected runtime is `codex-agent-sdk`, prepare and verify fresh auth
-   for the dedicated SDK Codex home before running the evolution agent:
-
-   ```bash
-   env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-     uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
-   ```
-
-   The helper creates `~/.codex_agent_runtime_sdk`, removes uv freshness cutoff
-   variables, mirrors `~/.codex/auth.json` into that isolated home when the
-   normal cache is newer, and checks `codex login status` against that exact
-   home. If it exits non-zero, STOP before running `examples.sdk_evolution_agent`
-   and refresh the normal Codex login cache:
-
-   ```bash
-   uv run --locked --extra codex codex login --device-auth
-   env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
-     uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
-   ```
-
-## Report-Only First
-
-Always run a report-only pass before implementation. Explicitly bypass uv
-freshness cutoffs:
-
-The runner removes environment cutoffs and passes
-`--exclude-newer-package <package>=false` for every monitored vendor package.
-The project declares the same package-scoped exemptions, while every other
-dependency keeps the repository's normal eight-day delay.
+Fetch and compare the current checkout with the requested base. Work directly
+only when it is the intended clean checkout. Preserve dirty or unrelated work.
+When isolation is needed, use a unique path rather than the old shared `/tmp`
+path:
 
 ```bash
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+git fetch origin --prune
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/ark-sdk-evolution.XXXXXX")"
+worktree="$scratch/worktree"
+branch="sdk-evolution-upgrade-$(date +%Y%m%d-%H%M%S)-$$"
+git worktree add -b "$branch" "$worktree" origin/main
+```
+
+Announce the selected checkout and base. Do not delete a worktree that contains
+uncommitted work. If repository instructions mention a GSD command that is not
+actually installed, record the investigation and plan in the available task
+plan, then continue; an unavailable wrapper is not a reason to abandon an
+explicitly requested repair.
+
+## Runtime Preflight
+
+Use `codex-agent-sdk` unless the user selected another runtime. Match runtime
+and optional extra:
+
+- `claude-agent-sdk` -> `--extra claude`
+- `codex-agent-sdk` -> `--extra codex`
+- `antigravity-agent-sdk` -> `--extra antigravity`
+
+Use supported authentication only. For Codex, prepare the dedicated SDK home:
+
+```bash
+env -u UV_EXCLUDE_NEWER \
+  uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
+```
+
+If authentication fails, stop and report that concrete blocker. Do not scrape
+or reconstruct credentials.
+
+## Report-Only Pass
+
+Run all four monitored packages unless the user explicitly narrowed scope:
+
+```bash
+env -u UV_EXCLUDE_NEWER \
   uv run --locked --extra codex python -m examples.sdk_evolution_agent \
     --runtime codex-agent-sdk \
     --refresh-preview \
@@ -102,83 +102,82 @@ env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
     --package google-antigravity
 ```
 
-`--inspect-candidates` is explicit consent to install and import a missing or
-drifted locked baseline and resolver-selected candidates in credential-scrubbed
-temporary environments.
+`--inspect-candidates` is explicit consent to install and import exact locked baselines and candidate
+versions in credential-scrubbed temporary environments. The runner reuses each
+package/version environment for its API snapshot and behavior probe, retries
+transient metadata/install failures, and prints progress while it works.
 
-If the user explicitly chooses another runtime, replace both the `--runtime`
-value and the matching uv extra using the mapping above. Codex-backed runs
-should use the runner's built-in `gpt-5.5` and
-`reasoning_effort=xhigh` policy; do not implement model selection outside the
-runner.
+Read the newest `reports/sdk-evolution/<timestamp>/report.md` plus its raw JSON
+artifacts, especially `implementation_diffs.json` and `behavior_summary.json`.
+The implementation-trend section must describe observed source/artifact changes
+and explicit binary limitations, never dependency action. Treat any of these as a hard
+implementation blocker:
 
-Inspect the newest `reports/sdk-evolution/<timestamp>/` directory:
+- missing or failed no-cooloff prospective resolver preview;
+- upstream candidate absent from the exact API-diff inventory;
+- missing required release evidence;
+- behavior status `fail` or `incomplete`, malformed/contradictory evidence, or
+  a missing exact-version comparison;
+- `manual_design_required`, reviewer rejection, or an unsafe architecture
+  decision;
+- recursive runtime impact without an explicit adaptation and rerun plan.
 
-- `evidence.json`
-- `release_notes.json`
-- `api_diffs.json`
-- `behavior_probes.json`
-- `behavior_diffs.json`
-- `behavior_summary.json`
-- `current_state.json`
-- `direction_analysis.json`
-- `architecture_decision.json`
-- `review.json`
-- `report.md`
+`pass` means complete unchanged behavior evidence. `changed` means complete,
+non-breaking behavior evidence. Neither status permits ignoring snapshot import
+errors or a failed resolver preview.
 
-Stop before implementation when candidate API diffs are missing, required
-release-note evidence is missing, `behavior_summary.json` is missing, malformed,
-has an unknown status, or reports `fail` / `incomplete`,
-`manual_design_required` is true, the reviewer rejects the evidence or design,
-or recursive self-adaptation lacks a safe migration plan. `pass` means complete
-unchanged evidence; `changed` means complete non-breaking evidence;
-`incomplete` means required observations could not be proved; and `fail` means
-a required contract failed or a breaking diff was observed.
+## Apply a Requested Local Upgrade
 
-Recursive self-adaptation means the upgrade affects the runner's own use of
-`AgentTask`, `RuntimeRegistry`, adapters, output schemas, event sinks,
-permission profiles, typed unsupported-feature errors, or `AgentResult`. The
-upgrade must update those usages, tests, and docs in the same scoped change, or
-stop for manual design review.
-
-## Implementation And PR
-
-Only run implementation when the report-only pass supports it and the user wants
-an upgrade branch or PR:
+When the user explicitly requested an upgrade and the report-only pass is green,
+rerun with `--implementation-enabled` and without PR flags:
 
 ```bash
-BRANCH="sdk-evolution-upgrade-$(date +%Y%m%d-%H%M%S)"
-
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+env -u UV_EXCLUDE_NEWER \
   uv run --locked --extra codex python -m examples.sdk_evolution_agent \
     --runtime codex-agent-sdk \
     --refresh-preview \
     --inspect-candidates \
     --implementation-enabled \
-    --create-branch \
-    --branch-name "$BRANCH" \
-    --draft-pr \
-    --pr-base main \
-    --commit-message "Run SDK evolution update" \
-    --pr-title "Run SDK evolution update across vendor packages" \
     --package claude-agent-sdk \
     --package openai-codex \
     --package openai-codex-cli-bin \
     --package google-antigravity
 ```
 
-## Verification
+The deterministic implementation lane widens only excluding upper bounds,
+updates the lock with `--exclude-newer false`, verifies exact target versions,
+updates `src/agent_runtime_kit/compatibility.py` to the exact tested SDK and
+coupled-runtime versions, and rolls all three artifacts back on resolver
+mismatch or test failure. If a candidate requires adapter source changes, the
+runner must block; repair the evidenced contract in the scoped coding workflow,
+add a regression test, and rerun the report before applying dependencies.
 
-Run or verify:
+## Pull Request Mode
+
+Only when the user requested a PR, add a unique branch and the PR flags to the
+green implementation pass:
 
 ```bash
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv lock --check
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run --locked ruff check .
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run --locked mypy
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE uv run --locked pytest
+--create-branch --branch-name "$branch" --draft-pr --pr-base main
 ```
 
-If a draft PR was created, watch CI until it finishes or clearly report that it
-is still running. Final output should include the PR URL, report path, changed
-SDK versions, `behavior_summary.json` status and reasons, architecture decision,
-reviewer result, test results, uncertainty, and manual review checklist.
+The runner may stage only its reported `changed_paths`. Verify the exact pushed
+head, PR URL, changed files, and CI state. Do not claim a PR exists merely
+because `--draft-pr` was requested; the runner skips publication when the
+change is empty, unapplied, or unverified.
+
+## Final Verification
+
+Verify the deciding live surface again:
+
+```bash
+env -u UV_EXCLUDE_NEWER uv lock --check
+env -u UV_EXCLUDE_NEWER uv run --locked ruff check .
+env -u UV_EXCLUDE_NEWER uv run --locked mypy
+env -u UV_EXCLUDE_NEWER uv run --locked pytest
+```
+
+Report the baseline and applied versions, candidate classifications, behavior
+status, exact verification results, changed files, report path, and any
+remaining blocker or uncertainty. For PR work, also report the verified URL,
+head SHA, and current checks.
