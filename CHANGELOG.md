@@ -5,6 +5,55 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.1 - 2026-08-29
+
+### Added
+
+- SDK evolution reports now include recent-release implementation evidence:
+  shipped-file fingerprints, Python-definition diffs, opaque-runtime limits,
+  and implementation trends grounded in observed upstream artifacts.
+- Exact baseline/candidate behavior probes now exercise adapter-owned semantic
+  contracts in reusable, credential-scrubbed disposable environments.
+- Evolution artifacts now preserve independent upstream discovery, current and
+  prospective resolver results, exact candidate classifications, implementation
+  diffs, and stronger current-state provenance.
+
+### Changed
+
+- Updated tested vendor runtimes from Claude Agent SDK `0.2.106` to `0.2.148`,
+  OpenAI Codex SDK `0.1.0b3` to `0.147.0`, its coupled CLI binary `0.137.0a4`
+  to `0.147.0`, and Google Antigravity SDK `0.1.4` to `0.1.15`.
+- Raised the validated Codex SDK range to `<0.148`; the standalone Codex CLI
+  `0.149.0` remains an inspected artifact rather than an install candidate
+  because Codex SDK `0.147.0` requires CLI `0.147.0` exactly.
+- SDK freshness checks now bypass repository and ambient UV release cooloffs so
+  upstream discovery, prospective resolution, and applied locks describe the
+  same current package state.
+- Direction-of-travel analysis now reports trends in actual upstream
+  implementations instead of emitting dependency upgrade or hold advice.
+- The repository-owned upgrade skill is the canonical operator workflow for
+  report-first discovery, gated implementation, and separately authorized PR
+  publication.
+
+### Fixed
+
+- Candidate discovery no longer treats the current dependency bounds as proof
+  that no newer upstream release exists; excluded releases receive an
+  independent prospective resolver check.
+- Missing optional SDKs, failed imports, skipped probes, malformed evidence, and
+  mismatched baseline/candidate versions can no longer produce a false-green
+  compatibility result or bypass implementation gates.
+- Dependency application now updates project constraints, `uv.lock`, and the
+  compatibility manifest atomically, verifies exact inspected versions, and
+  restores all three artifacts if resolution or validation fails.
+- Antigravity now maps short public session IDs deterministically to
+  provider-safe UUID conversation IDs while preserving the caller-visible
+  session identifier.
+- Codex CLI binary snapshots use the correct import surface, and publication is
+  skipped for empty, unapplied, rolled-back, or unverified changes.
+- Candidate installation and release-note collection now retry bounded transient
+  failures and report progress instead of appearing stalled.
+
 ## 0.5.0 - 2026-07-11
 
 ### Added
