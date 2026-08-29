@@ -14,7 +14,8 @@ or manual design stop.
 The SDK evolution agent should answer these questions for every run:
 
 - What package versions are installed, locked, and available upstream?
-- Which packages does the resolver actually want to update?
+- Which newer upstream releases exist, which are excluded by current bounds,
+  and which exact versions are prospectively resolvable together?
 - What changed in public API shape?
 - What changed in documented behavior or product direction?
 - Which adapter behavior contracts still pass on the candidate versions?
@@ -75,18 +76,22 @@ Step responsibilities:
   `pyproject.toml`, `uv.lock`, installed distributions, package metadata,
   configured source hints, local environment facts, and supported auth
   availability. This produces raw facts, not recommendations.
-- **Resolve update candidates**: Run the targeted resolver preview with
-  freshness cutoffs removed. This step decides which packages are real update
-  candidates for the run. It should use resolver output rather than only PyPI
-  `latest` metadata, especially for prerelease packages.
-- **Inspect current and candidate APIs**: Load API snapshot and diff artifacts
-  from the last update run, then focus new inspection on packages that the
-  resolver selected for update or packages whose evidence is missing, stale, or
-  incompatible with the current evidence schema. This step owns API snapshot and
-  API diff artifacts. If the evidence signature changes, the agent may need to
-  refresh the current-state snapshot or gather more current-state data before
-  comparing candidates. If an update candidate has no candidate API diff, the
-  run should not proceed to implementation.
+- **Resolve update candidates**: Build the candidate inventory from independent
+  upstream package metadata before consulting current constraints. Run both the
+  current targeted resolver preview and, when an upper bound excludes a newer
+  release, a no-mutation prospective preview in a temporary manifest with only
+  the excluding upper bound widened. Resolver output classifies feasibility; it
+  must not define away candidates hidden by the current manifest.
+- **Inspect current and candidate APIs**: Treat `uv.lock` as the baseline and
+  inspect every exact compatible candidate. Reuse one credential-scrubbed
+  package/version environment for its snapshot and behavior probe. If an update
+  candidate has no exact candidate API diff, the run must not proceed to
+  implementation.
+- **Inspect recent implementations**: When explicit candidate inspection is
+  enabled, inspect the three most recent published releases independently of
+  whether an update is pending. Fingerprint shipped files and Python AST
+  definitions, compare adjacent releases, and preserve opaque-artifact
+  limitations. This evidence is longitudinal analysis, not resolver input.
 - **Collect changelog and release-note evidence**: Fetch or read official
   changelogs, release pages, docs changelogs, repository releases, and package
   metadata links. This step records what changed according to the vendor and
@@ -100,10 +105,12 @@ Step responsibilities:
   snapshots, API diffs, release-note evidence, behavior probe results, source
   references, and uncertainty into a compact bundle for the AI stages. This step
   should preserve provenance so later reasoning can be traced back to evidence.
-- **Direction analysis through agent-runtime-kit**: Ask a runtime, via
-  `AgentTask`, to infer direction-of-travel themes from the evidence. This step
-  identifies whether changes look isolated or part of a broader SDK direction,
-  but it does not own the concrete implementation plan.
+- **Implementation-trend analysis through agent-runtime-kit**: Ask a runtime,
+  via `AgentTask`, to infer implementation patterns from exact recent-release
+  file and definition diffs, corroborated by API, behavior, and release-note
+  evidence. This step identifies whether changes look isolated or part of a
+  broader SDK implementation direction. It must not recommend upgrade, hold,
+  resolver, or lockfile actions; it does not own the implementation plan.
 - **Architecture decision and update plan through agent-runtime-kit**: Ask a
   runtime, via `AgentTask`, to turn direction analysis into the concrete plan:
   adapter-only, test-only, docs-only, capability metadata change,
@@ -123,26 +130,26 @@ Step responsibilities:
   report with the evidence bundle, analysis, decision, reviewer output,
   uncertainty, blocked reasons, and the exact manual review questions. This is a
   valid end state, not a failed run.
-- **Apply safe implementation**: Apply only the changes allowed by the accepted
-  architecture decision and deterministic gates. This may include lockfile
-  updates, adapter changes, tests, docs, examples, compatibility shims, or report
-  changes. It must not implement changes that were classified as
-  `manual_design_required`.
+- **Apply safe implementation**: The built-in deterministic implementation lane
+  widens only excluding dependency upper bounds, refreshes the lock to the exact
+  inspected compatible versions, and rolls both files back on mismatch or
+  verification failure. Adapter, public API, test, or documentation changes are
+  scoped coding work triggered by a blocked report; they require regression
+  evidence and a green rerun before the dependency lane proceeds.
 - **Run verification**: Run the verification commands required by the
   architecture decision. At minimum, this should cover formatting/linting,
   typing, unit tests, lock checks, report generation checks, and any available
   live smoke needed for the affected runtime behavior.
 - **Promote updated state to current baseline**: After implementation and
-  verification pass, save the updated lock/package/API/release-note/probe state
-  as the new current-state baseline for the next run. This promotion should be
-  explicit, atomic, and tied to the verified commit or workspace state. Failed,
-  blocked, or manual-design-required runs must not replace the current baseline.
+  verification pass, record the updated lock/package/API/release-note/probe state
+  in `current_state.json`, tied to the verified workspace state. Failed, blocked,
+  or manual-design-required runs are never marked promoted.
 - **Write report and optional draft PR**: Write the final local report with
   evidence, decisions, implementation summary, baseline-promotion result, test
   results, uncertainty, and manual checklist. If explicitly configured and
   authenticated, create or update a draft PR. This step must never auto-merge.
 
-Every box before direction analysis is deterministic. AI stages may interpret
+Every box before implementation-trend analysis is deterministic. AI stages may interpret
 evidence, but they should not invent evidence that was not collected.
 
 ## Operating Modes
@@ -176,7 +183,7 @@ uv run --locked --extra antigravity python -m examples.sdk_evolution_agent \
 Before a Codex-backed run, prepare the dedicated SDK evolution auth home:
 
 ```bash
-env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
+env -u UV_EXCLUDE_NEWER \
   uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
 ```
 
@@ -241,30 +248,24 @@ The agent checks:
 - `pyproject.toml` dependency declarations.
 - `uv.lock` versions.
 - Installed distributions in the local environment.
-- PyPI metadata and recent releases.
-- `uv lock --dry-run -P ...` output with freshness cutoffs removed.
+- Independent PyPI latest and recent-release metadata.
+- Current constrained and prospective temporary-manifest
+  `uv lock --dry-run --exclude-newer false -P ...` output.
 
-`uv lock --dry-run` is the source of truth for update candidates when it is
-available. PyPI `latest` metadata is useful context, but it can be misleading
-for prerelease packages. For example, a locked prerelease can be newer than the
-stable value reported by package metadata.
+Upstream metadata is the source of truth for whether a newer direct SDK release
+exists. Prospective resolution is the source of truth for the compatible set
+that can be applied. For `openai-codex-cli-bin`, the compatible candidate is the
+exact version required by the Codex SDK candidate; a newer standalone CLI
+release remains visible but is classified as blocked by that coupling.
 
 ### 2. API Shape Evidence
 
-The agent should treat the lockfile as the current SDK baseline. If the active
-Python environment has drifted from `uv.lock`, the agent inspects the locked
-baseline in an isolated virtualenv instead of using the installed package. API
-inspection artifacts are reusable evidence from the last update run when their
-schema, lockfile version, and artifact hashes still match. A normal run starts
-by loading the prior `api_snapshots/` and `api_diffs.json` artifacts, then
-inspects only the packages that need fresh facts:
-
-- packages selected by the resolver for update,
-- packages whose prior artifacts are missing,
-- packages whose prior artifacts were produced by an older evidence schema,
-- packages whose current locked or installed version no longer matches the
-  artifact baseline,
-- packages needed to answer a specific adapter-compatibility question.
+The agent treats the lockfile as the current SDK baseline. If the active Python
+environment has drifted from `uv.lock`, it inspects the locked baseline in an
+isolated virtualenv instead of using the installed package. Each run captures
+fresh evidence for every selected package and every independently discovered
+compatible candidate. A package/version environment is cached only within the
+run, so its API snapshot and behavior probe reuse one exact install.
 
 For importable packages, snapshots record:
 
@@ -283,15 +284,9 @@ This catches obvious adapter risks:
 
 API shape is necessary but insufficient. It does not prove behavior.
 
-After a successful implementation, the candidate API snapshots and diffs that
-were verified must be promoted to the current-state baseline. That ensures the
-next run compares new upstream candidates against the SDK state that was
-actually accepted, not against stale pre-update artifacts.
-
-If the evidence schema changes, promotion should include a schema refresh of the
-current package state even when the package version did not change. Otherwise
-future runs may compare candidate evidence against artifacts that no longer mean
-the same thing.
+After a successful implementation, `uv.lock` becomes the next run's
+authoritative baseline and `current_state.json` records the evidence that was
+accepted.
 
 ### 3. Changelog and Release-Note Evidence
 
@@ -344,7 +339,7 @@ Behavior probes should cover these contracts:
 
 | Contract | Why API diffs are not enough | Example probe |
 | --- | --- | --- |
-| Request construction | Constructor signatures can stay stable while fields change meaning. | Assert adapter builds expected SDK options/config objects. |
+| Request construction | Signatures can stay stable while validators or field meaning changes. | Construct the exact SDK options/config object with adapter-owned values; Antigravity includes provider-compatible mapped conversation IDs. |
 | Permission mapping | Permission mode names can stay present while policy behavior changes. | Strict/default/permissive tests for each adapter. |
 | Sandbox and workspace semantics | Behavior can shift across SDK or CLI layers without a Python signature change. | Codex sandbox enum and run argument contract tests, plus smoke where possible. |
 | Streaming and event order | New message types may not break imports but may be dropped. | Feed fake vendor messages and assert emitted event order. |
@@ -371,7 +366,7 @@ Each probe result should include:
 - skipped reason when optional credentials are missing.
 
 `behavior_diffs.json` compares observed locked-baseline probes against
-candidate-version probes for resolver-selected updates. Breaking candidate
+candidate-version probes for independently inventoried compatible updates. Breaking candidate
 probe changes block implementation deterministically before any local lock
 update.
 
@@ -411,12 +406,19 @@ sequenceDiagram
 
 The AI stages should receive compacted, source-referenced evidence. They should
 not be asked to inspect the filesystem directly during report-only analysis.
+The direction stage receives implementation diffs as primary evidence. Its
+structured package status is `observed`, `opaque-runtime`, `no-transition`, or
+`unavailable`; package freshness and resolver status are not implementation
+trends. A deterministic postcondition replaces operational advice if a runtime
+returns it in a trend field.
 
 ## Decision Gates
 
 The agent should fail closed. Implementation is blocked when:
 
-- the resolver reports an update but candidate API diffs are missing,
+- independent discovery finds a candidate but the prospective no-cooloff
+  resolver preview is missing or failed,
+- an exact candidate API diff is missing,
 - release notes exist but were not collected,
 - release notes are unavailable and the API or behavior evidence is ambiguous,
 - behavior probes fail,
@@ -534,6 +536,8 @@ evidence.json
 release_notes.json
 api_snapshots/
 api_diffs.json
+implementation_snapshots/
+implementation_diffs.json
 behavior_probes.json
 behavior_diffs.json
 behavior_summary.json
@@ -553,7 +557,7 @@ report.md
 - API diff count and affected packages,
 - behavior probe status,
 - current-state baseline promotion status,
-- direction-of-travel themes,
+- upstream implementation patterns across exact release intervals,
 - architecture decision,
 - reviewer status,
 - implementation result,
@@ -568,7 +572,7 @@ artifact-aware. It should record:
 - commit SHA or explicit dirty-worktree marker,
 - lockfile hash,
 - package names and accepted current versions,
-- paths or content hashes for current API snapshots,
+- paths or content hashes for current API and implementation snapshots,
 - paths or content hashes for release-note evidence,
 - paths or content hashes for behavior probe results,
 - a path or content hash for the deterministic behavior summary,
@@ -589,9 +593,11 @@ Promotion rules should be conservative:
 Changelogs are incomplete. They often omit small behavior changes and may lag
 package releases.
 
-API snapshots are shallow. Python introspection can miss behavior encoded in
-runtime binaries, generated models, callbacks, subprocesses, environment
-variables, or remote services.
+Public API snapshots are shallow. Implementation-history fingerprints add
+file-level and Python-definition evidence, but hashes still cannot explain
+behavior encoded in runtime binaries, generated models, callbacks, subprocesses,
+environment variables, or remote services. Opaque artifacts must remain an
+explicit limitation rather than being reverse-inferred from version numbers.
 
 Live probes are environment-sensitive. They prove that one local credential and
 runtime setup worked at one time. They do not replace unit or contract probes.
@@ -657,10 +663,16 @@ The example implements the deterministic evidence artifacts described above:
   package versions, artifact hashes, and promotion status.
 
 The implementation path is gated by deterministic checks before the local
-lockfile update runs. Missing candidate API diffs, unavailable required
+manifest/lock update runs. A missing or failed prospective resolver preview,
+missing candidate API diffs, unavailable required
 release-note evidence, behavior summaries that are failed, incomplete, missing,
 malformed, or unknown, reviewer rejection, `manual_design_required`, and
 unresolved recursive self-adaptation all block implementation. When
-implementation is allowed, the example applies the resolver-selected SDK lock
-update locally, runs verification, writes the report artifacts, commits them,
-pushes the branch, and opens a draft PR when configured.
+implementation is allowed, the example widens only excluding direct dependency
+bounds, applies the exact prospectively selected SDK set with freshness cutoffs
+disabled, updates the compatibility manifest to the exact tested SDK and
+coupled-runtime versions, verifies the resolved versions, and runs lint, typing,
+tests, and lock checks. It restores the project manifest, lockfile, and
+compatibility manifest on mismatch or verification failure. Only explicitly
+requested draft-PR mode may stage the reported changed paths, commit, push, and
+open a PR, and only after a verified non-empty update.

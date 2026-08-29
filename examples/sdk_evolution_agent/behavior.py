@@ -15,7 +15,12 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from examples.sdk_evolution_agent.collectors import ResolverTransition, parse_refresh_transitions
+from agent_runtime_kit.adapters.antigravity import _provider_conversation_id
+from examples.sdk_evolution_agent.collectors import ResolverTransition, candidate_transitions
+from examples.sdk_evolution_agent.inspection import (
+    CandidatePreparationError,
+    prepare_cached_candidate_environment,
+)
 from examples.sdk_evolution_agent.models import BehaviorDiff, BehaviorProbeResult
 from examples.sdk_evolution_agent.snapshots import DEFAULT_MODULES, isolated_env
 
@@ -33,6 +38,8 @@ _DETAIL_STRING_SEQUENCE_FIELDS = frozenset(
         "required_start_params",
         "run_params",
         "start_params",
+        "construction_cases",
+        "construction_failures",
     }
 )
 _SENSITIVE_PATH_START_RE = re.compile(
@@ -113,41 +120,69 @@ def probe_candidate_in_venv(
 
     step = "virtual-environment-creation"
     try:
-        with tempfile.TemporaryDirectory(prefix="ark-sdk-behavior-") as directory:
-            venv = Path(directory) / ".venv"
-            # Scrub the environment for every subprocess that touches freshly
-            # downloaded upstream code (same scrub as the API snapshots): a
-            # throwaway HOME and only PATH, so a malicious or buggy candidate
-            # package cannot read the caller's credentials/config.
-            env = isolated_env(Path(directory))
-            subprocess.run(
-                (python, "-m", "venv", str(venv)),
-                check=True,
-                text=True,
-                capture_output=True,
-                timeout=timeout,
-                env=env,
-            )
-            bin_dir = "Scripts" if sys.platform == "win32" else "bin"
-            venv_python = venv / bin_dir / "python"
-            step = "package-installation"
-            subprocess.run(
-                (str(venv_python), "-m", "pip", "install", f"{package}=={version}"),
-                check=True,
-                text=True,
-                capture_output=True,
-                timeout=timeout,
-                env=env,
-            )
+        cached = prepare_cached_candidate_environment(
+            package,
+            version,
+            python=python,
+            timeout=timeout,
+            runner=subprocess.run,
+            env_factory=isolated_env,
+        )
+        if cached is not None:
             step = "probe-execution"
-            completed = subprocess.run(
-                (str(venv_python), "-c", _PROBE_SCRIPT, package, version, scope),
-                check=True,
-                text=True,
-                capture_output=True,
+            completed = _run_probe_script(
+                cached.python,
+                package=package,
+                version=version,
+                scope=scope,
                 timeout=timeout,
-                env=env,
+                env=cached.env,
             )
+        else:
+            with tempfile.TemporaryDirectory(prefix="ark-sdk-behavior-") as directory:
+                venv = Path(directory) / ".venv"
+                # Scrub the environment for every subprocess that touches freshly
+                # downloaded upstream code (same scrub as the API snapshots): a
+                # throwaway HOME and only PATH, so a malicious or buggy candidate
+                # package cannot read the caller's credentials/config.
+                env = isolated_env(Path(directory))
+                subprocess.run(
+                    (python, "-m", "venv", str(venv)),
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout,
+                    env=env,
+                )
+                bin_dir = "Scripts" if sys.platform == "win32" else "bin"
+                venv_python = venv / bin_dir / "python"
+                step = "package-installation"
+                subprocess.run(
+                    (str(venv_python), "-m", "pip", "install", f"{package}=={version}"),
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout,
+                    env=env,
+                )
+                step = "probe-execution"
+                completed = _run_probe_script(
+                    venv_python,
+                    package=package,
+                    version=version,
+                    scope=scope,
+                    timeout=timeout,
+                    env=env,
+                )
+    except CandidatePreparationError as exc:
+        cause = exc.cause
+        if isinstance(cause, subprocess.TimeoutExpired):
+            detail = f"timed out after {cause.timeout}s"
+        elif isinstance(cause, subprocess.CalledProcessError):
+            detail = _bounded_text(cause.stderr or cause.stdout or str(cause))
+        else:
+            detail = _bounded_text(cause)
+        return (_probe_execution_failure(package, version, scope, exc.step, detail),)
     except subprocess.TimeoutExpired as exc:
         return (
             _probe_execution_failure(
@@ -185,6 +220,33 @@ def probe_candidate_in_venv(
                 detail,
             ),
         )
+
+
+def _run_probe_script(
+    python: Path,
+    *,
+    package: str,
+    version: str,
+    scope: str,
+    timeout: int,
+    env: Mapping[str, str],
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        (
+            str(python),
+            "-c",
+            _PROBE_SCRIPT,
+            package,
+            version,
+            scope,
+            json.dumps(_probe_inputs(package), sort_keys=True),
+        ),
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        env=dict(env),
+    )
 
 
 def diff_behavior_results(results: Sequence[BehaviorProbeResult]) -> tuple[BehaviorDiff, ...]:
@@ -285,7 +347,7 @@ def behavior_expectations_from_evidence(evidence: Mapping[str, object]) -> dict[
                 issues.append(f"deterministic evidence package {index} must have a non-empty name")
                 continue
             packages.append(package)
-    expectations = build_behavior_expectations(packages, parse_refresh_transitions(evidence))
+    expectations = build_behavior_expectations(packages, candidate_transitions(evidence))
     expectations["expectation_issues"] = issues
     return expectations
 
@@ -751,7 +813,11 @@ def _is_probe_execution_error(result: BehaviorProbeResult) -> bool:
 
 def _has_contract_failure_evidence(result: BehaviorProbeResult) -> bool:
     missing = result.details.get("missing")
-    return bool(missing) and _is_sequence_payload(missing)
+    construction_failures = result.details.get("construction_failures")
+    return bool(
+        (bool(missing) and _is_sequence_payload(missing))
+        or (bool(construction_failures) and _is_sequence_payload(construction_failures))
+    )
 
 
 def _probe_package(
@@ -928,19 +994,53 @@ def _probe_antigravity(*, version: str | None, scope: str) -> BehaviorProbeResul
         "mcp_servers",
     }
     missing = sorted(expected - fields)
+    construction_cases = _probe_inputs(package)["conversation_ids"]
+    construction_failures = _antigravity_construction_failures(config_cls, construction_cases)
+    failed = bool(missing or construction_failures)
     return BehaviorProbeResult(
         package=package,
         version=version,
         scope=scope,
         probe="adapter-contract",
-        status="fail" if missing else "pass",
+        status="fail" if failed else "pass",
         summary=(
-            "Antigravity LocalAgentConfig exposes required adapter fields."
-            if not missing
-            else "Antigravity LocalAgentConfig is missing required adapter fields."
+            "Antigravity LocalAgentConfig exposes and constructs the required adapter contract."
+            if not failed
+            else "Antigravity LocalAgentConfig rejected the required adapter contract."
         ),
-        details={"fields": sorted(fields), "required_fields": sorted(expected), "missing": missing},
+        details={
+            "fields": sorted(fields),
+            "required_fields": sorted(expected),
+            "missing": missing,
+            "construction_cases": sorted(construction_cases),
+            "construction_failures": construction_failures,
+        },
     )
+
+
+def _probe_inputs(package: str) -> dict[str, list[str]]:
+    if package != "google-antigravity":
+        return {}
+    mapped = _provider_conversation_id("conv-77")
+    return {
+        "conversation_ids": [
+            mapped or "",
+            "a" * 32,
+        ]
+    }
+
+
+def _antigravity_construction_failures(
+    config_cls: Any,
+    conversation_ids: Sequence[str],
+) -> list[str]:
+    failures: list[str] = []
+    for index, conversation_id in enumerate(conversation_ids):
+        try:
+            config_cls(conversation_id=conversation_id)
+        except Exception as exc:
+            failures.append(f"case-{index}:{type(exc).__name__}:{_bounded_text(exc, limit=160)}")
+    return failures
 
 
 def _fields(cls: Any) -> set[str]:
@@ -970,6 +1070,14 @@ def _contract_details(result: BehaviorProbeResult) -> dict[str, Any]:
     if "required_start_params" in details:
         contract["required_start_params"] = _normalized_contract_field(
             details.get("required_start_params")
+        )
+    if "construction_cases" in details:
+        contract["construction_cases"] = _normalized_contract_field(
+            details.get("construction_cases")
+        )
+    if "construction_failures" in details:
+        contract["construction_failures"] = _normalized_contract_field(
+            details.get("construction_failures")
         )
     return contract
 
@@ -1109,6 +1217,7 @@ _PROBE_SCRIPT = textwrap.dedent(
     from pathlib import Path
 
     package, version, scope = sys.argv[1:4]
+    probe_inputs = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
     sensitive_path_start_re = re.compile(
         r"(?P<prefix>^|[^A-Za-z0-9_.-])"
         r"(?P<path>(?:[A-Za-z][A-Za-z0-9+.-]*://|[A-Za-z]:[\\/]|\\\\|/))"
@@ -1245,7 +1354,8 @@ _PROBE_SCRIPT = textwrap.dedent(
             config_module = importlib.import_module(
                 "google.antigravity.connections.local.local_connection_config"
             )
-            config_fields = fields(getattr(config_module, "LocalAgentConfig"))
+            config_cls = getattr(config_module, "LocalAgentConfig")
+            config_fields = fields(config_cls)
             expected = {
                 "model", "api_key", "vertex", "project", "location",
                 "system_instructions", "capabilities", "policies", "workspaces",
@@ -1253,15 +1363,28 @@ _PROBE_SCRIPT = textwrap.dedent(
                 "mcp_servers",
             }
             missing = sorted(expected - config_fields)
+            conversation_ids = probe_inputs.get("conversation_ids", [])
+            construction_failures = []
+            for index, conversation_id in enumerate(conversation_ids):
+                try:
+                    config_cls(conversation_id=conversation_id)
+                except Exception as exc:
+                    construction_failures.append(
+                        f"case-{index}:{type(exc).__name__}:{str(exc)[:160]}"
+                    )
+            contract_failed = bool(missing or construction_failures)
             payload = [result(
                 "adapter-contract",
-                "fail" if missing else "pass",
-                "Antigravity LocalAgentConfig exposes required adapter fields." if not missing
-                else "Antigravity LocalAgentConfig is missing required adapter fields.",
+                "fail" if contract_failed else "pass",
+                "Antigravity LocalAgentConfig exposes and constructs the required adapter contract."
+                if not contract_failed
+                else "Antigravity LocalAgentConfig rejected the required adapter contract.",
                 {
                     "fields": sorted(config_fields),
                     "required_fields": sorted(expected),
                     "missing": missing,
+                    "construction_cases": sorted(conversation_ids),
+                    "construction_failures": construction_failures,
                 },
             )]
         else:

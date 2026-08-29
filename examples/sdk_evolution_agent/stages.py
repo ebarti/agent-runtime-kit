@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,7 @@ from examples.sdk_evolution_agent.behavior import (
     assess_behavior_payload,
     behavior_expectations_from_evidence,
 )
-from examples.sdk_evolution_agent.collectors import parse_refresh_transitions
+from examples.sdk_evolution_agent.collectors import candidate_transitions, candidate_update_versions
 from examples.sdk_evolution_agent.models import (
     RUNTIME_CONTRACT_SYMBOLS,
     ApiDiff,
@@ -210,6 +211,7 @@ async def run_analysis_pipeline(
     *,
     evidence: Mapping[str, Any],
     api_diffs: Sequence[Mapping[str, Any]],
+    implementation_diffs: Sequence[Mapping[str, Any]],
     release_notes: Sequence[Mapping[str, Any]],
     behavior: Mapping[str, Any],
     context: RunContext,
@@ -219,9 +221,14 @@ async def run_analysis_pipeline(
     stage_payload = {
         "evidence": evidence,
         "api_diffs": list(api_diffs),
+        "implementation_diffs": _compact_stage_value(
+            list(implementation_diffs),
+            list_limit=12,
+        ),
         "release_notes": list(release_notes),
         "behavior": behavior,
     }
+    _progress("starting direction analysis")
     direction = await run_stage(
         runtime,
         stage="direction-analysis",
@@ -229,13 +236,24 @@ async def run_analysis_pipeline(
         schema=DIRECTION_ANALYSIS_SCHEMA,
         context=context,
     )
+    _progress("direction analysis complete")
+    direction = with_implementation_direction_guard(
+        direction,
+        evidence=evidence,
+        implementation_diffs=implementation_diffs,
+    )
     direction = _compact_stage_output(direction)
+    _progress("starting architecture decision")
     architecture = await run_stage(
         runtime,
         stage="architecture-decision",
         payload={
             "evidence": evidence,
             "api_diffs": list(api_diffs),
+            "implementation_diffs": _compact_stage_value(
+                list(implementation_diffs),
+                list_limit=12,
+            ),
             "release_notes": list(release_notes),
             "behavior": behavior,
             "direction_analysis": direction,
@@ -243,18 +261,30 @@ async def run_analysis_pipeline(
         schema=ARCHITECTURE_DECISION_SCHEMA,
         context=context,
     )
-    architecture = with_recursive_impact(architecture, api_diffs)
+    _progress("architecture decision complete; applying deterministic gates")
+    architecture = with_recursive_impact(
+        architecture,
+        api_diffs,
+        evidence=evidence,
+        runtime=context.runtime,
+    )
+    architecture = with_resolver_preview_guard(architecture, evidence)
     architecture = with_candidate_api_diff_guard(architecture, evidence, api_diffs)
     architecture = with_release_note_guard(architecture, release_notes)
     architecture = with_behavior_probe_guard(architecture, evidence, behavior)
     architecture = with_manual_design_gate(architecture)
     architecture = _compact_stage_output(architecture)
+    _progress("starting independent review")
     review = await run_stage(
         runtime,
         stage="review",
         payload={
             "evidence": evidence,
             "api_diffs": list(api_diffs),
+            "implementation_diffs": _compact_stage_value(
+                list(implementation_diffs),
+                list_limit=12,
+            ),
             "release_notes": list(release_notes),
             "behavior": behavior,
             "direction_analysis": direction,
@@ -263,6 +293,7 @@ async def run_analysis_pipeline(
         schema=REVIEWER_OUTPUT_SCHEMA,
         context=context,
     )
+    _progress("independent review complete")
     return direction, architecture, review
 
 
@@ -275,7 +306,7 @@ async def maybe_run_implementation(
     review: Mapping[str, Any],
     context: RunContext,
 ) -> dict[str, Any]:
-    """Run implementation only if decision gates permit it."""
+    """Evaluate whether the deterministic compatible-dependency update may run."""
 
     gate = evaluate_implementation_gate(
         architecture,
@@ -294,6 +325,7 @@ async def maybe_run_implementation(
     return {
         "applied": False,
         "allowed": True,
+        "mode": "compatible-dependency-refresh",
         "changes": [],
         "verification_results": [],
         "blocked_reason": "",
@@ -351,29 +383,87 @@ def detects_recursive_impact(api_diffs: Sequence[Mapping[str, Any] | ApiDiff]) -
 def with_recursive_impact(
     architecture: Mapping[str, Any],
     api_diffs: Sequence[Mapping[str, Any] | ApiDiff],
+    *,
+    evidence: Mapping[str, Any] | None = None,
+    runtime: str | None = None,
 ) -> dict[str, Any]:
     """Ensure recursive runtime-contract impacts are explicit."""
 
     result = dict(architecture)
-    if not detects_recursive_impact(api_diffs):
+    candidate_packages = set(candidate_update_versions(evidence or {}))
+    runtime_packages = _runtime_dependency_packages(runtime)
+    runtime_dependency_impact = bool(candidate_packages & runtime_packages)
+    if not detects_recursive_impact(api_diffs) and not runtime_dependency_impact:
         return result
     result["recursive_self_adaptation_impact"] = True
-    result.setdefault(
-        "self_adaptation_plan",
-        [
+    if not result.get("self_adaptation_plan"):
+        result["self_adaptation_plan"] = [
             "Update examples/sdk_evolution_agent runtime usage, schemas, tests, and docs "
             "in the same scoped change.",
-        ],
+            "Rerun the evolution report through the updated runtime after lockfile verification.",
+        ]
+    findings = list(result.get("findings") or [])
+    evidence_items = ["api_diffs"] if detects_recursive_impact(api_diffs) else []
+    evidence_items.extend(
+        f"active runtime dependency candidate: {package}"
+        for package in sorted(candidate_packages & runtime_packages)
     )
+    findings.append(
+        {
+            "classification": "recursive-runtime-validation",
+            "summary": (
+                "An active analysis-runtime dependency will change and requires "
+                "post-update verification through that runtime."
+            ),
+            "evidence": evidence_items,
+        }
+    )
+    result["findings"] = findings
+    return result
+
+
+def _runtime_dependency_packages(runtime: str | None) -> set[str]:
+    normalized = str(runtime or "").lower().replace("_", "-")
+    if "codex" in normalized:
+        return {"openai-codex", "openai-codex-cli-bin"}
+    if "claude" in normalized:
+        return {"claude-agent-sdk"}
+    if "antigravity" in normalized:
+        return {"google-antigravity"}
+    return set()
+
+
+def with_resolver_preview_guard(
+    architecture: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Require a successful prospective resolution before applying candidates."""
+
+    if not candidate_update_versions(evidence):
+        return dict(architecture)
+    preview = evidence.get("refresh_preview")
+    if isinstance(preview, Mapping) and preview.get("returncode") == 0:
+        return dict(architecture)
+
+    result = dict(architecture)
+    result["safe_to_implement"] = False
+    result["manual_design_required"] = True
     findings = list(result.get("findings") or [])
     findings.append(
         {
             "classification": "manual-design-required",
-            "summary": "Runtime contract changes affect the SDK evolution agent itself.",
-            "evidence": ["api_diffs"],
+            "summary": "SDK candidates were not proven resolvable after relaxing excluding bounds.",
+            "evidence": [
+                "refresh_preview is missing"
+                if not isinstance(preview, Mapping)
+                else f"refresh_preview exited {preview.get('returncode')!r}"
+            ],
         }
     )
     result["findings"] = findings
+    uncertainty = list(result.get("uncertainty") or [])
+    uncertainty.append("A successful no-cooloff prospective resolver preview is required.")
+    result["uncertainty"] = uncertainty
     return result
 
 
@@ -384,7 +474,7 @@ def with_candidate_api_diff_guard(
 ) -> dict[str, Any]:
     """Block SDK update implementation when candidate API evidence is missing."""
 
-    transitions = parse_refresh_transitions(evidence)
+    transitions = candidate_transitions(evidence)
     if not transitions:
         return dict(architecture)
     observed = {
@@ -590,6 +680,227 @@ def _compact_stage_value(value: Any, *, string_limit: int = 800, list_limit: int
     return value
 
 
+_OPERATIONAL_DIRECTION_RE = re.compile(
+    r"\b(?:upgrade|hold|keep|resolver|lockfile|candidate|adapter[- ]contract|"
+    r"safe to implement)\b",
+    re.IGNORECASE,
+)
+
+
+def with_implementation_direction_guard(
+    direction: Mapping[str, Any],
+    *,
+    evidence: Mapping[str, Any],
+    implementation_diffs: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Anchor direction output to implementation evidence, never release operations."""
+
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for item in implementation_diffs:
+        package = str(item.get("package") or "")
+        if package:
+            grouped.setdefault(package, []).append(item)
+    runtime_packages = {
+        str(item.get("name") or ""): item
+        for item in direction.get("packages", [])
+        if isinstance(item, Mapping) and item.get("name")
+    }
+    package_names = [
+        str(item.get("name"))
+        for item in evidence.get("packages", [])
+        if isinstance(item, Mapping) and item.get("name")
+    ]
+    packages: list[dict[str, Any]] = []
+    replaced_operation_advice = False
+    for package in package_names:
+        diffs = grouped.get(package, [])
+        source = runtime_packages.get(package, {})
+        status = _implementation_evidence_status(package, diffs)
+        trend = str(source.get("implementation_trend") or "").strip()
+        if not trend or _OPERATIONAL_DIRECTION_RE.search(trend):
+            replaced_operation_advice = replaced_operation_advice or bool(trend)
+            trend = _deterministic_implementation_trend(package, status, diffs)
+        packages.append(
+            {
+                "name": package,
+                "evidence_status": status,
+                "implementation_trend": trend,
+                "observed_transitions": [
+                    f"{item.get('from_version')} -> {item.get('to_version')}"
+                    for item in diffs
+                    if item.get("from_version") and item.get("to_version")
+                ],
+                "evidence": _implementation_evidence_lines(diffs),
+            }
+        )
+
+    themes = [
+        dict(item)
+        for item in direction.get("themes", [])
+        if isinstance(item, Mapping)
+        and item.get("name")
+        and item.get("implementation_pattern")
+        and not _OPERATIONAL_DIRECTION_RE.search(
+            f"{item.get('name', '')} {item.get('implementation_pattern', '')}"
+        )
+    ]
+    if not themes:
+        observed = [item["name"] for item in packages if item["evidence_status"] != "no-transition"]
+        themes = [
+            {
+                "name": "Inspected implementation evolution",
+                "implementation_pattern": (
+                    "Recent release transitions are summarized from source and artifact "
+                    "fingerprints; opaque runtime internals remain explicitly out of scope."
+                    if observed
+                    else "No adjacent release implementations were inspected in this run."
+                ),
+                "packages": observed,
+                "evidence": [
+                    f"{len(implementation_diffs)} adjacent release transition(s) inspected."
+                ],
+            }
+        ]
+
+    uncertainty = [
+        str(item)
+        for item in direction.get("uncertainty", [])
+        if isinstance(item, str) and not _OPERATIONAL_DIRECTION_RE.search(item)
+    ]
+    for package in packages:
+        if package["evidence_status"] == "unavailable":
+            uncertainty.append(
+                f"{package['name']}: implementation snapshots were unavailable for at least "
+                "one observed interval."
+            )
+        elif package["evidence_status"] == "opaque-runtime":
+            uncertainty.append(
+                f"{package['name']}: bundled executable internals cannot be inferred from "
+                "wheel artifact fingerprints."
+            )
+    for item in implementation_diffs:
+        package = str(item.get("package") or "unknown package")
+        for limitation in item.get("limitations", []):
+            if isinstance(limitation, str) and limitation:
+                uncertainty.append(f"{package}: {limitation}")
+    if replaced_operation_advice:
+        uncertainty.append(
+            "The runtime returned release-operation advice in the trend field; it was replaced "
+            "with deterministic implementation evidence."
+        )
+    return {
+        "packages": packages,
+        "themes": themes,
+        "uncertainty": list(dict.fromkeys(uncertainty)),
+    }
+
+
+def _implementation_evidence_status(
+    package: str,
+    diffs: Sequence[Mapping[str, Any]],
+) -> str:
+    if not diffs:
+        return "no-transition"
+    statuses = {str(item.get("status") or "unavailable") for item in diffs}
+    if package == "openai-codex-cli-bin" or "opaque-runtime" in statuses:
+        return "opaque-runtime"
+    if statuses == {"unavailable"}:
+        return "unavailable"
+    return "observed"
+
+
+def _deterministic_implementation_trend(
+    package: str,
+    status: str,
+    diffs: Sequence[Mapping[str, Any]],
+) -> str:
+    if status == "no-transition":
+        return "No adjacent release implementations were inspected in this run."
+    if status == "unavailable":
+        return "The requested implementation history could not be inspected reliably."
+    file_changes = sum(
+        len(item.get(field, []))
+        for item in diffs
+        for field in ("files_added", "files_removed", "files_changed")
+    )
+    definition_changes = sum(
+        len(item.get(field, []))
+        for item in diffs
+        for field in ("definitions_added", "definitions_removed", "definitions_changed")
+    )
+    if status == "opaque-runtime":
+        opaque_changes = sum(
+            len(item.get(field, []))
+            for item in diffs
+            for field in (
+                "opaque_artifacts_added",
+                "opaque_artifacts_removed",
+                "opaque_artifacts_changed",
+            )
+        )
+        return (
+            f"Across {len(diffs)} inspected release transition(s), the Python wrapper changed "
+            f"in {file_changes} file event(s) and {definition_changes} definition event(s); "
+            f"{opaque_changes} opaque artifact event(s) were observed, but bundled runtime "
+            "internals are not inspectable from wheels."
+        )
+    if file_changes == 0 and definition_changes == 0:
+        return (
+            f"Across {len(diffs)} inspected release transition(s), the inspectable Python "
+            "implementation was unchanged at file and definition level."
+        )
+    return (
+        f"Across {len(diffs)} inspected release transition(s), {file_changes} Python file "
+        f"event(s) and {definition_changes} definition event(s) were observed in {package}."
+    )
+
+
+def _implementation_evidence_lines(
+    diffs: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    if not diffs:
+        return ["No adjacent implementation release snapshots were available."]
+    lines: list[str] = []
+    for item in diffs:
+        files = (
+            len(item.get("files_added", [])),
+            len(item.get("files_removed", [])),
+            len(item.get("files_changed", [])),
+        )
+        definitions = (
+            len(item.get("definitions_added", [])),
+            len(item.get("definitions_removed", [])),
+            len(item.get("definitions_changed", [])),
+        )
+        opaque = (
+            len(item.get("opaque_artifacts_added", [])),
+            len(item.get("opaque_artifacts_removed", [])),
+            len(item.get("opaque_artifacts_changed", [])),
+        )
+        lines.append(
+            f"{item.get('from_version')} -> {item.get('to_version')}: "
+            f"Python files +{files[0]}/-{files[1]}/~{files[2]}, "
+            f"definitions +{definitions[0]}/-{definitions[1]}/~{definitions[2]}, "
+            f"opaque artifacts +{opaque[0]}/-{opaque[1]}/~{opaque[2]}, "
+            f"source lines {item.get('source_lines_before', 0)} -> "
+            f"{item.get('source_lines_after', 0)}."
+        )
+        notable = [
+            *item.get("files_added", []),
+            *item.get("files_removed", []),
+            *item.get("files_changed", []),
+            *item.get("definitions_added", []),
+            *item.get("definitions_removed", []),
+            *item.get("definitions_changed", []),
+            *item.get("opaque_artifacts_added", []),
+            *item.get("opaque_artifacts_removed", []),
+            *item.get("opaque_artifacts_changed", []),
+        ]
+        if notable:
+            lines.append("Changed implementation elements: " + ", ".join(notable[:6]))
+    return lines
+
+
 def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
     prompt = (
         "You are running inside the local SDK evolution agent. "
@@ -604,6 +915,20 @@ def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
         f"Current stage: {stage}. "
         f"Output schema: {json.dumps(schema, sort_keys=True)}"
     )
+    if stage == "direction-analysis":
+        prompt += (
+            " Direction means upstream implementation trajectory, not dependency action. "
+            "Treat implementation_diffs as the primary evidence and API diffs, behavior "
+            "probes, and release notes only as corroboration. Describe observed changes in "
+            "modules, files, Python definitions, runtime architecture, capabilities, behavior, "
+            "and deprecations across exact release intervals. Never recommend upgrading, "
+            "holding, keeping, resolving, or changing a lockfile; architecture-decision owns "
+            "release feasibility and action. A package without an inspected interval must say "
+            "no-transition, not current or hold. For an opaque binary runtime, distinguish "
+            "observable wrapper/artifact changes from unknowable executable internals. Themes "
+            "must describe implementation patterns supported by implementation-diff evidence, "
+            "not package freshness, resolver state, or reporting mode."
+        )
     if stage in {"architecture-decision", "review"}:
         prompt += (
             " Deterministic gate policy: candidate API diffs prove API shape drift, "
@@ -617,14 +942,28 @@ def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
             "that the removed symbols are used. Failed, incomplete, malformed, or "
             "internally inconsistent behavior evidence; missing exact candidate API "
             "transitions; unavailable required release-note evidence; "
-            "reviewer-identified unsupported vendor behavior, or recursive "
-            "runtime-contract impact remain hard blockers. Release-note status found "
+            "or reviewer-identified unsupported vendor behavior remain hard blockers. "
+            "A current direct-dependency upper bound that excludes a newer SDK is not "
+            "a manual-design blocker when independent discovery found it, prospective "
+            "resolution selects it, and its exact API and behavior evidence passes; the "
+            "implementation lane is explicitly designed to widen that excluding bound. "
+            "Likewise, an active analysis-runtime dependency candidate is recursive "
+            "impact but not by itself a blocker when exact candidate probes pass and the "
+            "self-adaptation plan requires a post-update rerun through that runtime. "
+            "A newer standalone Codex CLI is not required evidence when the Codex SDK "
+            "candidate pins and the resolver selects a different exact CLI candidate. "
+            "Recursive impact without such a plan, or with failed/incomplete candidate "
+            "evidence, remains a hard blocker. Release-note status found "
             "is direct release-note evidence. Status no-matching-version is source "
             "coverage with explicit uncertainty, not unavailable evidence."
         )
     if stage == "review":
         prompt += " The review status must be exactly pass or reject."
     return prompt
+
+
+def _progress(message: str) -> None:
+    print(f"[sdk-evolution] {message}", flush=True)
 
 
 def _stage_permissions(runtime: AgentRuntime, *, write_enabled: bool) -> PermissionProfile:
@@ -665,8 +1004,13 @@ def _fixture_payload(stage: str, task: AgentTask) -> dict[str, Any]:
         packages = [
             {
                 "name": package.get("name"),
-                "direction": "unknown",
-                "evidence": ["deterministic package metadata"],
+                "evidence_status": "no-transition",
+                "implementation_trend": (
+                    "Fixture runtime defers interpretation to deterministic implementation "
+                    "fingerprints."
+                ),
+                "observed_transitions": [],
+                "evidence": ["deterministic implementation diff inventory"],
             }
             for package in source.get("evidence", {}).get("packages", [])
             if isinstance(package, dict)
@@ -675,11 +1019,16 @@ def _fixture_payload(stage: str, task: AgentTask) -> dict[str, Any]:
             "packages": packages,
             "themes": [
                 {
-                    "name": "runtime SDK evolution",
-                    "summary": "Fixture runtime records evidence for human or real-runtime review.",
+                    "name": "runtime implementation evolution",
+                    "implementation_pattern": (
+                        "Fixture runtime records implementation evidence for human or "
+                        "real-runtime review."
+                    ),
+                    "packages": [item["name"] for item in packages],
+                    "evidence": ["implementation diff inventory"],
                 }
             ],
-            "uncertainty": ["fake runtime cannot infer real upstream product direction"],
+            "uncertainty": ["fake runtime cannot infer upstream implementation intent"],
         }
     if stage == "architecture-decision":
         return {

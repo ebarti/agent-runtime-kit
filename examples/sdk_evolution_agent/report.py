@@ -30,6 +30,8 @@ def write_run_report(
     evidence: dict[str, Any],
     snapshots: list[dict[str, Any]],
     api_diffs: list[dict[str, Any]],
+    implementation_snapshots: list[dict[str, Any]] | None = None,
+    implementation_diffs: list[dict[str, Any]] | None = None,
     release_notes: list[dict[str, Any]],
     behavior: dict[str, Any],
     current_state: dict[str, Any],
@@ -41,11 +43,14 @@ def write_run_report(
 ) -> Path:
     """Write all run artifacts and return report.md."""
 
+    implementation_snapshots = implementation_snapshots or []
+    implementation_diffs = implementation_diffs or []
     context.report_root.mkdir(parents=True, exist_ok=True)
     write_json(context.report_root / "config.json", config)
     write_json(context.report_root / "evidence.json", evidence)
     write_json(context.report_root / "release_notes.json", release_notes)
     write_json(context.report_root / "api_diffs.json", api_diffs)
+    write_json(context.report_root / "implementation_diffs.json", implementation_diffs)
     write_json(context.report_root / "behavior_probes.json", behavior.get("results", []))
     write_json(context.report_root / "behavior_diffs.json", behavior.get("diffs", []))
     write_json(
@@ -65,6 +70,15 @@ def write_run_report(
     for index, snapshot in enumerate(snapshots, start=1):
         package = str(snapshot.get("package", "snapshot")).replace("/", "-")
         write_json(snapshots_dir / f"{index:02d}-{package}.json", snapshot)
+    implementation_snapshots_dir = context.report_root / "implementation_snapshots"
+    implementation_snapshots_dir.mkdir(exist_ok=True)
+    for index, snapshot in enumerate(implementation_snapshots, start=1):
+        package = str(snapshot.get("package", "snapshot")).replace("/", "-")
+        version = str(snapshot.get("version") or "unknown").replace("/", "-")
+        write_json(
+            implementation_snapshots_dir / f"{index:02d}-{package}-{version}.json",
+            snapshot,
+        )
     if pr_body is not None:
         (context.report_root / "draft_pr_body.md").write_text(pr_body, encoding="utf-8")
     report_path = context.report_root / "report.md"
@@ -74,6 +88,8 @@ def write_run_report(
             evidence=evidence,
             snapshots=snapshots,
             api_diffs=api_diffs,
+            implementation_snapshots=implementation_snapshots,
+            implementation_diffs=implementation_diffs,
             release_notes=release_notes,
             behavior=behavior,
             current_state=current_state,
@@ -93,6 +109,8 @@ def render_markdown_report(
     evidence: dict[str, Any],
     snapshots: list[dict[str, Any]],
     api_diffs: list[dict[str, Any]],
+    implementation_snapshots: list[dict[str, Any]] | None = None,
+    implementation_diffs: list[dict[str, Any]] | None = None,
     release_notes: list[dict[str, Any]],
     behavior: dict[str, Any],
     current_state: dict[str, Any],
@@ -103,17 +121,25 @@ def render_markdown_report(
 ) -> str:
     """Render the human-readable local report."""
 
+    implementation_snapshots = implementation_snapshots or []
+    implementation_diffs = implementation_diffs or []
     packages = evidence.get("packages", [])
     package_lines = []
     for package in packages:
         if not isinstance(package, dict):
             continue
         package_lines.append(
-            "- {name}: locked={locked} installed={installed} latest={latest}".format(
+            (
+                "- {name}: locked={locked} installed={installed} upstream_latest={latest} "
+                "sdk_selected={sdk_selected} candidate={candidate} status={status}"
+            ).format(
                 name=package.get("name"),
                 locked=package.get("locked_version"),
                 installed=package.get("installed_version"),
                 latest=package.get("latest_version"),
+                sdk_selected=package.get("sdk_selected_version"),
+                candidate=package.get("candidate_version"),
+                status=package.get("candidate_status"),
             )
         )
     manual = architecture.get("manual_design_required")
@@ -148,12 +174,48 @@ def render_markdown_report(
         )
         for snapshot in snapshot_errors
     ]
+    implementation_snapshot_errors = [
+        snapshot
+        for snapshot in implementation_snapshots
+        if isinstance(snapshot, dict) and snapshot.get("import_error")
+    ]
+    implementation_snapshot_error_lines = [
+        "- {package}@{version}: {error}".format(
+            package=snapshot.get("package"),
+            version=snapshot.get("version"),
+            error=_one_line(snapshot.get("import_error")),
+        )
+        for snapshot in implementation_snapshot_errors
+    ]
     behavior_reason_lines = [
         f"- {_one_line(reason)}"
         for reason in behavior_reasons
         if isinstance(reason, str) and reason
     ]
     promotion = current_state.get("promotion", {}) if isinstance(current_state, dict) else {}
+    implementation_diff_lines = [
+        (
+            "- {package} {from_version} -> {to_version}: {status}; "
+            "Python files +{files_added}/-{files_removed}/~{files_changed}; "
+            "definitions +{definitions_added}/-{definitions_removed}/~{definitions_changed}; "
+            "source lines {lines_before} -> {lines_after}"
+        ).format(
+            package=item.get("package"),
+            from_version=item.get("from_version"),
+            to_version=item.get("to_version"),
+            status=item.get("status"),
+            files_added=len(item.get("files_added", [])),
+            files_removed=len(item.get("files_removed", [])),
+            files_changed=len(item.get("files_changed", [])),
+            definitions_added=len(item.get("definitions_added", [])),
+            definitions_removed=len(item.get("definitions_removed", [])),
+            definitions_changed=len(item.get("definitions_changed", [])),
+            lines_before=item.get("source_lines_before", 0),
+            lines_after=item.get("source_lines_after", 0),
+        )
+        for item in implementation_diffs
+        if isinstance(item, dict)
+    ]
     return "\n".join(
         [
             "# SDK Evolution Agent Report",
@@ -179,6 +241,15 @@ def render_markdown_report(
             "",
             f"- Diff count: `{len(api_diffs)}`",
             "",
+            "## Upstream Implementation History",
+            "",
+            f"- Status: `{'incomplete' if implementation_snapshot_errors else 'pass'}`",
+            f"- Release snapshots: `{len(implementation_snapshots)}`",
+            f"- Adjacent release transitions: `{len(implementation_diffs)}`",
+            f"- Snapshot errors: `{len(implementation_snapshot_errors)}`",
+            *implementation_snapshot_error_lines,
+            *(implementation_diff_lines or ["- No implementation transitions inspected."]),
+            "",
             "## Release Notes",
             "",
             *(release_lines or ["- No SDK update release-note evidence required."]),
@@ -196,7 +267,7 @@ def render_markdown_report(
             f"- Diff count: `{len(behavior_diffs)}`",
             *(behavior_reason_lines or ["- No behavior evidence issues recorded."]),
             "",
-            "## Direction Of Travel",
+            "## Upstream Implementation Trends",
             "",
             "```json",
             json.dumps(direction, indent=2, sort_keys=True, default=str),

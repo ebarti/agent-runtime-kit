@@ -57,10 +57,10 @@ capabilities needed for real work.
 |------------|---------|---------|-----------------|
 | Python | >=3.10 | Package runtime | Claude Agent SDK, Codex SDK, and Google Antigravity all currently advertise Python 3.10+ compatibility. |
 | Pydantic | 2.13.4 current; use >=2.12 | Public request/result validation where useful | Mature typed validation without forcing callers into framework-specific models. |
-| claude-agent-sdk | 0.2.96 current | Claude runtime adapter | Official Agent SDK for Claude Code-style local agent execution. |
-| openai-codex | 0.1.0b3 current | Codex runtime adapter | Official Python SDK for Codex app-server integration. |
-| openai-codex-cli-bin | 0.136.0 current | Codex runtime dependency | Pinned Codex CLI runtime used by the Python SDK package. |
-| google-antigravity | 0.1.2 current | Antigravity runtime adapter | Official Google Antigravity Python SDK for local agent harness integration. |
+| claude-agent-sdk | 0.2.148 current | Claude runtime adapter | Official Agent SDK for Claude Code-style local agent execution. |
+| openai-codex | 0.147.0 current | Codex runtime adapter | Official Python SDK for Codex app-server integration. |
+| openai-codex-cli-bin | 0.147.0 current compatible | Codex runtime dependency | Exact runtime dependency selected by openai-codex 0.147.0; standalone 0.149.0 is not independently usable in this lane. |
+| google-antigravity | 0.1.15 current | Antigravity runtime adapter | Official Google Antigravity Python SDK for local agent harness integration. |
 | anyio or asyncio | stdlib plus optional anyio | Async runtime compatibility | Vendor SDKs are async; the public API should be async-first. |
 | OpenTelemetry API | 1.42.1 current | Optional event/trace integration | Mestre already normalizes agent events into span-event-shaped payloads; community users will expect observability hooks. |
 
@@ -125,10 +125,10 @@ capabilities needed for real work.
 
 | Package | Current Version Checked | Python | Notes |
 |---------|-------------------------|--------|-------|
-| claude-agent-sdk | 0.2.96 | >=3.10 | Newer than Mestre's pinned 0.2.91; tests must detect option-surface drift. |
-| openai-codex | 0.1.0b3 | >=3.10 | Beta package; isolate Codex SDK API drift behind adapter boundaries. |
-| openai-codex-cli-bin | 0.136.0 | >=3.10 | Runtime dependency for Codex SDK. |
-| google-antigravity | 0.1.2 | >=3.10 | Includes compiled runtime wheels; install from PyPI rather than source checkout. |
+| claude-agent-sdk | 0.2.148 | >=3.10 | Adapter-contract tests must detect option-surface drift. |
+| openai-codex | 0.147.0 | >=3.10 | Pre-1.0 package; isolate Codex SDK API drift behind adapter boundaries. |
+| openai-codex-cli-bin | 0.147.0 | >=3.10 | Exact runtime dependency for openai-codex 0.147.0. |
+| google-antigravity | 0.1.15 | >=3.10 | Includes compiled runtime wheels; install from PyPI rather than source checkout. |
 | google-genai | 2.8.0 | >=3.10 | Not a core runtime adapter dependency unless Antigravity or future Google direct paths need it. |
 
 ## Sources
@@ -163,14 +163,16 @@ Architecture not yet mapped. Follow existing patterns found in the codebase.
 
 ## Project Skills
 
-No project skills found. Add skills to any of: `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, or `.codex/skills/` with a `SKILL.md` index file.
+- `.codex/skills/agent-runtime-kit-upgrade/SKILL.md` owns the report-first,
+  no-cooloff vendor SDK discovery and upgrade workflow. Use it for SDK
+  freshness checks, compatibility repairs, local upgrades, and upgrade PRs.
 <!-- GSD:skills-end -->
 
 <!-- GSD:workflow-start source:GSD defaults -->
 
 ## GSD Workflow Enforcement
 
-Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.
+Before using Edit, Write, or other file-changing tools, start work through a GSD command when a GSD entry point is actually installed so planning artifacts and execution context stay in sync.
 
 Use these entry points:
 
@@ -178,7 +180,14 @@ Use these entry points:
 - `/gsd-debug` for investigation and bug fixing
 - `/gsd-execute-phase` for planned phase work
 
-Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
+If none of these entry points is installed, do not fabricate or wait indefinitely
+for a nonexistent wrapper. For an explicitly authorized change, record the plan
+with the available task-planning mechanism, make the scoped edit, and validate it
+with the repository's normal tests. Report that fallback in the handoff.
+
+Do not make direct repo edits outside an available GSD workflow unless the user
+explicitly asks to bypass it or the unavailable-entry-point fallback above
+applies.
 <!-- GSD:workflow-end -->
 
 <!-- GSD:profile-start -->

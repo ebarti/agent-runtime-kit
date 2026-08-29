@@ -58,6 +58,12 @@ class PackageVersionState:
     locked_version: str | None = None
     installed_version: str | None = None
     latest_version: str | None = None
+    candidate_version: str | None = None
+    resolver_target_version: str | None = None
+    candidate_status: str = "unknown"
+    candidate_reason: str = ""
+    sdk_selected_version: str | None = None
+    sdk_requirement: str | None = None
     recent_versions: tuple[str, ...] = ()
     sources: tuple[SourceRef, ...] = ()
     unavailable_reason: str = ""
@@ -74,13 +80,38 @@ class ApiMember:
 
 
 @dataclass(frozen=True)
+class ImplementationFile:
+    """Content fingerprint for one file shipped inside an SDK implementation."""
+
+    path: str
+    kind: str
+    sha256: str
+    size: int
+    line_count: int = 0
+
+
+@dataclass(frozen=True)
+class ImplementationDefinition:
+    """AST fingerprint for one Python definition in an SDK implementation."""
+
+    name: str
+    kind: str
+    path: str
+    sha256: str
+
+
+@dataclass(frozen=True)
 class ApiSnapshot:
-    """Public API snapshot for an inspected package version."""
+    """Public API and implementation snapshot for an inspected package version."""
 
     package: str
     version: str | None
     module: str
     members: tuple[ApiMember, ...] = ()
+    implementation_files: tuple[ImplementationFile, ...] = ()
+    implementation_definitions: tuple[ImplementationDefinition, ...] = ()
+    implementation_status: str = "unavailable"
+    implementation_note: str = ""
     import_error: str | None = None
     source: str = "current-environment"
 
@@ -95,6 +126,30 @@ class ApiDiff:
     added: tuple[str, ...] = ()
     removed: tuple[str, ...] = ()
     changed: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ImplementationDiff:
+    """Observed implementation changes between two exact SDK releases."""
+
+    package: str
+    from_version: str | None
+    to_version: str | None
+    status: str
+    python_files_before: int = 0
+    python_files_after: int = 0
+    source_lines_before: int = 0
+    source_lines_after: int = 0
+    files_added: tuple[str, ...] = ()
+    files_removed: tuple[str, ...] = ()
+    files_changed: tuple[str, ...] = ()
+    definitions_added: tuple[str, ...] = ()
+    definitions_removed: tuple[str, ...] = ()
+    definitions_changed: tuple[str, ...] = ()
+    opaque_artifacts_added: tuple[str, ...] = ()
+    opaque_artifacts_removed: tuple[str, ...] = ()
+    opaque_artifacts_changed: tuple[str, ...] = ()
+    limitations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

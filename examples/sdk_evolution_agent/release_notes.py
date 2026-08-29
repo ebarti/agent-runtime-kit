@@ -6,6 +6,7 @@ import gzip
 import json
 import os
 import re
+import time
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -109,7 +110,7 @@ def collect_release_notes(
                     to_version=None,
                     status="not-needed",
                     sources=RELEASE_NOTE_SOURCES.get(name, ()),
-                    unavailable_reason="no resolver-selected update",
+                    unavailable_reason="no newer compatible candidate",
                 )
             )
             continue
@@ -124,6 +125,8 @@ def collect_release_notes(
                 source_results.append(source)
                 continue
             checked_urls.append(source.url)
+            if use_default_fetcher:
+                _progress(f"checking {name} release evidence: {source.label}")
             try:
                 text = _fetch_source_text(
                     source,
@@ -165,6 +168,8 @@ def collect_release_notes(
                     continue
                 checked_urls.append(linked_url)
                 label = f"{source.label} matching release note"
+                if use_default_fetcher:
+                    _progress(f"checking {name} release evidence: {label}")
                 try:
                     linked_text = fetcher(linked_url)
                 except Exception as exc:
@@ -233,8 +238,7 @@ def fetch_url_text(url: str) -> str:
     """Fetch a release-note source as text."""
 
     request = urllib.request.Request(url, headers={"User-Agent": "agent-runtime-kit-sdk-evolution"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        raw = response.read()
+    raw = _urlopen_bytes(request)
     if raw.startswith(b"\x1f\x8b"):
         raw = gzip.decompress(raw)
     return raw.decode("utf-8", errors="replace")
@@ -296,8 +300,7 @@ def _fetch_github_discussions_index(url: str, *, token: str) -> str:
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        response_payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    response_payload = json.loads(_urlopen_bytes(request).decode("utf-8", errors="replace"))
     if response_payload.get("errors"):
         raise RuntimeError(str(response_payload["errors"]))
     return _format_github_discussions_index(response_payload, category_slug=category_slug)
@@ -432,3 +435,19 @@ def _string_or_none(value: object) -> str | None:
         return None
     text = str(value)
     return text or None
+
+
+def _urlopen_bytes(request: urllib.request.Request) -> bytes:
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return response.read()
+        except (OSError, TimeoutError):
+            if attempt == 2:
+                raise
+            time.sleep(0.25 * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
+def _progress(message: str) -> None:
+    print(f"[sdk-evolution] {message}", flush=True)

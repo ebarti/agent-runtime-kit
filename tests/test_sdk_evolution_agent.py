@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -38,22 +39,38 @@ from examples.sdk_evolution_agent.behavior import (
     probe_current_package,
     summarize_behavior,
 )
-from examples.sdk_evolution_agent.cli import RunOptions, _collect_snapshots, parse_args, run_agent
+from examples.sdk_evolution_agent.cli import (
+    RunOptions,
+    _collect_implementation_snapshots,
+    _collect_snapshots,
+    _run_local_sdk_update,
+    _should_create_pr,
+    _verification_passed,
+    parse_args,
+    run_agent,
+)
 from examples.sdk_evolution_agent.collectors import (
     ResolverTransition,
     build_refresh_preview_command,
+    candidate_transitions,
+    candidate_update_versions,
     collect_evidence,
     cutoff_free_env,
     parse_refresh_transitions,
+    read_pyproject_dependency_specs,
     run_lock_update,
     run_refresh_preview,
+    widen_project_dependency_bounds,
 )
 from examples.sdk_evolution_agent.current_state import build_current_state
+from examples.sdk_evolution_agent.inspection import candidate_environment_cache
 from examples.sdk_evolution_agent.models import (
     ApiSnapshot,
     BehaviorDiff,
     BehaviorProbeResult,
     CommandResult,
+    ImplementationDefinition,
+    ImplementationFile,
     RunContext,
     SourceRef,
     to_jsonable,
@@ -72,6 +89,7 @@ from examples.sdk_evolution_agent.schemas import (
 )
 from examples.sdk_evolution_agent.snapshots import (
     DEFAULT_MODULES,
+    diff_implementation_snapshots,
     diff_snapshots,
     snapshot_candidate_in_venv,
     snapshot_current_api,
@@ -88,9 +106,11 @@ from examples.sdk_evolution_agent.stages import (
     run_stage,
     with_behavior_probe_guard,
     with_candidate_api_diff_guard,
+    with_implementation_direction_guard,
     with_manual_design_gate,
     with_recursive_impact,
     with_release_note_guard,
+    with_resolver_preview_guard,
 )
 
 
@@ -142,11 +162,16 @@ def test_refresh_preview_uses_targeted_packages_and_clean_env(
     assert seen["command"] == build_refresh_preview_command(
         ("claude-agent-sdk", "google-antigravity")
     )
-    assert seen["command"][-4:] == (
-        "--exclude-newer-package",
-        "claude-agent-sdk=false",
-        "--exclude-newer-package",
-        "google-antigravity=false",
+    assert seen["command"] == (
+        "uv",
+        "lock",
+        "--dry-run",
+        "--exclude-newer",
+        "false",
+        "-P",
+        "claude-agent-sdk",
+        "-P",
+        "google-antigravity",
     )
     assert "UV_EXCLUDE_NEWER" not in seen["env"]
     assert result.removed_env == ("UV_EXCLUDE_NEWER",)
@@ -220,17 +245,101 @@ def test_lock_update_uses_targeted_packages_and_clean_env(
     assert seen["command"] == (
         "uv",
         "lock",
+        "--exclude-newer",
+        "false",
         "-P",
         "claude-agent-sdk",
         "-P",
         "google-antigravity",
-        "--exclude-newer-package",
-        "claude-agent-sdk=false",
-        "--exclude-newer-package",
-        "google-antigravity=false",
     )
     assert "UV_EXCLUDE_NEWER" not in seen["env"]
     assert result.removed_env == ("UV_EXCLUDE_NEWER",)
+
+
+def test_pyproject_specs_are_structural_and_ignore_mentions_in_comments(
+    tmp_path: Path,
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+[project]
+name = "fixture"
+version = "0.0.0"
+keywords = ["openai-codex", "google-antigravity"]
+
+[project.optional-dependencies]
+codex = ["openai-codex>=0.1.0b3,<0.145"]
+all = ["openai-codex>=0.1.0b3,<0.145", "google-antigravity>=0.1.2,<0.2"]
+
+[tool.uv]
+# openai-codex-cli-bin ships platform wheels; this comment is not a requirement.
+constraint-dependencies = ["openai-codex-cli-bin>=0.134.0a1"]
+""",
+        encoding="utf-8",
+    )
+
+    assert read_pyproject_dependency_specs(pyproject) == {
+        "openai-codex": "openai-codex>=0.1.0b3,<0.145",
+        "openai-codex-cli-bin": "openai-codex-cli-bin>=0.134.0a1",
+        "google-antigravity": "google-antigravity>=0.1.2,<0.2",
+    }
+
+
+def test_candidate_inventory_is_independent_of_constrained_resolver_output() -> None:
+    evidence = {
+        "packages": [
+            {
+                "name": "openai-codex",
+                "locked_version": "0.144.4",
+                "installed_version": "0.144.4",
+                "latest_version": "0.147.0",
+                "candidate_version": "0.147.0",
+                "candidate_status": "blocked-by-project-constraint",
+            }
+        ],
+        "refresh_preview": {"returncode": 0, "stdout": "", "stderr": ""},
+    }
+
+    assert parse_refresh_transitions(evidence) == ()
+    assert candidate_update_versions(evidence) == {"openai-codex": "0.147.0"}
+    assert candidate_transitions(evidence) == (
+        ResolverTransition("openai-codex", "0.144.4", "0.147.0"),
+    )
+
+
+def test_widen_project_dependency_bounds_only_relaxes_excluding_upper_bound(
+    tmp_path: Path,
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+[project]
+name = "fixture"
+version = "0.0.0"
+
+[project.optional-dependencies]
+codex = ["openai-codex>=0.1.0b3,<0.145"]
+claude = ["claude-agent-sdk>=0.2.87,<0.3"]
+all = [
+  "openai-codex>=0.1.0b3,<0.145",
+  "claude-agent-sdk>=0.2.87,<0.3",
+]
+""",
+        encoding="utf-8",
+    )
+
+    changes = widen_project_dependency_bounds(
+        pyproject,
+        {
+            "openai-codex": "0.147.0",
+            "claude-agent-sdk": "0.2.145",
+        },
+    )
+
+    text = pyproject.read_text(encoding="utf-8")
+    assert text.count("openai-codex>=0.1.0b3,<0.148") == 2
+    assert "claude-agent-sdk>=0.2.87,<0.3" in text
+    assert changes == ("openai-codex>=0.1.0b3,<0.145 -> openai-codex>=0.1.0b3,<0.148",)
 
 
 def test_collect_evidence_records_versions_and_sources(tmp_path: Path) -> None:
@@ -264,6 +373,145 @@ version = "0.2.1"
     assert package["recent_versions"][:2] == ["0.3.0", "0.2.1"]
     assert package["sources"]
     assert evidence["adapter_sources"]
+
+
+def test_collect_evidence_prospectively_resolves_candidates_hidden_by_caps(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project]
+name = "fixture"
+version = "0.0.0"
+
+[project.optional-dependencies]
+codex = ["openai-codex>=0.1.0b3,<0.145"]
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "uv.lock").write_text(
+        """
+[[package]]
+name = "openai-codex"
+version = "0.144.4"
+
+[[package]]
+name = "openai-codex-cli-bin"
+version = "0.144.4"
+""",
+        encoding="utf-8",
+    )
+
+    metadata = {
+        "openai-codex": {"info": {"version": "0.147.0"}, "releases": {}},
+        "openai-codex-cli-bin": {"info": {"version": "0.149.0"}, "releases": {}},
+    }
+    preview_roots: list[Path] = []
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandResult:
+        del env
+        assert cwd is not None
+        preview_roots.append(cwd)
+        if cwd == tmp_path:
+            return CommandResult(command=command, returncode=0)
+        assert "openai-codex>=0.1.0b3,<0.148" in (cwd / "pyproject.toml").read_text()
+        return CommandResult(
+            command=command,
+            returncode=0,
+            stderr=(
+                "Update openai-codex v0.144.4 -> v0.147.0\n"
+                "Update openai-codex-cli-bin v0.144.4 -> v0.147.0\n"
+            ),
+        )
+
+    evidence = collect_evidence(
+        tmp_path,
+        packages=("openai-codex", "openai-codex-cli-bin"),
+        include_refresh_preview=True,
+        pypi_client=lambda package: metadata[package],
+        command_runner=runner,
+    )
+
+    assert len(preview_roots) == 2
+    assert candidate_update_versions(evidence) == {
+        "openai-codex": "0.147.0",
+        "openai-codex-cli-bin": "0.147.0",
+    }
+    packages = {item["name"]: item for item in evidence["packages"]}
+    assert packages["openai-codex"]["candidate_status"] == "blocked-by-project-constraint"
+    assert packages["openai-codex-cli-bin"]["candidate_status"] == "prospective-coupled-candidate"
+    assert packages["openai-codex-cli-bin"]["latest_version"] == "0.149.0"
+
+
+def test_codex_cli_staged_artifact_is_not_reported_as_a_blocked_candidate(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project]
+name = "fixture"
+version = "0.0.0"
+
+[project.optional-dependencies]
+codex = ["openai-codex>=0.1.0b3,<0.148"]
+
+[tool.uv]
+constraint-dependencies = ["openai-codex-cli-bin>=0.134.0a1"]
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "uv.lock").write_text(
+        """
+[[package]]
+name = "openai-codex"
+version = "0.147.0"
+
+[[package]]
+name = "openai-codex-cli-bin"
+version = "0.147.0"
+""",
+        encoding="utf-8",
+    )
+    metadata = {
+        "openai-codex": {
+            "info": {
+                "version": "0.147.0",
+                "requires_dist": ["openai-codex-cli-bin==0.147.0"],
+            },
+            "releases": {"0.147.0": [{}]},
+        },
+        "openai-codex-cli-bin": {
+            "info": {"version": "0.149.0"},
+            "releases": {"0.147.0": [{}], "0.149.0": [{}]},
+        },
+    }
+
+    evidence = collect_evidence(
+        tmp_path,
+        packages=("openai-codex", "openai-codex-cli-bin"),
+        include_refresh_preview=True,
+        pypi_client=lambda package: metadata[package],
+        command_runner=lambda command, **kwargs: CommandResult(
+            command=command,
+            returncode=0,
+            stderr="No lockfile changes detected\n",
+        ),
+    )
+
+    packages = {item["name"]: item for item in evidence["packages"]}
+    cli = packages["openai-codex-cli-bin"]
+    assert cli["latest_version"] == "0.149.0"
+    assert cli["sdk_selected_version"] == "0.147.0"
+    assert cli["candidate_version"] is None
+    assert cli["candidate_status"] == "sdk-coupled-no-update"
+    assert "staged runtime artifact" in cli["candidate_reason"]
+    assert "blocked" not in cli["candidate_status"]
+    assert candidate_update_versions(evidence) == {}
 
 
 def test_release_notes_collects_matching_update_source() -> None:
@@ -848,6 +1096,65 @@ def test_candidate_behavior_probe_scrubs_subprocess_env(
         assert env.get("HOME") != os.environ.get("HOME")
 
 
+def test_candidate_snapshot_and_behavior_reuse_one_isolated_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(args: Any, **kwargs: Any) -> Any:
+        del kwargs
+        command = tuple(args)
+        calls.append(command)
+        if len(command) > 2 and command[1] == "-c" and len(command) == 6:
+            payload = (
+                '{"package":"claude-agent-sdk","version":"9.9.9",'
+                '"module":"claude_agent_sdk","members":[],"import_error":null}'
+            )
+        elif len(command) > 2 and command[1] == "-c":
+            payload = (
+                '[{"package":"claude-agent-sdk","version":"9.9.9",'
+                '"scope":"candidate","probe":"adapter-contract","status":"pass",'
+                '"summary":"ok","details":{"missing":[]}}]'
+            )
+        else:
+            payload = ""
+        return types.SimpleNamespace(
+            stdout=payload,
+            stderr="",
+            returncode=0,
+        )
+
+    monkeypatch.setattr("examples.sdk_evolution_agent.snapshots.subprocess.run", fake_run)
+
+    with candidate_environment_cache():
+        snapshot = snapshot_candidate_in_venv("claude-agent-sdk", "9.9.9")
+        (probe,) = probe_candidate_in_venv("claude-agent-sdk", "9.9.9")
+
+    install_calls = [call for call in calls if "pip" in call and "install" in call]
+    assert len(install_calls) == 1
+    assert len(calls) == 4  # venv, install, snapshot, cached-environment behavior probe
+    assert snapshot.import_error is None
+    assert probe.status == "pass"
+
+
+def test_antigravity_probe_uses_constructible_provider_session_ids() -> None:
+    class LengthCheckingConfig:
+        def __init__(self, *, conversation_id: str) -> None:
+            if len(conversation_id) < 32:
+                raise ValueError("conversation id must have at least 32 characters")
+
+    inputs = behavior_module._probe_inputs("google-antigravity")["conversation_ids"]
+
+    assert "conv-77" not in inputs
+    assert behavior_module._antigravity_construction_failures(LengthCheckingConfig, inputs) == []
+    failures = behavior_module._antigravity_construction_failures(
+        LengthCheckingConfig,
+        ["conv-77"],
+    )
+    assert len(failures) == 1
+    assert "ValueError" in failures[0]
+
+
 @pytest.mark.parametrize(
     ("package", "failure_call", "error", "failure_step", "probe"),
     [
@@ -976,8 +1283,7 @@ def test_codex_cli_exception_redaction_discards_entire_path_suffix(
 ) -> None:
     detail = behavior_module._safe_exception_detail(
         ValueError(
-            f"REDACTION_SENTINEL at {private_path} trailing {secret_suffix} "
-            + ("x" * 1_000)
+            f"REDACTION_SENTINEL at {private_path} trailing {secret_suffix} " + ("x" * 1_000)
         )
     )
 
@@ -1012,15 +1318,11 @@ def test_codex_cli_binary_probe_contains_each_failure(
     def metadata_version(package: str) -> str:
         assert package == "openai-codex-cli-bin"
         if failure == "metadata":
-            raise RuntimeError(
-                f"METADATA_SENTINEL at {metadata_path} " + ("m" * 1_000)
-            )
+            raise RuntimeError(f"METADATA_SENTINEL at {metadata_path} " + ("m" * 1_000))
         return "1.2.3"
 
     def helper_error() -> Path:
-        raise ValueError(
-            f"HELPER_SENTINEL at {unc_path} " + ("h" * 1_000)
-        )
+        raise ValueError(f"HELPER_SENTINEL at {unc_path} " + ("h" * 1_000))
 
     module = types.SimpleNamespace(bundled_codex_path=lambda: tmp_path / "codex")
     if failure == "helper-missing":
@@ -1036,8 +1338,7 @@ def test_codex_cli_binary_probe_contains_each_failure(
         assert name == "codex_cli_bin"
         if failure == "module":
             raise ModuleNotFoundError(
-                f"MODULE_SENTINEL: No module named codex_cli_bin at {drive_path} "
-                + ("i" * 1_000)
+                f"MODULE_SENTINEL: No module named codex_cli_bin at {drive_path} " + ("i" * 1_000)
             )
         return module
 
@@ -1084,24 +1385,18 @@ def test_codex_cli_binary_probe_redacts_path_conversion_and_file_check_errors(
     expected_summary: str,
     secret_suffix: str,
 ) -> None:
-    conversion_url = (
-        "https://example.invalid/private folder/CONVERSION_SECRET_SUFFIX"
-    )
+    conversion_url = "https://example.invalid/private folder/CONVERSION_SECRET_SUFFIX"
     file_check_path = tmp_path / "private file check" / "FILE_CHECK_SECRET_SUFFIX"
 
     class InvalidPath:
         def __fspath__(self) -> str:
-            raise ValueError(
-                f"CONVERSION_SENTINEL at {conversion_url} " + ("c" * 1_000)
-            )
+            raise ValueError(f"CONVERSION_SENTINEL at {conversion_url} " + ("c" * 1_000))
 
     if failure == "file-check":
 
         def fail_file_check(self: Path) -> bool:
             del self
-            raise OSError(
-                f"FILE_CHECK_SENTINEL at {file_check_path} " + ("f" * 1_000)
-            )
+            raise OSError(f"FILE_CHECK_SENTINEL at {file_check_path} " + ("f" * 1_000))
 
         monkeypatch.setattr(Path, "is_file", fail_file_check)
 
@@ -1200,37 +1495,25 @@ def test_embedded_codex_cli_failures_keep_binary_probe_label(
     expected_summary: str,
     secret_suffix: str | None,
 ) -> None:
-    metadata_path = (
-        tmp_path / "private metadata" / "EMBEDDED_METADATA_SECRET_SUFFIX"
-    )
+    metadata_path = tmp_path / "private metadata" / "EMBEDDED_METADATA_SECRET_SUFFIX"
     drive_path = r"D:\Program Files\Private\EMBEDDED_MODULE_SECRET_SUFFIX"
     unc_path = r"\\candidate-host\Private Share\EMBEDDED_HELPER_SECRET_SUFFIX"
-    conversion_url = (
-        "https://example.invalid/private folder/EMBEDDED_CONVERSION_SECRET_SUFFIX"
-    )
-    file_check_path = (
-        tmp_path / "private file check" / "EMBEDDED_FILE_CHECK_SECRET_SUFFIX"
-    )
+    conversion_url = "https://example.invalid/private folder/EMBEDDED_CONVERSION_SECRET_SUFFIX"
+    file_check_path = tmp_path / "private file check" / "EMBEDDED_FILE_CHECK_SECRET_SUFFIX"
 
     def fail_metadata(package: str) -> str:
         if failure == "metadata":
             raise RuntimeError(
-                f"EMBEDDED_METADATA_SENTINEL for {package} at {metadata_path} "
-                + ("m" * 1_000)
+                f"EMBEDDED_METADATA_SENTINEL for {package} at {metadata_path} " + ("m" * 1_000)
             )
         return "1.2.3"
 
     def helper_error() -> Path:
-        raise ValueError(
-            f"EMBEDDED_HELPER_SENTINEL at {unc_path} " + ("h" * 1_000)
-        )
+        raise ValueError(f"EMBEDDED_HELPER_SENTINEL at {unc_path} " + ("h" * 1_000))
 
     class InvalidPath:
         def __fspath__(self) -> str:
-            raise ValueError(
-                f"EMBEDDED_CONVERSION_SENTINEL at {conversion_url} "
-                + ("c" * 1_000)
-            )
+            raise ValueError(f"EMBEDDED_CONVERSION_SENTINEL at {conversion_url} " + ("c" * 1_000))
 
     def bundled_path() -> object:
         if failure == "helper-error":
@@ -1243,19 +1526,14 @@ def test_embedded_codex_cli_failures_keep_binary_probe_label(
 
         def fail_file_check(self: Path) -> bool:
             del self
-            raise OSError(
-                f"EMBEDDED_FILE_CHECK_SENTINEL at {file_check_path} "
-                + ("f" * 1_000)
-            )
+            raise OSError(f"EMBEDDED_FILE_CHECK_SENTINEL at {file_check_path} " + ("f" * 1_000))
 
         monkeypatch.setattr(Path, "is_file", fail_file_check)
 
     def import_module(name: str) -> Any:
         assert name == "codex_cli_bin"
         if failure == "module":
-            raise ModuleNotFoundError(
-                f"EMBEDDED_MODULE_SENTINEL at {drive_path} " + ("i" * 1_000)
-            )
+            raise ModuleNotFoundError(f"EMBEDDED_MODULE_SENTINEL at {drive_path} " + ("i" * 1_000))
         return module
 
     helper = bundled_path
@@ -1407,9 +1685,7 @@ def test_behavior_summary_marks_errors_skips_missing_and_malformed_as_incomplete
 
 def test_behavior_summary_contains_malformed_nested_contract_details() -> None:
     transition = ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")
-    baseline = _probe(
-        "claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []}
-    )
+    baseline = _probe("claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []})
     malformed_candidate = BehaviorProbeResult(
         package="claude-agent-sdk",
         version="2.0.0",
@@ -1436,9 +1712,7 @@ def test_behavior_summary_contains_malformed_nested_contract_details() -> None:
 
 def test_behavior_summary_treats_missing_fields_plus_error_as_contract_failure() -> None:
     transition = ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")
-    baseline = _probe(
-        "claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []}
-    )
+    baseline = _probe("claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []})
     candidate = _probe(
         "claude-agent-sdk",
         "2.0.0",
@@ -1545,9 +1819,7 @@ def test_behavior_summary_status_precedence_is_fail_then_incomplete_then_changed
 
 
 def test_behavior_probe_guard_blocks_complete_breaking_candidate_payload() -> None:
-    baseline = _probe(
-        "google-antigravity", "1.0.0", "current-baseline", "pass", {"missing": []}
-    )
+    baseline = _probe("google-antigravity", "1.0.0", "current-baseline", "pass", {"missing": []})
     candidate = _probe(
         "google-antigravity",
         "2.0.0",
@@ -1610,9 +1882,7 @@ def test_behavior_probe_guard_allows_valid_pass_and_changed_evidence() -> None:
     )
 
     assert (
-        with_behavior_probe_guard(architecture, _sdk_evidence(), pass_payload)[
-            "safe_to_implement"
-        ]
+        with_behavior_probe_guard(architecture, _sdk_evidence(), pass_payload)["safe_to_implement"]
         is True
     )
     assert (
@@ -1642,9 +1912,7 @@ def test_behavior_probe_guard_blocks_self_declared_empty_expectations() -> None:
 
     assert guarded["safe_to_implement"] is False
     assert guarded["manual_design_required"] is True
-    assert "contradicts deterministic evidence" in " ".join(
-        guarded["findings"][-1]["evidence"]
-    )
+    assert "contradicts deterministic evidence" in " ".join(guarded["findings"][-1]["evidence"])
 
 
 def test_behavior_probe_guard_blocks_failed_incomplete_and_invalid_evidence() -> None:
@@ -1815,9 +2083,7 @@ def test_report_exposes_snapshot_and_behavior_evidence_failures() -> None:
 
 
 def test_report_persists_and_renders_recomputed_behavior_summary(tmp_path: Path) -> None:
-    baseline = _probe(
-        "claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []}
-    )
+    baseline = _probe("claude-agent-sdk", "1.0.0", "current-baseline", "pass", {"missing": []})
     transition = ResolverTransition("claude-agent-sdk", "1.0.0", "2.0.0")
     behavior = _behavior_payload(
         [
@@ -1833,9 +2099,9 @@ def test_report_persists_and_renders_recomputed_behavior_summary(tmp_path: Path)
         expected_packages=["claude-agent-sdk"],
         expected_transitions=[transition],
     )
-    behavior["summary"] = _behavior_payload(
-        [baseline], expected_packages=["claude-agent-sdk"]
-    )["summary"]
+    behavior["summary"] = _behavior_payload([baseline], expected_packages=["claude-agent-sdk"])[
+        "summary"
+    ]
     assert behavior["summary"]["status"] == "pass"
 
     report_root = tmp_path / "reports" / "run-1"
@@ -1867,9 +2133,7 @@ def test_report_persists_and_renders_recomputed_behavior_summary(tmp_path: Path)
         review={},
     )
 
-    persisted = json.loads(
-        (report_root / "behavior_summary.json").read_text(encoding="utf-8")
-    )
+    persisted = json.loads((report_root / "behavior_summary.json").read_text(encoding="utf-8"))
     report = report_path.read_text(encoding="utf-8")
     assert persisted["status"] == "fail"
     assert persisted["contract_failure_count"] == 1
@@ -1966,6 +2230,100 @@ def test_snapshot_and_diff_public_api(monkeypatch: pytest.MonkeyPatch) -> None:
     diff = diff_snapshots(before, after)
     assert diff.added == ("extra",)
     assert diff.changed == ("run",)
+
+
+def test_snapshot_and_diff_actual_python_implementation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "trend_sdk"
+    package.mkdir()
+    implementation = package / "__init__.py"
+    implementation.write_text(
+        "def run(value: str) -> str:\n    return value\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    before = snapshot_current_api("trend-sdk", version="1.0.0")
+    implementation.write_text(
+        (
+            "def run(value: str) -> str:\n"
+            "    return value.upper()\n\n"
+            "def stream(value: str):\n"
+            "    yield value\n"
+        ),
+        encoding="utf-8",
+    )
+    after = snapshot_current_api("trend-sdk", version="1.1.0")
+
+    diff = diff_implementation_snapshots(before, after)
+
+    assert before.implementation_status == "observed"
+    assert before.implementation_files[0].path == "trend_sdk/__init__.py"
+    assert diff.status == "observed"
+    assert diff.files_changed == ("trend_sdk/__init__.py",)
+    assert diff.definitions_added == ("trend_sdk/__init__.py:stream",)
+    assert diff.definitions_changed == ("trend_sdk/__init__.py:run",)
+    assert diff.source_lines_after > diff.source_lines_before
+
+
+def test_implementation_diff_marks_cli_binary_internals_opaque() -> None:
+    wrapper_before = ImplementationFile("codex_cli_bin/__init__.py", "python", "a", 10, 1)
+    wrapper_after = ImplementationFile("codex_cli_bin/__init__.py", "python", "b", 11, 1)
+    binary_before = ImplementationFile("codex_cli_bin/codex", "executable", "c", 100)
+    binary_after = ImplementationFile("codex_cli_bin/codex", "executable", "d", 120)
+    before = ApiSnapshot(
+        package="openai-codex-cli-bin",
+        version="0.147.0",
+        module="codex_cli_bin",
+        implementation_files=(wrapper_before, binary_before),
+        implementation_definitions=(
+            ImplementationDefinition("codex_cli_bin/__init__.py:path", "function", "x", "a"),
+        ),
+        implementation_status="opaque-runtime",
+    )
+    after = ApiSnapshot(
+        package="openai-codex-cli-bin",
+        version="0.149.0",
+        module="codex_cli_bin",
+        implementation_files=(wrapper_after, binary_after),
+        implementation_definitions=(
+            ImplementationDefinition("codex_cli_bin/__init__.py:path", "function", "x", "b"),
+        ),
+        implementation_status="opaque-runtime",
+    )
+
+    diff = diff_implementation_snapshots(before, after)
+
+    assert diff.status == "opaque-runtime"
+    assert diff.files_changed == ("codex_cli_bin/__init__.py",)
+    assert diff.opaque_artifacts_changed == ("codex_cli_bin/codex",)
+    assert "opaque" in diff.limitations[0]
+
+
+def test_implementation_diff_does_not_treat_an_unavailable_snapshot_as_added_source() -> None:
+    before = ApiSnapshot(
+        package="claude-agent-sdk",
+        version="0.2.146",
+        module="claude_agent_sdk",
+        implementation_status="unavailable",
+        implementation_note="wheel contained no readable source",
+    )
+    after = ApiSnapshot(
+        package="claude-agent-sdk",
+        version="0.2.147",
+        module="claude_agent_sdk",
+        implementation_files=(
+            ImplementationFile("claude_agent_sdk/__init__.py", "python", "a", 10, 1),
+        ),
+        implementation_status="observed",
+    )
+
+    diff = diff_implementation_snapshots(before, after)
+
+    assert diff.status == "unavailable"
+    assert diff.files_added == ()
+    assert "no readable source" in diff.limitations[0]
 
 
 @pytest.mark.parametrize(
@@ -2190,6 +2548,56 @@ def test_collect_snapshots_uses_refresh_preview_update_targets(
     ]
 
 
+def test_collect_snapshots_inspects_newer_upstream_even_when_resolver_is_constrained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str | None]] = []
+
+    def current_snapshot(package: str, *, version: str | None = None) -> ApiSnapshot:
+        calls.append(("current", package, version))
+        return ApiSnapshot(package=package, version=version, module="openai_codex")
+
+    def candidate_snapshot(package: str, version: str) -> ApiSnapshot:
+        calls.append(("candidate", package, version))
+        return ApiSnapshot(
+            package=package,
+            version=version,
+            module="openai_codex",
+            source="isolated-venv",
+        )
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_current_api",
+        current_snapshot,
+    )
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        candidate_snapshot,
+    )
+
+    _collect_snapshots(
+        {
+            "packages": [
+                {
+                    "name": "openai-codex",
+                    "locked_version": "0.144.4",
+                    "installed_version": "0.144.4",
+                    "latest_version": "0.147.0",
+                    "candidate_version": "0.147.0",
+                    "candidate_status": "blocked-by-project-constraint",
+                }
+            ],
+            "refresh_preview": {"returncode": 0, "stdout": "", "stderr": ""},
+        },
+        inspect_candidates=True,
+    )
+
+    assert calls == [
+        ("current", "openai-codex", "0.144.4"),
+        ("candidate", "openai-codex", "0.147.0"),
+    ]
+
+
 def test_collect_snapshots_uses_locked_baseline_when_environment_drifted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2380,6 +2788,55 @@ def test_collect_snapshots_without_opt_in_reports_missing_ambient_sdk(
     assert snapshots[0].import_error == "not installed"
 
 
+def test_implementation_history_inspects_recent_releases_when_project_is_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    current = ApiSnapshot(
+        package="claude-agent-sdk",
+        version="0.2.147",
+        module="claude_agent_sdk",
+        implementation_status="observed",
+    )
+
+    def isolated_snapshot(package: str, version: str) -> ApiSnapshot:
+        calls.append((package, version))
+        return ApiSnapshot(
+            package=package,
+            version=version,
+            module="claude_agent_sdk",
+            implementation_status="observed",
+            source="isolated-venv",
+        )
+
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv",
+        isolated_snapshot,
+    )
+
+    snapshots = _collect_implementation_snapshots(
+        {
+            "packages": [
+                {
+                    "name": "claude-agent-sdk",
+                    "locked_version": "0.2.147",
+                    "latest_version": "0.2.147",
+                    "candidate_version": None,
+                    "recent_versions": ["0.2.147", "0.2.146", "0.2.145"],
+                }
+            ]
+        },
+        compatibility_snapshots=[current],
+        inspect_candidates=True,
+    )
+
+    assert [snapshot.version for snapshot in snapshots] == ["0.2.145", "0.2.146", "0.2.147"]
+    assert calls == [
+        ("claude-agent-sdk", "0.2.145"),
+        ("claude-agent-sdk", "0.2.146"),
+    ]
+
+
 def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
     guarded = with_candidate_api_diff_guard(
         {
@@ -2404,6 +2861,64 @@ def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
         guarded["findings"][-1]["evidence"][0]
         == "missing api_diffs for google-antigravity 0.1.2 -> 0.1.4"
     )
+
+
+@pytest.mark.parametrize(
+    "preview",
+    [None, {"returncode": 1, "stderr": "resolution failed"}],
+)
+def test_resolver_preview_guard_blocks_unproven_candidate_resolution(
+    preview: dict[str, Any] | None,
+) -> None:
+    evidence: dict[str, Any] = {
+        "packages": [
+            {
+                "name": "openai-codex",
+                "locked_version": "0.144.4",
+                "latest_version": "0.147.0",
+                "candidate_version": "0.147.0",
+            }
+        ]
+    }
+    if preview is not None:
+        evidence["refresh_preview"] = preview
+
+    guarded = with_resolver_preview_guard(
+        {
+            "findings": [],
+            "safe_to_implement": True,
+            "manual_design_required": False,
+            "uncertainty": [],
+        },
+        evidence,
+    )
+
+    assert guarded["safe_to_implement"] is False
+    assert guarded["manual_design_required"] is True
+    assert "resolvable" in guarded["findings"][-1]["summary"]
+
+
+def test_resolver_preview_guard_accepts_successful_prospective_resolution() -> None:
+    architecture = {
+        "findings": [],
+        "safe_to_implement": True,
+        "manual_design_required": False,
+    }
+    guarded = with_resolver_preview_guard(
+        architecture,
+        {
+            "packages": [
+                {
+                    "name": "openai-codex",
+                    "locked_version": "0.144.4",
+                    "candidate_version": "0.147.0",
+                }
+            ],
+            "refresh_preview": {"returncode": 0},
+        },
+    )
+
+    assert guarded == architecture
 
 
 @pytest.mark.parametrize(
@@ -2494,6 +3009,70 @@ def test_schema_validation_rejects_missing_required_field() -> None:
         validate_mapping({"packages": [], "themes": []}, DIRECTION_ANALYSIS_SCHEMA, name="stage")
 
 
+def test_direction_guard_replaces_upgrade_advice_with_implementation_evidence() -> None:
+    guarded = with_implementation_direction_guard(
+        {
+            "packages": [
+                {
+                    "name": "claude-agent-sdk",
+                    "evidence_status": "observed",
+                    "implementation_trend": "Hold the current baseline; no upgrade is needed.",
+                    "observed_transitions": [],
+                    "evidence": ["The lockfile is current."],
+                }
+            ],
+            "themes": [
+                {
+                    "name": "No Upgrade Action",
+                    "implementation_pattern": "Keep the lockfile unchanged.",
+                    "packages": ["claude-agent-sdk"],
+                    "evidence": ["Resolver found no changes."],
+                },
+                {
+                    "name": "Adapter Contracts Stable Across Candidate Check",
+                    "implementation_pattern": "The adapter contract passed for the candidate.",
+                    "packages": ["claude-agent-sdk"],
+                    "evidence": ["Behavior probes passed."],
+                }
+            ],
+            "uncertainty": [],
+        },
+        evidence={"packages": [{"name": "claude-agent-sdk"}]},
+        implementation_diffs=[
+            {
+                "package": "claude-agent-sdk",
+                "from_version": "0.2.145",
+                "to_version": "0.2.146",
+                "status": "observed",
+                "source_lines_before": 100,
+                "source_lines_after": 104,
+                "files_added": [],
+                "files_removed": [],
+                "files_changed": ["claude_agent_sdk/_version.py"],
+                "definitions_added": [],
+                "definitions_removed": [],
+                "definitions_changed": [],
+                "opaque_artifacts_added": [],
+                "opaque_artifacts_removed": [],
+                "opaque_artifacts_changed": ["claude_agent_sdk/_bundled/claude"],
+            }
+        ],
+    )
+
+    package = guarded["packages"][0]
+    assert package["evidence_status"] == "observed"
+    assert package["observed_transitions"] == ["0.2.145 -> 0.2.146"]
+    assert "hold" not in package["implementation_trend"].lower()
+    assert "upgrade" not in package["implementation_trend"].lower()
+    assert package["evidence"][0] == (
+        "0.2.145 -> 0.2.146: Python files +0/-0/~1, definitions +0/-0/~0, "
+        "opaque artifacts +0/-0/~1, source lines 100 -> 104."
+    )
+    assert "claude_agent_sdk/_version.py" in package["evidence"][1]
+    assert guarded["themes"][0]["name"] == "Inspected implementation evolution"
+    assert any("replaced" in item for item in guarded["uncertainty"])
+
+
 @pytest.mark.asyncio
 async def test_stage_execution_uses_agent_task_runtime_primitives(tmp_path: Path) -> None:
     runtime = RecordingRuntime()
@@ -2523,6 +3102,8 @@ async def test_stage_execution_uses_agent_task_runtime_primitives(tmp_path: Path
     assert runtime.task.working_directory == tmp_path
     assert runtime.task.permissions.filesystem is FilesystemAccess.READ_ONLY
     assert runtime.task.metadata["stage"] == "direction-analysis"
+    assert "upstream implementation trajectory" in runtime.task.system
+    assert "Never recommend upgrading" in runtime.task.system
     assert "model" not in runtime.task.metadata
     assert "reasoning_effort" not in runtime.task.metadata
 
@@ -2668,6 +3249,248 @@ def test_reviewer_approved_status_allows_implementation() -> None:
     assert gate.allowed is True
 
 
+@pytest.mark.parametrize(
+    ("implementation", "expected"),
+    [
+        ({"allowed": False, "applied": False, "verification_results": []}, False),
+        ({"allowed": True, "applied": False, "verification_results": []}, False),
+        (
+            {
+                "allowed": True,
+                "applied": True,
+                "changed_paths": [],
+                "verification_results": [{"returncode": 0}],
+            },
+            False,
+        ),
+        (
+            {
+                "allowed": True,
+                "applied": True,
+                "changed_paths": ["uv.lock"],
+                "verification_results": [{"returncode": 1}],
+            },
+            False,
+        ),
+        (
+            {
+                "allowed": True,
+                "applied": True,
+                "changed_paths": ["pyproject.toml", "uv.lock"],
+                "verification_results": [{"returncode": 0}],
+            },
+            True,
+        ),
+    ],
+)
+def test_draft_pr_requires_applied_verified_nonempty_change(
+    implementation: dict[str, Any],
+    expected: bool,
+) -> None:
+    assert _should_create_pr(True, implementation) is expected
+    assert _should_create_pr(False, implementation) is False
+
+
+def test_local_sdk_update_rolls_back_when_lock_misses_inspected_candidate(
+    tmp_path: Path,
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    lockfile = tmp_path / "uv.lock"
+    pyproject.write_text(
+        '[project.optional-dependencies]\ncodex = ["openai-codex>=0.1.0b3,<0.145"]\n',
+        encoding="utf-8",
+    )
+    lockfile.write_text(
+        '[[package]]\nname = "openai-codex"\nversion = "0.144.4"\n',
+        encoding="utf-8",
+    )
+    compatibility = _write_compatibility_fixture(tmp_path)
+    original_pyproject = pyproject.read_bytes()
+    original_lock = lockfile.read_bytes()
+    original_compatibility = compatibility.read_bytes()
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandResult:
+        del env
+        assert cwd == tmp_path
+        if command[:3] == ("uv", "lock", "--exclude-newer"):
+            lockfile.write_text(
+                '[[package]]\nname = "openai-codex"\nversion = "0.146.0"\n',
+                encoding="utf-8",
+            )
+        return CommandResult(command=command, returncode=0)
+
+    result = _run_local_sdk_update(
+        RunOptions(workspace=tmp_path, runtime="fake"),
+        update_versions={"openai-codex": "0.147.0"},
+        implementation={"allowed": True, "changes": [], "verification_results": []},
+        command_runner=runner,
+    )
+
+    assert result["applied"] is False
+    assert result["changed_paths"] == []
+    assert "expected 0.147.0, resolved 0.146.0" in result["blocked_reason"]
+    assert pyproject.read_bytes() == original_pyproject
+    assert lockfile.read_bytes() == original_lock
+    assert compatibility.read_bytes() == original_compatibility
+
+
+def test_local_sdk_update_widens_bound_and_verifies_exact_candidate(
+    tmp_path: Path,
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    lockfile = tmp_path / "uv.lock"
+    pyproject.write_text(
+        '[project.optional-dependencies]\ncodex = ["openai-codex>=0.1.0b3,<0.145"]\n',
+        encoding="utf-8",
+    )
+    lockfile.write_text(
+        '[[package]]\nname = "openai-codex"\nversion = "0.144.4"\n'
+        '[[package]]\nname = "openai-codex-cli-bin"\nversion = "0.144.4"\n',
+        encoding="utf-8",
+    )
+    compatibility = _write_compatibility_fixture(tmp_path)
+    commands: list[tuple[str, ...]] = []
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandResult:
+        del env
+        assert cwd == tmp_path
+        commands.append(command)
+        if command[:3] == ("uv", "lock", "--exclude-newer"):
+            lockfile.write_text(
+                '[[package]]\nname = "openai-codex"\nversion = "0.147.0"\n'
+                '[[package]]\nname = "openai-codex-cli-bin"\nversion = "0.147.0"\n',
+                encoding="utf-8",
+            )
+        return CommandResult(command=command, returncode=0)
+
+    result = _run_local_sdk_update(
+        RunOptions(workspace=tmp_path, runtime="fake"),
+        update_versions={
+            "openai-codex": "0.147.0",
+            "openai-codex-cli-bin": "0.147.0",
+        },
+        implementation={"allowed": True, "changes": [], "verification_results": []},
+        command_runner=runner,
+    )
+
+    assert result["applied"] is True
+    assert result["changed_paths"] == [
+        "pyproject.toml",
+        "uv.lock",
+        "src/agent_runtime_kit/compatibility.py",
+    ]
+    assert "openai-codex>=0.1.0b3,<0.148" in pyproject.read_text()
+    compatibility_text = compatibility.read_text(encoding="utf-8")
+    assert 'version_specifier=">=0.1.0b3,<0.148"' in compatibility_text
+    assert 'tested_version="0.147.0"' in compatibility_text
+    assert 'PackageVersion(package="openai-codex-cli-bin", version="0.147.0")' in (
+        compatibility_text
+    )
+    assert any(command[:3] == ("uv", "run", "--locked") for command in commands)
+    assert _verification_passed(result) is True
+
+
+def test_local_sdk_update_rolls_back_manifest_after_verification_failure(
+    tmp_path: Path,
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    lockfile = tmp_path / "uv.lock"
+    pyproject.write_text(
+        '[project.optional-dependencies]\ncodex = ["openai-codex>=0.1.0b3,<0.145"]\n',
+        encoding="utf-8",
+    )
+    lockfile.write_text(
+        '[[package]]\nname = "openai-codex"\nversion = "0.144.4"\n',
+        encoding="utf-8",
+    )
+    compatibility = _write_compatibility_fixture(tmp_path)
+    originals = {
+        pyproject: pyproject.read_bytes(),
+        lockfile: lockfile.read_bytes(),
+        compatibility: compatibility.read_bytes(),
+    }
+
+    def runner(
+        command: tuple[str, ...],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandResult:
+        del env
+        assert cwd == tmp_path
+        if command[:3] == ("uv", "lock", "--exclude-newer"):
+            lockfile.write_text(
+                '[[package]]\nname = "openai-codex"\nversion = "0.147.0"\n',
+                encoding="utf-8",
+            )
+        return CommandResult(
+            command=command,
+            returncode=1 if command == ("uv", "run", "--locked", "pytest") else 0,
+            stdout="one failed" if command[-1:] == ("pytest",) else "",
+        )
+
+    result = _run_local_sdk_update(
+        RunOptions(workspace=tmp_path, runtime="fake"),
+        update_versions={"openai-codex": "0.147.0"},
+        implementation={"allowed": True, "changes": [], "verification_results": []},
+        command_runner=runner,
+    )
+
+    assert result["applied"] is False
+    assert result["changed_paths"] == []
+    assert result["blocked_reason"] == (
+        "verification failed: uv run --locked pytest (exit 1); "
+        "inspect verification_results for full output"
+    )
+    for path, original in originals.items():
+        assert path.read_bytes() == original
+
+
+def _write_compatibility_fixture(
+    root: Path,
+    *,
+    package: str = "openai-codex",
+    specifier: str = ">=0.1.0b3,<0.145",
+    tested_version: str = "0.144.4",
+    runtime_dependency: tuple[str, str] | None = (
+        "openai-codex-cli-bin",
+        "0.144.4",
+    ),
+) -> Path:
+    path = root / "src" / "agent_runtime_kit" / "compatibility.py"
+    path.parent.mkdir(parents=True)
+    lines = [
+        "COMPATIBILITY_MANIFEST = (",
+        "    RuntimeCompatibility(",
+        f'        package="{package}",',
+        f'        version_specifier="{specifier}",',
+        f'        tested_version="{tested_version}",',
+    ]
+    if runtime_dependency is not None:
+        dependency_package, dependency_version = runtime_dependency
+        lines.extend(
+            (
+                "        tested_runtime_dependencies=(",
+                "            PackageVersion("
+                f'package="{dependency_package}", version="{dependency_version}"),',
+                "        ),",
+            )
+        )
+    lines.extend(("    ),", ")", ""))
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
 @pytest.mark.asyncio
 async def test_run_agent_report_only_generates_artifacts(
     tmp_path: Path,
@@ -2716,6 +3539,8 @@ claude = ["claude-agent-sdk>=0.2"]
     assert (report_path.parent / "evidence.json").exists()
     assert (report_path.parent / "release_notes.json").exists()
     assert (report_path.parent / "api_diffs.json").exists()
+    assert (report_path.parent / "implementation_diffs.json").exists()
+    assert (report_path.parent / "implementation_snapshots").is_dir()
     assert (report_path.parent / "behavior_probes.json").exists()
     assert (report_path.parent / "behavior_diffs.json").exists()
     assert (report_path.parent / "behavior_summary.json").exists()
@@ -2729,6 +3554,14 @@ claude = ["claude-agent-sdk>=0.2"]
         encoding="utf-8"
     )
     assert "Recursive self-adaptation impact" in report_path.read_text(encoding="utf-8")
+    assert "## Upstream Implementation Trends" in report_path.read_text(encoding="utf-8")
+    assert "## Direction Of Travel" not in report_path.read_text(encoding="utf-8")
+    current_state = json.loads(
+        (report_path.parent / "current_state.json").read_text(encoding="utf-8")
+    )
+    assert current_state["artifacts"]["report.md"]["sha256"] == hashlib.sha256(
+        report_path.read_bytes()
+    ).hexdigest()
 
 
 @pytest.mark.asyncio
@@ -2797,7 +3630,7 @@ def test_finalize_report_skips_when_report_dir_is_gitignored(tmp_path: Path) -> 
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
     ) -> CommandResult:
-        del cwd, env
+        del env
         commands.append(command)
         # check-ignore exits 0 => path IS ignored (the default report dir).
         return CommandResult(command=command, returncode=0)
@@ -2829,7 +3662,7 @@ def test_finalize_report_skips_when_report_dir_is_outside_the_repo(tmp_path: Pat
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
     ) -> CommandResult:
-        del cwd, env
+        del env
         commands.append(command)
         # check-ignore exits 128 when it cannot judge the path (outside the repo).
         if command[:2] == ("git", "check-ignore"):
@@ -2872,6 +3705,13 @@ name = "claude-agent-sdk"
 version = "0.2.1"
 """,
         encoding="utf-8",
+    )
+    _write_compatibility_fixture(
+        tmp_path,
+        package="claude-agent-sdk",
+        specifier=">=0.2",
+        tested_version="0.2.1",
+        runtime_dependency=None,
     )
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.cli.snapshot_current_api",
@@ -2927,7 +3767,7 @@ version = "0.2.1"
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
     ) -> CommandResult:
-        del cwd, env
+        del env
         commands.append(command)
         if command[:3] == ("uv", "lock", "--dry-run"):
             return CommandResult(
@@ -2936,6 +3776,11 @@ version = "0.2.1"
                 stderr="Update claude-agent-sdk v0.2.1 -> v0.3.0\n",
             )
         if command[:2] == ("uv", "lock"):
+            assert cwd is not None
+            (cwd / "uv.lock").write_text(
+                '\n[[package]]\nname = "claude-agent-sdk"\nversion = "0.3.0"\n',
+                encoding="utf-8",
+            )
             return CommandResult(command=command, returncode=0, stdout="updated")
         if command[:2] == ("git", "check-ignore"):
             # Report dir is tracked in this scenario -> not ignored (exit 1).
@@ -2966,10 +3811,10 @@ version = "0.2.1"
     assert (
         "uv",
         "lock",
+        "--exclude-newer",
+        "false",
         "-P",
         "claude-agent-sdk",
-        "--exclude-newer-package",
-        "claude-agent-sdk=false",
     ) in commands
     assert any(command[:3] == ("git", "commit", "-m") for command in commands)
     assert any(command[:4] == ("gh", "pr", "create", "--draft") for command in commands)
@@ -3290,7 +4135,18 @@ class PermissiveRuntime(RecordingRuntime):
         self.task = task
         stage = task.metadata["stage"]
         if stage == "direction-analysis":
-            payload = {"packages": [], "themes": [], "uncertainty": []}
+            payload = {
+                "packages": [],
+                "themes": [
+                    {
+                        "name": "Implementation evidence",
+                        "implementation_pattern": "Interpret exact implementation diffs.",
+                        "packages": [],
+                        "evidence": [],
+                    }
+                ],
+                "uncertainty": [],
+            }
         elif stage == "architecture-decision":
             payload = {
                 "findings": [],
@@ -3394,8 +4250,7 @@ def _sdk_evidence(
         evidence["refresh_preview"] = {
             "stdout": "",
             "stderr": (
-                f"Update {package} v{locked_version or installed_version} "
-                f"-> v{candidate_version}\n"
+                f"Update {package} v{locked_version or installed_version} -> v{candidate_version}\n"
             ),
         }
     return evidence
