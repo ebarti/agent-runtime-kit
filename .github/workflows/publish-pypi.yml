@@ -98,7 +98,9 @@ jobs:
           PY
 
       - name: Install build tools
-        run: python -m pip install --upgrade build twine
+        # Keep the pre-upload validator on the same Twine generation as the
+        # pinned publisher action so metadata support cannot disagree by job.
+        run: python -m pip install --upgrade build "twine==7.0.0"
 
       - name: Build wheel and sdist
         run: python -m build
@@ -148,7 +150,8 @@ jobs:
           path: dist
 
       - name: Publish package distributions to PyPI
-        # Pinned to an immutable SHA (v1.14.0) instead of the moving release/v1
-        # branch: this step has id-token: write, so a compromised branch retag
-        # would otherwise be able to publish as us.
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
+        # Pinned to the immutable v1.14.2 commit, which upgrades the publisher to
+        # Twine 7 for Core Metadata 2.5. Do not use the moving release/v1 branch:
+        # this step has id-token: write, so a compromised branch retag could
+        # otherwise publish as us.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
