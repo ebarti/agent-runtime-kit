@@ -45,6 +45,7 @@ from agent_runtime_kit.adapters._common import (
     optional_str,
     output_schema_from,
     package_availability,
+    package_version,
     resolve_structured_output,
     select_model,
     validate_model_configuration,
@@ -98,6 +99,10 @@ class AntigravityAgentRuntime:
         policy_module: Any | None = None,
         reuse_process: bool = False,
     ) -> None:
+        if api_key and vertex is True and (project or location):
+            raise ValueError(
+                "Vertex Express API-key authentication cannot be combined with project/location"
+            )
         self._default_model = default_model
         self._supported_models = validate_model_configuration(default_model, supported_models)
         self._api_key = api_key
@@ -149,7 +154,7 @@ class AntigravityAgentRuntime:
                 message="An Antigravity API-key credential signal is configured.",
                 package=availability.package,
                 version=availability.version,
-                metadata={"auth_source": "api-key"},
+                metadata={"auth_source": self._auth_config().source},
             )
         if self._vertex is False:
             return self._missing_credentials_readiness(availability)
@@ -319,7 +324,13 @@ class AntigravityAgentRuntime:
                 self.kind,
                 "google-antigravity is not installed. Install agent-runtime-kit[antigravity].",
             ) from exc
-        return _AntigravitySDK(Agent, LocalAgentConfig, types, policy)  # pragma: no cover
+        return _AntigravitySDK(
+            Agent,
+            LocalAgentConfig,
+            types,
+            policy,
+            supports_vertex_express=_supports_vertex_express(package_version("google-antigravity")),
+        )
 
     def _build_config(
         self,
@@ -329,6 +340,12 @@ class AntigravityAgentRuntime:
         auth: _AntigravityAuthConfig,
         sdk: _AntigravitySDK,
     ) -> tuple[Any, list[str]]:
+        if auth.api_key is not None and auth.vertex is True and not sdk.supports_vertex_express:
+            raise UnsupportedTaskInputError(
+                self.kind,
+                "vertex",
+                "Vertex Express requires a released google-antigravity>=0.1.16 SDK",
+            )
         for server in task.mcp_servers:
             if server.env:
                 raise UnsupportedTaskInputError(
@@ -366,9 +383,11 @@ class AntigravityAgentRuntime:
         # LocalAgentConfig no longer accepts (instead of a TypeError) and record
         # them — except the tool posture (and workspace scoping when requested),
         # which must fail closed rather than run with the SDK's default access.
-        required = ["capabilities", "policies"]
+        required = {"capabilities": "permissions", "policies": "permissions"}
+        if auth.api_key is not None and auth.vertex is True:
+            required.update(api_key="api_key", vertex="vertex")
         if config_kwargs["workspaces"]:
-            required.append("workspaces")
+            required["workspaces"] = "permissions"
         supported, dropped = filter_supported_kwargs(
             sdk.config_cls, config_kwargs, required=required, kind=self.kind
         )
@@ -670,9 +689,14 @@ class AntigravityAgentRuntime:
         return _AntigravityAuthConfig(source="none")
 
     def _auth_config(self) -> _AntigravityAuthConfig:
-        # An explicit constructor api_key is the most specific request and wins.
+        # An explicit key selects credentials without erasing an explicit
+        # endpoint: vertex=True plus a key is Vertex Express, without ADC.
         if self._api_key:
-            return _AntigravityAuthConfig(api_key=self._api_key, source="api-key")
+            return _AntigravityAuthConfig(
+                api_key=self._api_key,
+                vertex=self._vertex,
+                source="vertex-express-api-key" if self._vertex is True else "api-key",
+            )
         # Explicit vertex=True takes precedence over an ambient env API key, so
         # AntigravityAgentRuntime(vertex=True, project=...) is not silently
         # redirected to the Gemini API just because GEMINI_API_KEY is exported.
@@ -703,11 +727,30 @@ class AntigravityAgentRuntime:
 
 
 class _AntigravitySDK:
-    def __init__(self, agent_cls: Any, config_cls: Any, types: Any, policy: Any) -> None:
+    def __init__(
+        self,
+        agent_cls: Any,
+        config_cls: Any,
+        types: Any,
+        policy: Any,
+        *,
+        supports_vertex_express: bool = True,
+    ) -> None:
         self.agent_cls = agent_cls
         self.config_cls = config_cls
         self.types = types
         self.policy = policy
+        self.supports_vertex_express = supports_vertex_express
+
+
+def _supports_vertex_express(version: str | None) -> bool:
+    # 0.1.15 exposes the same kwargs, so field presence cannot establish native
+    # Express support. Enable it only for a verifiable released SDK; injected
+    # SDK implementations own their capability contract independently.
+    released = re.fullmatch(
+        r"(\d+)\.(\d+)\.(\d+)(?:\.post\d+)?(?:\+[a-zA-Z0-9._-]+)?", version or ""
+    )
+    return released is not None and tuple(int(part) for part in released.groups()) >= (0, 1, 16)
 
 
 @dataclass(frozen=True)

@@ -349,14 +349,21 @@ def _summaries_for_interval(
 ) -> list[str]:
     text = _prefer_github_discussion_body(text)
     lines = [line.strip() for line in text.splitlines()]
-    version_patterns = [to_version]
+    versions = [to_version]
     if from_version:
-        version_patterns.append(from_version)
+        versions.append(from_version)
+    version_patterns = [
+        re.compile(rf"(?<![\w.+-])v?{re.escape(version)}(?![\w.+-])") for version in versions
+    ]
+    # A baseline mention or a longer version sharing the candidate's prefix is
+    # not release evidence for the candidate itself.
+    if not version_patterns[0].search(text):
+        return []
     matches: list[str] = []
     for index, line in enumerate(lines):
         if not line:
             continue
-        if any(pattern and pattern in line for pattern in version_patterns):
+        if any(pattern.search(line) for pattern in version_patterns):
             matches.append(_clean_summary(line))
             for nearby in lines[index + 1 : index + 9]:
                 cleaned = _clean_summary(nearby)
@@ -364,8 +371,9 @@ def _summaries_for_interval(
                     matches.append(cleaned)
     if not matches and to_version:
         compact = re.sub(r"\s+", " ", text)
-        version_index = compact.find(to_version)
-        if version_index >= 0:
+        version_match = version_patterns[0].search(compact)
+        if version_match:
+            version_index = version_match.start()
             start = max(0, version_index - 160)
             end = min(len(compact), version_index + 320)
             matches.append(_clean_summary(compact[start:end]))
@@ -380,7 +388,12 @@ def _prefer_github_discussion_body(text: str) -> str:
     )
     if not match:
         return text
-    return match.group("body")
+    # GitHub release discussions may identify the version only in the page
+    # title, while the comment body describes the changes without repeating it.
+    # Keep that title attached to its body, excluding navigation and replies.
+    title = re.search(r"<title\b[^>]*>(.*?)</title>", text, flags=re.DOTALL | re.IGNORECASE)
+    body = match.group("body")
+    return f"{title.group(1)}\n{body}" if title else body
 
 
 def _release_note_links_for_version(source_url: str, text: str, to_version: str) -> tuple[str, ...]:

@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- Updated tested Claude Agent SDK to `0.2.152` and Google Antigravity SDK to
+  `0.1.16`; the Codex SDK and its coupled CLI remain at `0.147.0`.
+- Upgrade skill invocations now include necessary runtime adaptations,
+  verification, and a regular pull request. Explicit report-only and local-only
+  requests retain their narrower scope.
+
+### Fixed
+
+- Antigravity preserves explicit `vertex=True` with an API key for Vertex
+  Express authentication, rejects mixed regional credentials, and refuses older
+  SDKs or configurations that would silently drop the requested endpoint.
+- Release-note collection recognizes versions present only in a GitHub
+  discussion title and rejects unrelated or longer version-prefix matches.
+
 ## 0.5.1 - 2026-08-29
 
 ### Added

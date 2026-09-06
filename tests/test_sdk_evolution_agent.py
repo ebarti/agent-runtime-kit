@@ -569,6 +569,49 @@ def test_antigravity_release_notes_fetches_matching_discussion_from_announcement
     assert any("Python 3.14" in summary for summary in notes[0].summaries)
 
 
+@pytest.mark.parametrize(
+    ("title_version", "expected_status"),
+    (
+        ("0.1.16", "found"),
+        ("0.1.160", "no-matching-version"),
+        ("0.1.15", "no-matching-version"),
+        ("0.1.16-rc.1", "no-matching-version"),
+        ("0.1.16+local", "no-matching-version"),
+    ),
+)
+def test_release_notes_associate_discussion_title_with_its_body(
+    title_version: str, expected_status: str
+) -> None:
+    def fetcher(url: str) -> str:
+        if url.endswith("/discussions/categories/announcements"):
+            return (
+                '<a href="https://github.com/google-antigravity/antigravity-sdk-python/'
+                'discussions/199">v0.1.16 Release Notes</a>'
+            )
+        if url.endswith("/discussions/199"):
+            # The real release puts the version only in the page title. Page
+            # navigation and other releases must not supply matching evidence.
+            return (
+                f"<title>Google Antigravity Python SDK — v{title_version} Release Notes</title>"
+                "<nav>Unrelated navigation mentions v0.1.16</nav>"
+                '<td class="comment-body markdown-body">'
+                "<p>Vertex Express supports API-key authentication.</p>"
+                "</td>"
+            )
+        return "General package documentation"
+
+    notes = collect_release_notes(
+        [{"name": "google-antigravity", "locked_version": "0.1.15"}],
+        {"google-antigravity": "0.1.16"},
+        fetcher=fetcher,
+    )
+
+    assert notes[0].status == expected_status
+    if expected_status == "found":
+        assert any("Vertex Express" in summary for summary in notes[0].summaries)
+        assert not any("Unrelated navigation" in summary for summary in notes[0].summaries)
+
+
 def test_release_note_links_only_follow_github_https_urls() -> None:
     # The discussion-index markup can carry user-generated hrefs. A
     # protocol-relative path would urljoin into an off-site host and the blind
