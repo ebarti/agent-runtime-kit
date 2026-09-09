@@ -188,11 +188,25 @@ constructor, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`. Without an API key, the
 adapter uses Vertex AI config with Google ADC when a project can be discovered
 from ADC, `GOOGLE_CLOUD_PROJECT`, or `GCLOUD_PROJECT`; location defaults to
 `global` unless `GOOGLE_CLOUD_LOCATION`, `GOOGLE_CLOUD_REGION`, or
-`CLOUD_ML_REGION` is set. Precedence: an explicit constructor `api_key` is the
-most specific request and wins; otherwise an explicit
+`CLOUD_ML_REGION` is set. An explicit constructor `api_key` takes precedence over
+ambient credentials. With `vertex=True`, that key selects Vertex Express mode
+(supported by released `google-antigravity>=0.1.16` versions): no ADC, project,
+or location is required. Older or unverifiable SDK releases raise
+`UnsupportedTaskInputError` for Express mode; their existing authentication
+modes remain available. Explicit project/location arguments cannot be combined
+with Express mode. For example:
+
+```python
+runtime = AntigravityAgentRuntime(vertex=True, api_key=vertex_express_key)
+```
+
+Without an explicit key, an explicit
 `AntigravityAgentRuntime(vertex=True, ...)` takes precedence over an ambient
 `GEMINI_API_KEY`/`GOOGLE_API_KEY`, so a Vertex-configured runtime is never
-silently redirected to the Gemini API by an exported environment key. Under
+silently redirected to the Gemini API by an exported environment key. When no
+model is supplied, the adapter preserves the vendor default (`gemini-3.8-flash`
+in Antigravity 0.1.16); supply `default_model` or `AgentTask.model` when a stable
+model selection is required. Under
 `PERMISSIVE`, `disallowed_tools` maps to `CapabilitiesConfig.disabled_tools`
 (the baseline is every tool, so "enable everything else" is exact); under any
 other posture the deny-list is folded into an allow-list of the mode's baseline

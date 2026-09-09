@@ -1,16 +1,19 @@
 """SDK surface contract tests.
 
-These verify the real vendor SDK surfaces this package depends on. They are pure
-introspection: no network, no credentials, no agent construction. Each SDK is gated
+These verify the real vendor SDK surfaces and configurations this package depends
+on: no network, no credentials, no agent construction. Each SDK is gated
 with ``importorskip`` so the suite still passes in the core-only lane.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import importlib.metadata
 import inspect
+from pathlib import Path
 
 import pytest
+from packaging.version import Version
 
 
 def _fields(cls: object) -> set[str]:
@@ -40,6 +43,37 @@ def test_claude_options_has_every_kwarg_adapter_builds() -> None:
     }
     missing = expected - fields
     assert not missing, f"ClaudeAgentOptions missing: {sorted(missing)}"
+
+
+def test_claude_adapter_constructs_real_options(tmp_path: Path) -> None:
+    claude = pytest.importorskip("claude_agent_sdk")
+    from agent_runtime_kit import AgentTask, McpServerConfig, PermissionMode, PermissionProfile
+    from agent_runtime_kit.adapters import ClaudeAgentRuntime
+
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    task = AgentTask(
+        goal="Inspect configuration only",
+        system="Return the requested structured result",
+        working_directory=tmp_path,
+        session_id="test-session",
+        output_schema=schema,
+        budget_usd=1.0,
+        permissions=PermissionProfile(
+            mode=PermissionMode.STRICT, allowed_tools=("Read",), disallowed_tools=("Bash",)
+        ),
+        mcp_servers=(McpServerConfig(name="files", command="test-mcp", args=("--read-only",)),),
+    )
+    options, dropped = ClaudeAgentRuntime()._build_options(task, None, claude.ClaudeAgentOptions)
+
+    assert not dropped
+    assert options.permission_mode == "plan"
+    assert options.allowed_tools == ["Read"]
+    assert options.disallowed_tools == ["Bash"]
+    assert options.cwd == tmp_path
+    assert options.resume == "test-session"
+    assert options.max_budget_usd == 1.0
+    assert options.output_format == {"type": "json_schema", "schema": schema}
+    assert options.mcp_servers["files"]["args"] == ["--read-only"]
 
 
 def test_claude_message_and_block_types_exist() -> None:
@@ -166,3 +200,51 @@ def test_antigravity_policy_and_config() -> None:
     }
     missing = expected - fields
     assert not missing, f"LocalAgentConfig missing: {sorted(missing)}"
+
+
+@pytest.mark.parametrize("vertex", [False, True])
+def test_antigravity_adapter_constructs_explicit_api_key_endpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, vertex: bool
+) -> None:
+    pytest.importorskip("google.antigravity")
+    version = Version(importlib.metadata.version("google-antigravity"))
+    if not vertex and version < Version("0.1.15"):
+        pytest.skip("Endpoint model inspection uses Antigravity 0.1.15+")
+    from google.antigravity import types
+
+    from agent_runtime_kit import AgentTask
+    from agent_runtime_kit._errors import UnsupportedTaskInputError
+    from agent_runtime_kit.adapters import AntigravityAgentRuntime
+
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "ambient-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "ambient-location")
+    monkeypatch.setenv("GEMINI_API_KEY", "ambient-key")
+    runtime = AntigravityAgentRuntime(
+        vertex=vertex, api_key="test-api-key-no-network", data_dir=tmp_path
+    )
+    def build_config():
+        return runtime._build_config(
+            AgentTask(goal="Inspect configuration only"),
+            model=None,
+            auth=runtime._auth_config(),
+            sdk=runtime._load_sdk(),
+        )
+
+    if vertex and version < Version("0.1.16"):
+        with pytest.raises(UnsupportedTaskInputError, match=r">=0\.1\.16"):
+            build_config()
+        return
+    config, dropped = build_config()
+
+    assert not dropped
+    assert config.models
+    for target in config.models:
+        endpoint = target.endpoint
+        expected_type = types.VertexEndpoint if vertex else types.GeminiAPIEndpoint
+        assert isinstance(endpoint, expected_type)
+        assert endpoint.api_key == "test-api-key-no-network"
+        endpoint.validate_endpoint()
+        if vertex:
+            assert endpoint.project is None
+            assert endpoint.location is None

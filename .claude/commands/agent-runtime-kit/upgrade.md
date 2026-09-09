@@ -1,6 +1,6 @@
 ---
 name: "Agent Runtime Kit: Upgrade"
-description: Inspect and safely upgrade agent-runtime-kit vendor SDK dependencies
+description: Upgrade and adapt agent-runtime-kit vendor SDK integrations through a verified pull request
 category: Workflow
 tags: [agent-runtime-kit, sdk-evolution, upgrade, workflow]
 ---
@@ -9,12 +9,11 @@ tags: [agent-runtime-kit, sdk-evolution, upgrade, workflow]
 
 Read and follow the canonical repository workflow in
 `.codex/skills/agent-runtime-kit-upgrade/SKILL.md`. That file owns candidate
-discovery, no-cooloff resolution, report-first gates, local upgrade
-authorization, verification, and PR publication rules; do not duplicate or
+discovery, no-cooloff resolution, report-first gates, upstream adaptation,
+verification, and PR publication rules; do not duplicate or
 weaken them here.
 
 For this Claude command, use `claude-agent-sdk` with `--extra claude` unless the
-user selected another runtime. Preserve every other authorization boundary from
-the canonical workflow: an explicit SDK upgrade request permits the gated local
-dependency update, while branch, commit, push, PR, merge, and release actions
-remain separately authorized.
+user selected another runtime. Complete the canonical workflow, including the
+necessary source adaptations and regular PR, for an upgrade invocation. Honor
+explicit report-only or local-only limits. Never auto-merge or publish a release.

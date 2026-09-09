@@ -19,7 +19,10 @@ from agent_runtime_kit import (
 )
 from agent_runtime_kit._errors import UnsupportedTaskInputError
 from agent_runtime_kit.adapters import AntigravityAgentRuntime
-from agent_runtime_kit.adapters.antigravity import _provider_conversation_id
+from agent_runtime_kit.adapters.antigravity import (
+    _provider_conversation_id,
+    _supports_vertex_express,
+)
 from agent_runtime_kit.testing import RecordingEventSink
 
 
@@ -98,12 +101,20 @@ class FakeConfig:
     def __init__(
         self,
         *,
+        api_key: str | None = None,
+        vertex: bool | None = None,
         capabilities: Any = None,
         policies: Any = None,
         workspaces: Any = None,
         **kwargs: Any,
     ) -> None:
-        kwargs.update(capabilities=capabilities, policies=policies, workspaces=workspaces)
+        kwargs.update(
+            api_key=api_key,
+            vertex=vertex,
+            capabilities=capabilities,
+            policies=policies,
+            workspaces=workspaces,
+        )
         self.kwargs = kwargs
 
 
@@ -1231,6 +1242,83 @@ async def test_antigravity_explicit_vertex_beats_ambient_api_key(
     assert config.kwargs["vertex"] is True
     assert config.kwargs["project"] == "proj"
     assert config.kwargs["api_key"] is None
+
+
+@pytest.mark.asyncio
+async def test_antigravity_explicit_key_preserves_vertex_express_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "ambient-should-not-win")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "ambient-standard-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+    def unexpected_adc() -> None:
+        raise AssertionError("Vertex Express must not require ADC")
+
+    monkeypatch.setattr("agent_runtime_kit.adapters.antigravity._probe_google_adc", unexpected_adc)
+    monkeypatch.setattr(
+        "agent_runtime_kit.adapters.antigravity._google_adc_project", unexpected_adc
+    )
+    runtime = make_runtime(api_key="explicit-express-key", vertex=True, data_dir=tmp_path)
+
+    readiness = await runtime.check_readiness()
+    result = await runtime.run(AgentTask(goal="task"))
+
+    assert readiness.metadata["auth_source"] == "vertex-express-api-key"
+    assert result.output == "done: task"
+    config = FakeAgent.last_config
+    assert config is not None
+    assert config.kwargs["api_key"] == "explicit-express-key"
+    assert config.kwargs["vertex"] is True
+    assert config.kwargs["project"] is None
+    assert config.kwargs["location"] is None
+
+
+@pytest.mark.parametrize(
+    ("version", "supported"),
+    (
+        (None, False),
+        ("0.1.15", False),
+        ("0.1.16rc1", False),
+        ("0.1.16", True),
+        ("0.1.16.post1", True),
+        ("0.1.17+local", True),
+    ),
+)
+def test_antigravity_express_requires_a_verifiable_released_sdk(
+    version: str | None, supported: bool
+) -> None:
+    assert _supports_vertex_express(version) is supported
+
+
+@pytest.mark.parametrize("regional", ({"project": "project"}, {"location": "us-central1"}))
+def test_antigravity_rejects_mixed_vertex_express_and_regional_auth(
+    regional: dict[str, str],
+) -> None:
+    with pytest.raises(ValueError, match="Vertex Express"):
+        AntigravityAgentRuntime(api_key="express-key", vertex=True, **regional)
+
+
+@pytest.mark.asyncio
+async def test_antigravity_express_endpoint_cannot_be_dropped_by_sdk_drift(tmp_path: Path) -> None:
+    class ConfigWithoutVertex:
+        def __init__(self, *, api_key: str, capabilities: Any, policies: Any) -> None:
+            raise AssertionError("missing endpoint selection must fail before construction")
+
+    runtime = AntigravityAgentRuntime(
+        api_key="express-key",
+        vertex=True,
+        data_dir=tmp_path,
+        agent_cls=FakeAgent,
+        config_cls=ConfigWithoutVertex,
+        types_module=FakeTypes,
+        policy_module=FakePolicy,
+    )
+
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await runtime.run(AgentTask(goal="task"))
+
+    assert exc_info.value.field == "vertex"
 
 
 @pytest.mark.asyncio

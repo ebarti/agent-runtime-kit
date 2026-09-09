@@ -4,6 +4,15 @@ The SDK evolution agent is a local dogfood workflow for keeping
 agent-runtime-kit aligned with Claude Agent SDK, OpenAI Codex SDK, and Google
 Antigravity SDK as those upstream packages evolve.
 
+For a complete upgrade, invoke the repository's
+[`agent-runtime-kit-upgrade` skill](../.codex/skills/agent-runtime-kit-upgrade/SKILL.md).
+It collects evidence first, maps upstream implementation trends to the current
+integration, implements the necessary adapter/runtime changes with tests and
+docs, applies the compatible dependency update, and creates a verified regular
+pull request. Explicit report-only and local-only requests retain those limits.
+The CLI examples below describe the underlying runner; its report-only default
+and dependency-only implementation lane are stages within that broader skill.
+
 For the intended architecture, evidence contract, behavior probe strategy,
 changelog strategy, caveats, and alternatives, see
 [`docs/sdk-evolution-agent-design.md`](sdk-evolution-agent-design.md).
