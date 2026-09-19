@@ -782,8 +782,7 @@ def _capability_policy(
     is_permissive = task.permissions.mode is PermissionMode.PERMISSIVE
     if task.permissions.disallowed_tools:
         # The real CapabilitiesConfig requires enabled_tools and disabled_tools to be
-        # mutually exclusive, so a deny-list either takes the disabled_tools route
-        # (PERMISSIVE, whose baseline is every tool) or is folded into an allow-list
+        # mutually exclusive, so fold a deny-list into an explicit allow-list
         # of baseline-minus-denied. Combining it with an explicit allow-list is
         # unrepresentable, so reject that rather than silently drop one.
         if task.permissions.allowed_tools:
@@ -817,11 +816,21 @@ def _capability_policy(
                 enable_subagents=_contains_tool(tools, subagent),
             )
         elif is_permissive:
-            # PERMISSIVE's baseline is every tool, so the SDK's disabled_tools route
-            # ("enable everything else") expresses baseline-minus-denied exactly.
+            # Since 0.1.17 disabled_tools subtracts from default(), which excludes
+            # ASK_QUESTION. Preserve our explicit all_tools baseline instead of
+            # silently removing an unrelated tool when a deny-list is supplied.
+            all_tools = getattr(builtin, "all_tools", None)
+            if not callable(all_tools):
+                raise UnsupportedTaskInputError(
+                    kind,
+                    "permissions.disallowed_tools",
+                    "the installed SDK exposes no complete toolset for a permissive deny-list",
+                )
+            denied = {getattr(tool, "value", tool) for tool in disabled}
+            tools = [tool for tool in all_tools() if getattr(tool, "value", tool) not in denied]
             capabilities = sdk.types.CapabilitiesConfig(
-                disabled_tools=disabled,
-                enable_subagents=not _contains_tool(disabled, subagent),
+                enabled_tools=tools,
+                enable_subagents=_contains_tool(tools, subagent),
             )
         else:
             # DEFAULT/CAUTIOUS: "enable everything else" would widen access past the

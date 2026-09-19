@@ -35,12 +35,12 @@ RELEASE_NOTE_SOURCES: dict[str, tuple[SourceRef, ...]] = {
         SourceRef(
             kind="docs",
             label="Codex SDK docs",
-            url="https://developers.openai.com/codex/sdk",
+            url="https://learn.chatgpt.com/docs/codex-sdk",
         ),
         SourceRef(
             kind="changelog",
             label="Codex changelog",
-            url="https://developers.openai.com/codex/changelog",
+            url="https://learn.chatgpt.com/docs/changelog",
         ),
         SourceRef(
             kind="release",

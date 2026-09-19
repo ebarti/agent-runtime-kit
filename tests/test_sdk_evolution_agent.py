@@ -1198,6 +1198,50 @@ def test_antigravity_probe_uses_constructible_provider_session_ids() -> None:
     assert "ValueError" in failures[0]
 
 
+def test_configuration_probe_rejects_semantically_invalid_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_options(**kwargs: Any) -> None:
+        assert kwargs["permission_mode"] == "plan"
+        assert kwargs["max_budget_usd"] == 1.0
+        raise ValueError("changed vendor value constraint")
+
+    monkeypatch.setattr(
+        behavior_module.importlib,
+        "import_module",
+        lambda name: types.SimpleNamespace(ClaudeAgentOptions=reject_options),
+    )
+    cases, failures = behavior_module._configuration_contract_cases("claude-agent-sdk")
+    assert cases == ["claude-options"]
+    assert failures == ["claude-options:ValueError"]
+
+
+@pytest.mark.parametrize(
+    "package,module",
+    [
+        ("claude-agent-sdk", "claude_agent_sdk"),
+        ("openai-codex", "openai_codex"),
+    ],
+)
+def test_real_configuration_probe_matches_isolated_script(package: str, module: str) -> None:
+    pytest.importorskip(module)
+    current = probe_current_package(package)[0]
+    completed = subprocess.run(
+        [sys.executable, "-c", behavior_module._PROBE_SCRIPT, package, "test", "candidate", "{}"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    isolated = json.loads(completed.stdout)[0]
+    assert current.status == isolated["status"] == "pass"
+    assert current.details["construction_cases"] == isolated["details"]["construction_cases"]
+    assert (
+        current.details["construction_failures"]
+        == isolated["details"]["construction_failures"]
+        == []
+    )
+
+
 @pytest.mark.parametrize(
     ("package", "failure_call", "error", "failure_step", "probe"),
     [
@@ -2880,6 +2924,40 @@ def test_implementation_history_inspects_recent_releases_when_project_is_current
     ]
 
 
+def test_implementation_history_keeps_baseline_outside_recent_releases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    baseline = ApiSnapshot(package="claude-agent-sdk", version="0.2.152", module="claude_agent_sdk")
+    candidate = ApiSnapshot(
+        package="claude-agent-sdk", version="0.2.157", module="claude_agent_sdk"
+    )
+
+    def snapshot(package: str, version: str) -> ApiSnapshot:
+        calls.append(version)
+        return ApiSnapshot(package=package, version=version, module="claude_agent_sdk")
+
+    monkeypatch.setattr("examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv", snapshot)
+    snapshots = _collect_implementation_snapshots(
+        {
+            "packages": [
+                {
+                    "name": "claude-agent-sdk",
+                    "locked_version": "0.2.152",
+                    "candidate_version": "0.2.157",
+                    "recent_versions": ["0.2.155", "0.2.156", "0.2.157"],
+                }
+            ]
+        },
+        compatibility_snapshots=[baseline, candidate],
+        inspect_candidates=True,
+    )
+    assert [item.version for item in snapshots] == ["0.2.152", "0.2.155", "0.2.156", "0.2.157"]
+    assert snapshots[0] is baseline
+    assert snapshots[-1] is candidate
+    assert calls == ["0.2.155", "0.2.156"]
+
+
 def test_candidate_api_diff_guard_blocks_missing_update_diff() -> None:
     guarded = with_candidate_api_diff_guard(
         {
@@ -3076,7 +3154,7 @@ def test_direction_guard_replaces_upgrade_advice_with_implementation_evidence() 
                     "implementation_pattern": "The adapter contract passed for the candidate.",
                     "packages": ["claude-agent-sdk"],
                     "evidence": ["Behavior probes passed."],
-                }
+                },
             ],
             "uncertainty": [],
         },
@@ -3175,6 +3253,39 @@ async def test_codex_stage_execution_uses_gpt_55_xhigh_thinking(tmp_path: Path) 
     assert runtime.task is not None
     assert runtime.task.metadata["model"] == SDK_EVOLUTION_CODEX_MODEL
     assert runtime.task.metadata["reasoning_effort"] == SDK_EVOLUTION_CODEX_REASONING_EFFORT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind", [AgentRuntimeKind.CODEX_AGENT_SDK, AgentRuntimeKind.CLAUDE_AGENT_SDK]
+)
+async def test_stage_execution_honors_explicit_model_and_effort(
+    tmp_path: Path, kind: AgentRuntimeKind
+) -> None:
+    runtime = RecordingRuntime(kind=kind)
+    context = RunContext(
+        run_id="explicit",
+        workspace=tmp_path,
+        report_root=tmp_path,
+        runtime=kind.value,
+        event_log_path=tmp_path / "events.jsonl",
+        implementation_enabled=False,
+        draft_pr=False,
+        model="requested-model",
+        reasoning_effort="high",
+    )
+    await run_stage(
+        runtime,
+        stage="direction-analysis",
+        payload={},
+        schema=DIRECTION_ANALYSIS_SCHEMA,
+        context=context,
+    )
+    assert runtime.task.model == "requested-model"
+    assert runtime.task.reasoning_effort == "high"
+    if kind is AgentRuntimeKind.CODEX_AGENT_SDK:
+        assert runtime.task.metadata["model"] == "requested-model"
+        assert runtime.task.metadata["reasoning_effort"] == "high"
 
 
 @pytest.mark.asyncio
@@ -3602,9 +3713,10 @@ claude = ["claude-agent-sdk>=0.2"]
     current_state = json.loads(
         (report_path.parent / "current_state.json").read_text(encoding="utf-8")
     )
-    assert current_state["artifacts"]["report.md"]["sha256"] == hashlib.sha256(
-        report_path.read_bytes()
-    ).hexdigest()
+    assert (
+        current_state["artifacts"]["report.md"]["sha256"]
+        == hashlib.sha256(report_path.read_bytes()).hexdigest()
+    )
 
 
 @pytest.mark.asyncio
@@ -3970,6 +4082,43 @@ def test_build_registry_configures_vendor_process_reuse() -> None:
     antigravity = registry.resolve(AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK)
     assert isinstance(antigravity, AntigravityAgentRuntime)
     assert antigravity._reuse_process is True
+
+
+def test_parse_args_explicit_analysis_driver() -> None:
+    options = parse_args(
+        [
+            "--runtime",
+            "codex-agent-sdk",
+            "--model",
+            "gpt-6-astra",
+            "--reasoning-effort",
+            "xhigh",
+            "--codex-bin",
+            "/installed/codex",
+        ]
+    )
+    assert (options.model, options.reasoning_effort, options.codex_bin) == (
+        "gpt-6-astra",
+        "xhigh",
+        "/installed/codex",
+    )
+    with pytest.raises(SystemExit):
+        parse_args(["--runtime", "claude-agent-sdk", "--codex-bin", "/installed/codex"])
+
+
+def test_build_registry_selects_supported_codex_executable(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Config:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+    monkeypatch.setitem(sys.modules, "openai_codex", types.SimpleNamespace(CodexConfig=Config))
+    monkeypatch.setattr(
+        "examples.sdk_evolution_agent.stages.prepare_isolated_codex_home",
+        lambda **kw: Path("/isolated"),
+    )
+    runtime = build_registry(codex_bin="/installed/codex").resolve(AgentRuntimeKind.CODEX_AGENT_SDK)
+    config = runtime._config_cls(cwd="/workspace")
+    assert config.kwargs == {"codex_bin": "/installed/codex", "cwd": "/workspace"}
 
 
 def test_codex_auth_helper_copies_newer_primary_auth_to_dedicated_home(

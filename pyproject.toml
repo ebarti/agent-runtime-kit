@@ -48,12 +48,12 @@ dependencies = ["jsonschema>=4.18,<5"]
 claude = ["claude-agent-sdk>=0.2.87,<0.3"]
 # 0.1.0b3 floor: earlier betas pin a codex binary with no manylinux wheels,
 # making the extra uninstallable on glibc Linux.
-codex = ["openai-codex>=0.1.0b3,<0.148"]
+codex = ["openai-codex>=0.1.0b3,<0.155"]
 antigravity = ["google-antigravity>=0.1.2,<0.2"]
 all = [
     "claude-agent-sdk>=0.2.87,<0.3",
     "google-antigravity>=0.1.2,<0.2",
-    "openai-codex>=0.1.0b3,<0.148",
+    "openai-codex>=0.1.0b3,<0.155",
 ]
 
 [project.urls]

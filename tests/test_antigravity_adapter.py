@@ -960,9 +960,7 @@ async def test_antigravity_strict_uses_read_only_and_no_policies(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_antigravity_permissive_disallowed_tools_map_to_disabled(tmp_path: Path) -> None:
-    # Only PERMISSIVE takes the SDK's disabled_tools route: its baseline is every
-    # tool, so "enable everything else" expresses baseline-minus-denied exactly.
+async def test_antigravity_permissive_disallowed_tools_subtract_from_all(tmp_path: Path) -> None:
     runtime = make_runtime(data_dir=tmp_path)
 
     await runtime.run(
@@ -978,10 +976,47 @@ async def test_antigravity_permissive_disallowed_tools_map_to_disabled(tmp_path:
     config = FakeAgent.last_config
     assert config is not None
     capabilities = config.kwargs["capabilities"]
-    assert capabilities.disabled_tools == ["run_command"]
-    # enabled_tools and disabled_tools are mutually exclusive in the real SDK.
-    assert capabilities.enabled_tools is None
+    assert capabilities.disabled_tools is None
+    assert capabilities.enabled_tools == [
+        tool for tool in FakeBuiltinTools.all_tools() if tool != FakeBuiltinTools.RUN_COMMAND
+    ]
     assert capabilities.enable_subagents is True
+
+
+@pytest.mark.asyncio
+async def test_antigravity_permissive_deny_list_requires_complete_baseline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(FakeBuiltinTools, "all_tools", None)
+    runtime = make_runtime(data_dir=tmp_path)
+    with pytest.raises(UnsupportedTaskInputError, match="complete toolset"):
+        await runtime.run(
+            AgentTask(
+                goal="task",
+                permissions=PermissionProfile(
+                    mode=PermissionMode.PERMISSIVE,
+                    disallowed_tools=("run_command",),
+                ),
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_antigravity_permissive_deny_list_disables_denied_subagents(tmp_path: Path) -> None:
+    runtime = make_runtime(data_dir=tmp_path)
+    await runtime.run(
+        AgentTask(
+            goal="task",
+            permissions=PermissionProfile(
+                mode=PermissionMode.PERMISSIVE,
+                disallowed_tools=("start_subagent",),
+            ),
+        )
+    )
+    capabilities = FakeAgent.last_config.kwargs["capabilities"]
+    assert FakeBuiltinTools.START_SUBAGENT not in capabilities.enabled_tools
+    assert capabilities.enable_subagents is False
 
 
 @pytest.mark.asyncio

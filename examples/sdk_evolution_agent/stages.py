@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -109,7 +110,7 @@ class FixtureEvolutionRuntime:
         await self.aclose()
 
 
-def build_registry() -> RuntimeRegistry:
+def build_registry(*, codex_bin: str | None = None) -> RuntimeRegistry:
     """Build the runtime registry used by the SDK evolution agent."""
 
     registry = create_default_registry(include_fake=False)
@@ -117,7 +118,7 @@ def build_registry() -> RuntimeRegistry:
     register_adapters(registry)
     registry.register(
         AgentRuntimeKind.CODEX_AGENT_SDK,
-        _codex_evolution_runtime,
+        partial(_codex_evolution_runtime, codex_bin=codex_bin),
         replace=True,
     )
     registry.register(
@@ -133,12 +134,16 @@ def build_registry() -> RuntimeRegistry:
     return registry
 
 
-def _codex_evolution_runtime(**kwargs: Any) -> CodexAgentRuntime:
+def _codex_evolution_runtime(*, codex_bin: str | None = None, **kwargs: Any) -> CodexAgentRuntime:
     codex_home = prepare_isolated_codex_home(codex_home=SDK_EVOLUTION_CODEX_HOME)
     env = dict(kwargs.pop("env", {}) or {})
     env.setdefault("CODEX_HOME", str(codex_home))
     kwargs.setdefault("default_model", SDK_EVOLUTION_CODEX_MODEL)
     kwargs.setdefault("reuse_process", True)
+    if codex_bin is not None:
+        from openai_codex import CodexConfig
+
+        kwargs.setdefault("config_cls", partial(CodexConfig, codex_bin=codex_bin))
     return CodexAgentRuntime(env=env, **kwargs)
 
 
@@ -152,10 +157,17 @@ def _antigravity_evolution_runtime(**kwargs: Any) -> AntigravityAgentRuntime:
     return AntigravityAgentRuntime(**kwargs)
 
 
-def resolve_runtime(kind: str, *, registry: RuntimeRegistry | None = None) -> AgentRuntime:
+def resolve_runtime(
+    kind: str, *, registry: RuntimeRegistry | None = None, codex_bin: str | None = None
+) -> AgentRuntime:
     """Resolve a runtime through agent-runtime-kit and verify availability."""
 
-    registry = registry or build_registry()
+    if codex_bin is not None:
+        if kind != "codex-agent-sdk":
+            raise ValueError("codex_bin requires the codex-agent-sdk runtime")
+        if registry is not None:
+            raise ValueError("codex_bin cannot be combined with an injected registry")
+    registry = registry or build_registry(codex_bin=codex_bin)
     runtime = registry.resolve(kind)
     availability = runtime.availability()
     if not availability.available:
@@ -188,6 +200,8 @@ async def run_stage(
         permissions=permissions,
         event_sink=context.event_sink,
         output_schema=schema,
+        model=context.model,
+        reasoning_effort=context.reasoning_effort,
         metadata=_stage_metadata(runtime, stage=stage, context=context),
     )
     try:
@@ -990,8 +1004,10 @@ def _stage_metadata(
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {"stage": stage, "run_id": context.run_id}
     if runtime.kind is AgentRuntimeKind.CODEX_AGENT_SDK:
-        metadata["model"] = SDK_EVOLUTION_CODEX_MODEL
-        metadata["reasoning_effort"] = SDK_EVOLUTION_CODEX_REASONING_EFFORT
+        metadata["model"] = context.model or SDK_EVOLUTION_CODEX_MODEL
+        metadata["reasoning_effort"] = (
+            context.reasoning_effort or SDK_EVOLUTION_CODEX_REASONING_EFFORT
+        )
     return metadata
 
 

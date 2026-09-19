@@ -177,6 +177,35 @@ def test_antigravity_mcp_stdio_server_requires_name() -> None:
     assert server.name == "fs"
 
 
+def test_antigravity_permissive_deny_list_preserves_other_tools() -> None:
+    pytest.importorskip("google.antigravity")
+    from google.antigravity import types
+    from google.antigravity.connections import connection
+
+    from agent_runtime_kit import AgentTask, PermissionMode, PermissionProfile
+    from agent_runtime_kit.adapters.antigravity import AntigravityAgentRuntime, _capability_policy
+
+    runtime = AntigravityAgentRuntime(api_key="test-no-network")
+    task = AgentTask(
+        goal="Inspect permissions only",
+        permissions=PermissionProfile(
+            mode=PermissionMode.PERMISSIVE, disallowed_tools=("run_command",)
+        ),
+    )
+    capabilities, _ = _capability_policy(runtime.kind, task, runtime._load_sdk())
+    expected = set(types.BuiltinTools.all_tools()) - {types.BuiltinTools.RUN_COMMAND}
+    # 0.1.17 subtracts disabled_tools from default(), excluding ASK_QUESTION.
+    # Earlier SDKs used all tools as that implicit baseline.
+    resolver = getattr(connection, "resolve_active_tools", None)
+    if resolver is not None:
+        actual = resolver(capabilities)
+    elif capabilities.enabled_tools is not None:
+        actual = set(capabilities.enabled_tools)
+    else:
+        actual = set(types.BuiltinTools.all_tools()) - set(capabilities.disabled_tools or [])
+    assert actual == expected
+
+
 def test_antigravity_policy_and_config() -> None:
     pytest.importorskip("google.antigravity")
     from google.antigravity.connections.local.local_connection_config import LocalAgentConfig

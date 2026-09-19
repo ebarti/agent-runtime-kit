@@ -66,7 +66,7 @@ PACKAGE_SOURCE_HINTS: dict[str, tuple[SourceRef, ...]] = {
         SourceRef(
             kind="docs",
             label="OpenAI Codex SDK docs",
-            url="https://developers.openai.com/codex/sdk",
+            url="https://learn.chatgpt.com/docs/codex-sdk",
         ),
     ),
     "openai-codex-cli-bin": (

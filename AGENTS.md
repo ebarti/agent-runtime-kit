@@ -57,10 +57,10 @@ capabilities needed for real work.
 |------------|---------|---------|-----------------|
 | Python | >=3.10 | Package runtime | Claude Agent SDK, Codex SDK, and Google Antigravity all currently advertise Python 3.10+ compatibility. |
 | Pydantic | 2.13.4 current; use >=2.12 | Public request/result validation where useful | Mature typed validation without forcing callers into framework-specific models. |
-| claude-agent-sdk | 0.2.148 current | Claude runtime adapter | Official Agent SDK for Claude Code-style local agent execution. |
-| openai-codex | 0.147.0 current | Codex runtime adapter | Official Python SDK for Codex app-server integration. |
-| openai-codex-cli-bin | 0.147.0 current compatible | Codex runtime dependency | Exact runtime dependency selected by openai-codex 0.147.0; standalone 0.149.0 is not independently usable in this lane. |
-| google-antigravity | 0.1.15 current | Antigravity runtime adapter | Official Google Antigravity Python SDK for local agent harness integration. |
+| claude-agent-sdk | 0.2.157 current | Claude runtime adapter | Official Agent SDK for Claude Code-style local agent execution. |
+| openai-codex | 0.154.0 current | Codex runtime adapter | Official Python SDK for Codex app-server integration. |
+| openai-codex-cli-bin | 0.154.0 current compatible | Codex runtime dependency | Exact runtime dependency selected by openai-codex 0.154.0; keep the SDK and CLI coupled. |
+| google-antigravity | 0.1.17 current | Antigravity runtime adapter | Official Google Antigravity Python SDK for local agent harness integration. |
 | anyio or asyncio | stdlib plus optional anyio | Async runtime compatibility | Vendor SDKs are async; the public API should be async-first. |
 | OpenTelemetry API | 1.42.1 current | Optional event/trace integration | Mestre already normalizes agent events into span-event-shaped payloads; community users will expect observability hooks. |
 
@@ -125,10 +125,10 @@ capabilities needed for real work.
 
 | Package | Current Version Checked | Python | Notes |
 |---------|-------------------------|--------|-------|
-| claude-agent-sdk | 0.2.148 | >=3.10 | Adapter-contract tests must detect option-surface drift. |
-| openai-codex | 0.147.0 | >=3.10 | Pre-1.0 package; isolate Codex SDK API drift behind adapter boundaries. |
-| openai-codex-cli-bin | 0.147.0 | >=3.10 | Exact runtime dependency for openai-codex 0.147.0. |
-| google-antigravity | 0.1.15 | >=3.10 | Includes compiled runtime wheels; install from PyPI rather than source checkout. |
+| claude-agent-sdk | 0.2.157 | >=3.10 | Adapter-contract tests must detect option-surface drift. |
+| openai-codex | 0.154.0 | >=3.10 | Pre-1.0 package; isolate Codex SDK API drift behind adapter boundaries. |
+| openai-codex-cli-bin | 0.154.0 | >=3.10 | Exact runtime dependency for openai-codex 0.154.0. |
+| google-antigravity | 0.1.17 | >=3.10 | Includes compiled runtime wheels; install from PyPI rather than source checkout. |
 | google-genai | 2.8.0 | >=3.10 | Not a core runtime adapter dependency unless Antigravity or future Google direct paths need it. |
 
 ## Sources
