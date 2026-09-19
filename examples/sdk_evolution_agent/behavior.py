@@ -868,18 +868,26 @@ def _probe_claude(*, version: str | None, scope: str) -> BehaviorProbeResult:
         "output_format",
     }
     missing = sorted(expected - fields)
+    cases, failures = _configuration_contract_cases(package)
+    failed = bool(missing or failures)
     return BehaviorProbeResult(
         package=package,
         version=version,
         scope=scope,
         probe="adapter-contract",
-        status="fail" if missing else "pass",
+        status="fail" if failed else "pass",
         summary=(
-            "ClaudeAgentOptions exposes required adapter fields."
-            if not missing
-            else "ClaudeAgentOptions is missing required adapter fields."
+            "ClaudeAgentOptions exposes and constructs required adapter options."
+            if not failed
+            else "ClaudeAgentOptions rejected the required adapter contract."
         ),
-        details={"fields": sorted(fields), "required_fields": sorted(expected), "missing": missing},
+        details={
+            "fields": sorted(fields),
+            "required_fields": sorted(expected),
+            "missing": missing,
+            "construction_cases": cases,
+            "construction_failures": failures,
+        },
     )
 
 
@@ -896,16 +904,18 @@ def _probe_codex(*, version: str | None, scope: str) -> BehaviorProbeResult:
     missing_run = sorted(expected_run - run_params)
     missing_start = sorted(expected_start - start_params)
     missing = missing_run + [f"thread_start.{item}" for item in missing_start]
+    cases, failures = _configuration_contract_cases(package)
+    failed = bool(missing or failures)
     return BehaviorProbeResult(
         package=package,
         version=version,
         scope=scope,
         probe="adapter-contract",
-        status="fail" if missing else "pass",
+        status="fail" if failed else "pass",
         summary=(
-            "Codex thread APIs expose required adapter parameters."
-            if not missing
-            else "Codex thread APIs are missing required adapter parameters."
+            "Codex configuration and wire parameters construct the required adapter contract."
+            if not failed
+            else "Codex configuration or thread APIs rejected the required adapter contract."
         ),
         details={
             "run_params": sorted(run_params),
@@ -913,8 +923,74 @@ def _probe_codex(*, version: str | None, scope: str) -> BehaviorProbeResult:
             "required_run_params": sorted(expected_run),
             "required_start_params": sorted(expected_start),
             "missing": missing,
+            "construction_cases": cases,
+            "construction_failures": failures,
         },
     )
+
+
+def _configuration_contract_cases(package: str) -> tuple[list[str], list[str]]:
+    """Construct real provider values without starting clients or reading auth.
+
+    This self-contained function is also embedded in isolated candidate probes.
+    """
+    import importlib
+
+    cases: list[str] = []
+    failures: list[str] = []
+    try:
+        if package == "claude-agent-sdk":
+            cases.append("claude-options")
+            sdk = importlib.import_module("claude_agent_sdk")
+            options = sdk.ClaudeAgentOptions(
+                permission_mode="plan",
+                allowed_tools=["Read"],
+                disallowed_tools=["Bash"],
+                system_prompt="Inspect only",
+                cwd=".",
+                resume="test-session",
+                max_budget_usd=1.0,
+                env={},
+                mcp_servers={"files": {"type": "stdio", "command": "test-mcp", "args": []}},
+                output_format={"type": "json_schema", "schema": {"type": "object"}},
+            )
+            if options.permission_mode != "plan" or options.max_budget_usd != 1.0:
+                raise ValueError("permission or budget was not preserved")
+        elif package == "openai-codex":
+            sdk = importlib.import_module("openai_codex")
+            wire = importlib.import_module("openai_codex.generated.v2_all")
+            cases.append("codex-config")
+            config = sdk.CodexConfig(cwd=".", config_overrides=("features.plugins=false",), env={})
+            if config.cwd != ".":
+                raise ValueError("working directory was not preserved")
+            cases.append("codex-thread-permissions")
+            thread = wire.ThreadStartParams(
+                cwd=".",
+                developer_instructions="Inspect only",
+                model="requested-model",
+                approval_policy="never",
+                sandbox="read-only",
+            )
+            if thread.model_dump(mode="json", by_alias=True)["sandbox"] != "read-only":
+                raise ValueError("thread sandbox was not preserved")
+            cases.append("codex-turn-schema-and-effort")
+            turn = wire.TurnStartParams(
+                thread_id="test-thread",
+                input=[],
+                cwd=".",
+                model="requested-model",
+                approval_policy="never",
+                sandbox_policy={"type": "readOnly"},
+                effort="xhigh",
+                output_schema={"type": "object"},
+            )
+            values = turn.model_dump(mode="json", by_alias=True)
+            if values["effort"] != "xhigh" or values["outputSchema"] != {"type": "object"}:
+                raise ValueError("reasoning effort or schema was not preserved")
+    except Exception as exc:
+        # These values are fixed fixtures, but keep diagnostics free of local paths.
+        failures.append(f"{cases[-1] if cases else package}:{type(exc).__name__}")
+    return cases, failures
 
 
 def _probe_codex_cli_bin(*, version: str | None, scope: str) -> BehaviorProbeResult:
@@ -1206,8 +1282,11 @@ def _string_or_none(value: object) -> str | None:
     return text or None
 
 
-_PROBE_SCRIPT = textwrap.dedent(
-    r"""
+_PROBE_SCRIPT = (
+    inspect.getsource(_configuration_contract_cases)
+    + "\n"
+    + textwrap.dedent(
+        r"""
     import importlib
     import importlib.metadata
     import inspect
@@ -1280,15 +1359,20 @@ _PROBE_SCRIPT = textwrap.dedent(
                 "max_budget_usd", "output_format",
             }
             missing = sorted(expected - option_fields)
+            cases, failures = _configuration_contract_cases(package)
+            contract_failed = bool(missing or failures)
             payload = [result(
                 "adapter-contract",
-                "fail" if missing else "pass",
-                "ClaudeAgentOptions exposes required adapter fields." if not missing
-                else "ClaudeAgentOptions is missing required adapter fields.",
+                "fail" if contract_failed else "pass",
+                "ClaudeAgentOptions exposes and constructs required adapter options."
+                if not contract_failed
+                else "ClaudeAgentOptions rejected the required adapter contract.",
                 {
                     "fields": sorted(option_fields),
                     "required_fields": sorted(expected),
                     "missing": missing,
+                    "construction_cases": cases,
+                    "construction_failures": failures,
                 },
             )]
         elif package == "openai-codex":
@@ -1300,17 +1384,22 @@ _PROBE_SCRIPT = textwrap.dedent(
             missing_run = sorted(expected_run - run_params)
             missing_start = sorted(expected_start - start_params)
             missing = missing_run + [f"thread_start.{item}" for item in missing_start]
+            cases, failures = _configuration_contract_cases(package)
+            contract_failed = bool(missing or failures)
             payload = [result(
                 "adapter-contract",
-                "fail" if missing else "pass",
-                "Codex thread APIs expose required adapter parameters." if not missing
-                else "Codex thread APIs are missing required adapter parameters.",
+                "fail" if contract_failed else "pass",
+                "Codex configuration and wire parameters construct the required adapter contract."
+                if not contract_failed
+                else "Codex configuration or thread APIs rejected the required adapter contract.",
                 {
                     "run_params": sorted(run_params),
                     "start_params": sorted(start_params),
                     "required_run_params": sorted(expected_run),
                     "required_start_params": sorted(expected_start),
                     "missing": missing,
+                    "construction_cases": cases,
+                    "construction_failures": failures,
                 },
             )]
         elif package == "openai-codex-cli-bin":
@@ -1395,4 +1484,5 @@ _PROBE_SCRIPT = textwrap.dedent(
 
     print(json.dumps(payload, sort_keys=True))
     """
-).strip()
+    ).strip()
+)

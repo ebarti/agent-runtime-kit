@@ -66,13 +66,26 @@ env -u UV_EXCLUDE_NEWER \
   uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
 ```
 
-Codex-backed SDK evolution runs explicitly choose `gpt-5.5` with
+Codex-backed SDK evolution runs default to `gpt-5.5` with
 `reasoning_effort=xhigh` for the AI stages that analyze direction, decide the
 update plan, and review the result. Dependency application and verification are
 deterministic. This model policy
 is applied only to `codex-agent-sdk`; Claude and Antigravity runs keep their
 provider-native model selection because `gpt-5.5` is not a valid model override
 for those adapters.
+Use `--model` and `--reasoning-effort` to select the requested model explicitly
+for every AI stage. For example, use `--model gpt-6-astra --reasoning-effort xhigh`.
+These options populate the first-class `AgentTask` fields and are recorded in
+`config.json`; unsupported provider values remain provider errors.
+
+If the locked Codex CLI cannot run the requested analysis model, the optional
+`--codex-bin /absolute/path/to/codex` selects an installed executable through
+the SDK's supported `CodexConfig.codex_bin`. It applies only to the analysis
+driver and is recorded separately in `config.json`. Exact baseline/candidate
+inspection and the SDK/CLI dependency coupling still use the published package
+versions. Omit this override for the required post-update run against the final
+locked SDK and bundled CLI. The override requires `--runtime codex-agent-sdk`
+and cannot be combined with an injected runtime or registry.
 Vendor runtimes also enable `reuse_process=True` for the multi-stage run, so
 compatible SDK subprocesses can stay warm across analysis/review stages and are
 closed by the CLI when the internally owned runtime exits. Codex reuses its
@@ -157,7 +170,15 @@ failures are retried. Candidate inspection writes the exact compatibility
 transition to `api_diffs.json` and executes the adapter contract against that
 same version. Independently, recent-release inspection fingerprints shipped
 files and Python AST definitions, compares adjacent releases, and writes the
-result to `implementation_diffs.json`. Source is never copied into the report;
+result to `implementation_diffs.json`. History also includes the exact locked
+baseline and candidate when they fall outside the latest three releases, so
+the changes between the installed baseline and the recent releases remain
+visible. Claude probes construct permission, budget, session, MCP and schema
+options; Codex probes construct configuration and validated thread/turn wire
+parameters, including permissions, reasoning effort and structured output.
+These checks complement real-adapter regression tests and live runtime checks;
+they do not establish behavior inside opaque executables.
+Source is never copied into the report;
 only paths, counts, sizes, and hashes are retained. Candidate inspection is
 opt-in because it executes freshly downloaded upstream code; historical
 inspection uses the same explicit consent. Without the flag, missing trend

@@ -207,11 +207,13 @@ silently redirected to the Gemini API by an exported environment key. When no
 model is supplied, the adapter preserves the vendor default (`gemini-3.8-flash`
 in Antigravity 0.1.16); supply `default_model` or `AgentTask.model` when a stable
 model selection is required. Under
-`PERMISSIVE`, `disallowed_tools` maps to `CapabilitiesConfig.disabled_tools`
-(the baseline is every tool, so "enable everything else" is exact); under any
-other posture the deny-list is folded into an allow-list of the mode's baseline
-minus the denied tools, so denying one tool can never re-enable others past the
-baseline. An allow-list and a deny-list are mutually exclusive (the SDK forbids
+`PERMISSIVE`, `disallowed_tools` becomes an explicit `enabled_tools` list of all
+built-in tools minus the denied tools. Antigravity 0.1.17 changed its implicit
+deny-list baseline to exclude `ask_question`; using an explicit list preserves
+the adapter's existing all-tools contract. Under other postures the deny-list
+is subtracted from the mode's narrower baseline, so denying one tool can never
+re-enable others past that baseline. An allow-list and a deny-list are mutually
+exclusive (the SDK forbids
 combining enabled and disabled tool lists), so supplying both is rejected. Tool
 names are validated against the
 `BuiltinTools` enum (`"view_file"`, not `"Read"`). `budget_usd` and

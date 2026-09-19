@@ -212,6 +212,9 @@ class RunOptions:
     pr_base: str | None = None
     commit_message: str = "Run SDK evolution update"
     pr_title: str = "Adapt agent-runtime-kit to upstream SDK evolution"
+    model: str | None = None
+    reasoning_effort: str | None = None
+    codex_bin: str | None = None
 
 
 @dataclass(frozen=True)
@@ -226,6 +229,8 @@ class RunContext:
     implementation_enabled: bool
     draft_pr: bool
     event_sink: Any | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True)

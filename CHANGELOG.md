@@ -9,14 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Updated tested Claude Agent SDK to `0.2.152` and Google Antigravity SDK to
-  `0.1.16`; the Codex SDK and its coupled CLI remain at `0.147.0`.
+- Updated tested Claude Agent SDK to `0.2.157`, Google Antigravity SDK to
+  `0.1.17`, and the Codex SDK and its exactly coupled CLI to `0.154.0`.
+- SDK evolution supports explicit model, reasoning effort and analysis executable
+  options, preserves older locked baselines in implementation history, and
+  constructs real Claude options and Codex wire parameters in candidate probes.
 - Upgrade skill invocations now include necessary runtime adaptations,
   verification, and a regular pull request. Explicit report-only and local-only
   requests retain their narrower scope.
 
 ### Fixed
 
+- Antigravity permissive deny-lists preserve all unrelated tools when the SDK's
+  default tool set changes, including the `ask_question` change in 0.1.17.
+- Codex release evidence uses the current official documentation endpoints.
 - Antigravity preserves explicit `vertex=True` with an API key for Vertex
   Express authentication, rejects mixed regional credentials, and refuses older
   SDKs or configurations that would silently drop the requested endpoint.

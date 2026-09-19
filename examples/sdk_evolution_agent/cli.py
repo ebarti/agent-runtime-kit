@@ -86,6 +86,14 @@ def parse_args(argv: list[str] | None = None) -> RunOptions:
         dest="packages",
         help="Vendor SDK package to inspect. Repeat to inspect multiple packages.",
     )
+    parser.add_argument("--model", help="Explicit model for every AI analysis and review stage.")
+    parser.add_argument(
+        "--reasoning-effort", help="Provider-native reasoning effort for AI stages."
+    )
+    parser.add_argument(
+        "--codex-bin",
+        help="Codex analysis executable override; does not change inspected SDK/CLI versions.",
+    )
     parser.add_argument(
         "--report-dir",
         type=Path,
@@ -128,6 +136,8 @@ def parse_args(argv: list[str] | None = None) -> RunOptions:
         help="Draft PR title.",
     )
     args = parser.parse_args(argv)
+    if args.codex_bin and args.runtime != "codex-agent-sdk":
+        parser.error("--codex-bin requires --runtime codex-agent-sdk")
     return RunOptions(
         workspace=Path.cwd(),
         runtime=args.runtime,
@@ -142,6 +152,9 @@ def parse_args(argv: list[str] | None = None) -> RunOptions:
         pr_base=args.pr_base,
         commit_message=args.commit_message,
         pr_title=args.pr_title,
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
+        codex_bin=args.codex_bin,
     )
 
 
@@ -168,8 +181,14 @@ async def run_agent(
         implementation_enabled=options.implementation_enabled,
         draft_pr=options.draft_pr,
         event_sink=event_sink,
+        model=options.model,
+        reasoning_effort=options.reasoning_effort,
     )
-    selected_runtime = runtime or resolve_runtime(options.runtime, registry=registry)
+    if options.codex_bin is not None and (runtime is not None or registry is not None):
+        raise ValueError("--codex-bin cannot be combined with an injected runtime or registry")
+    selected_runtime = runtime or resolve_runtime(
+        options.runtime, registry=registry, codex_bin=options.codex_bin
+    )
     close_owned_runtime = runtime is None
     try:
         pre_run_results: list[dict[str, Any]] = []
@@ -245,6 +264,8 @@ async def run_agent(
                 implementation_enabled=context.implementation_enabled,
                 draft_pr=context.draft_pr,
                 event_sink=event_sink,
+                model=options.model,
+                reasoning_effort=options.reasoning_effort,
             ),
         )
         implementation = await maybe_run_implementation(
@@ -728,15 +749,15 @@ def _collect_implementation_snapshots(
             ]
             history.extend(matching[:1])
             continue
-        versions = _ordered_versions(recent)
-        if len(versions) < 2:
-            versions = _ordered_versions(
-                [
-                    *recent,
-                    str(package.get("locked_version") or ""),
-                    str(package.get("candidate_version") or ""),
-                ]
-            )
+        # The locked baseline can fall outside the latest three releases. Always
+        # include it so direction analysis covers the actual upgrade interval.
+        versions = _ordered_versions(
+            [
+                *recent,
+                str(package.get("locked_version") or ""),
+                str(package.get("candidate_version") or ""),
+            ]
+        )
         for version in versions:
             snapshot = by_exact_version.get((name, version))
             if snapshot is None:

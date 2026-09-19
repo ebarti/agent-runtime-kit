@@ -54,12 +54,17 @@ env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
 
 If authentication fails, report the concrete blocker. Do not scrape or
 reconstruct credentials. Honor an explicitly requested model and reasoning
-effort rather than silently using the runner's defaults. Verify that selection
-with a small structured runtime call before expensive collection. The installed
+effort rather than silently using the runner's defaults. Pass explicit runner
+options such as `--model gpt-6-astra --reasoning-effort xhigh`; `config.json`
+records them, and each AI stage uses the corresponding first-class task fields.
+Verify that selection with a small structured runtime call before expensive
+collection. The installed
 SDK's supported `CodexConfig.codex_bin` and the adapter's `config_cls` injection
 can select an already-installed executable when the bundled CLI cannot run the
 requested model. Record that analysis-driver override separately from the
 inspected and locked SDK/CLI versions; it does not establish package compatibility.
+The runner exposes this supported configuration as `--codex-bin /absolute/path/to/codex`.
+Omit that override for the post-update verification through the final bundled CLI.
 
 ## Evidence Pass
 
