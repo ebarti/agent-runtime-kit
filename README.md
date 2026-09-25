@@ -48,7 +48,8 @@ python -m pip install "agent-runtime-kit[antigravity]" # Google Antigravity SDK
 ```
 
 `agent-runtime-kit[all]` installs all three. A real task may use a paid provider
-and may invoke tools. After setting up the chosen provider, run one explicitly:
+and may invoke tools. After setting up the chosen provider, run one explicitly
+from a source checkout:
 
 ```bash
 python -m examples.provider_task claude
