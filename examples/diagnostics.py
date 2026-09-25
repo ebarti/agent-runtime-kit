@@ -3,19 +3,22 @@
 import argparse
 import asyncio
 
-from agent_runtime_kit import AgentKit
+from agent_runtime_kit import AgentKit, ReadinessStatus
 
 
-async def main(provider: str, probe_readiness: bool) -> None:
+async def main(provider: str, probe_readiness: bool) -> int:
     async with AgentKit() as kit:
         availability = kit.availability_for(provider)
         print(f"{provider} package: {'available' if availability.available else 'unavailable'}")
         if not availability.available:
             print(availability.message)
+        success = availability.available
         if probe_readiness:
             readiness = await kit.readiness_for(provider)
             print(f"{provider} readiness: {readiness.status.value}")
             print(readiness.message)
+            success = success and readiness.status is ReadinessStatus.READY_TO_ATTEMPT
+        return 0 if success else 1
 
 
 if __name__ == "__main__":
@@ -27,4 +30,4 @@ if __name__ == "__main__":
         help="probe provider setup without running an agent task",
     )
     arguments = parser.parse_args()
-    asyncio.run(main(arguments.provider, arguments.probe_readiness))
+    raise SystemExit(asyncio.run(main(arguments.provider, arguments.probe_readiness)))
