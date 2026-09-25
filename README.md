@@ -1,182 +1,78 @@
 # agent-runtime-kit
 
-`agent-runtime-kit` is a small Python runtime layer for agent SDKs. It gives
-applications one typed async API for dispatching an agentic task through Claude
-Agent SDK, OpenAI Codex SDK, or Google Antigravity SDK while keeping provider
-capabilities visible.
+`agent-runtime-kit` gives Python 3.10+ applications one typed, async API for
+running coding-agent tasks with Claude Agent SDK, OpenAI Codex SDK, or Google
+Antigravity SDK. It exposes capability checks, events, diagnostics, and results
+while keeping each provider's permissions and supported inputs explicit.
 
-**Tags:** `agent-sdk` `agent-runtime` `coding-agents` `claude-code`
-`openai-codex` `google-antigravity` `mcp` `typed-python` `async-python`
-`developer-tools`
+## Install and try it offline
 
-## About
-
-`agent-runtime-kit` is for Python developers who want to run coding-agent tasks
-through vendor runtimes without rewriting their application around each SDK. It
-normalizes the runtime boundary: task inputs, capability checks, event streams,
-tool audits, package/readiness diagnostics, and typed results.
-
-The library keeps vendor differences visible. Claude, Codex, and Antigravity
-still expose different capabilities, permission models, setup requirements, and
-unsupported fields. `agent-runtime-kit` gives those differences a consistent
-shape instead of hiding them behind a lowest-common-denominator wrapper.
-
-The package is intentionally not a router, benchmark harness, queue, hosted
-service, or full agent framework. It is the reusable layer underneath those
-systems: task models, runtime capabilities, event sinks, package/readiness
-diagnostics, and adapters.
-
-## Install
-
-If you want all first-party runtimes available, install the `all` extra:
+The core install has no vendor SDK or credential requirement:
 
 ```bash
-pip install "agent-runtime-kit[all]"
+python -m pip install agent-runtime-kit
 ```
-
-Install the vendor-SDK-free core when you only need the public models, fake
-runtime, registry, diagnostics types, or you plan to add provider SDKs later:
-
-```bash
-pip install agent-runtime-kit
-```
-
-Install a single provider extra when your application only dispatches through
-one vendor runtime:
-
-```bash
-pip install "agent-runtime-kit[claude]"
-pip install "agent-runtime-kit[codex]"
-pip install "agent-runtime-kit[antigravity]"
-```
-
-Provider extras are a packaging boundary, not a separate API. They keep the
-core importable without vendor SDKs, avoid forcing every user to install every
-CLI binary or compiled runtime wheel, and contain dependency drift when one
-fast-moving vendor SDK changes independently of the others. Missing adapters
-raise typed setup errors that point to the matching extra.
 
 ```python
 import asyncio
 
-from agent_runtime_kit import AgentTask, FakeAgentRuntime
-
-
-async def main() -> None:
-    runtime = FakeAgentRuntime(output="done")
-    result = await runtime.run(AgentTask(goal="Summarize this repository"))
-    print(result.output)
-
-
-asyncio.run(main())
-```
-
-The core package has no Claude, Codex, or Antigravity dependency. Vendor SDKs
-are added through optional extras.
-
-## Real Providers
-
-`AgentKit` is the keyword-native hub: it registers the built-in runtimes,
-caches them per kind, and turns Python types into structured output.
-
-```python
-import asyncio
-from dataclasses import dataclass
-
-from agent_runtime_kit import AgentKit, ReadinessStatus
-
-
-@dataclass
-class RepoSummary:
-    name: str
-    languages: list[str]
+from agent_runtime_kit import AgentKit, FakeAgentRuntime
 
 
 async def main() -> None:
     async with AgentKit() as kit:
-        readiness = await kit.readiness_for("claude")
-        if readiness.status is ReadinessStatus.NOT_READY:
-            raise RuntimeError(readiness.message)
         result = await kit.run(
-            "claude",
-            goal="Summarize this repository",
-            permissions="strict",
-            output_type=RepoSummary,
+            FakeAgentRuntime(output="offline example complete"),
+            goal="Demonstrate a task result",
         )
-        print(result.parsed.languages if result.parsed else result.error)
+        if not result.is_success:
+            raise RuntimeError(result.error or result.finish_reason)
+        print(result.output)
 
 
 asyncio.run(main())
 ```
 
-Adapters also work standalone when you need vendor-specific configuration:
+This prints `offline example complete`. The fake runtime returns a deterministic
+result; it does not inspect the repository or contact a provider. Run the file
+version with `python -m examples.basic_offline` from a source checkout.
 
-```python
-import asyncio
+## Run a real provider
 
-from agent_runtime_kit import AgentTask, ReadinessStatus, check_readiness
-from agent_runtime_kit.adapters import ClaudeAgentRuntime
+Install only the provider you use, then configure its supported authentication:
 
-
-async def main() -> None:
-    runtime = ClaudeAgentRuntime(default_model="claude-sonnet-4-6")
-    readiness = await check_readiness(runtime)
-    if readiness.status is ReadinessStatus.NOT_READY:
-        raise RuntimeError(readiness.message)
-    result = await runtime.run(AgentTask(goal="Summarize this repository"))
-    print(result.output)
-
-
-asyncio.run(main())
+```bash
+python -m pip install "agent-runtime-kit[claude]"      # Claude Agent SDK
+python -m pip install "agent-runtime-kit[codex]"       # OpenAI Codex SDK
+python -m pip install "agent-runtime-kit[antigravity]" # Google Antigravity SDK
 ```
 
-## Runtime Fields
+`agent-runtime-kit[all]` installs all three. A real task may use a paid provider
+and may invoke tools. After setting up the chosen provider, run one explicitly:
 
-`AgentTask` supports goal, system prompt, model, reasoning effort, working
-directory, permission profile, MCP stdio servers, session/resume handles, output
-schema, budget, metadata, and an async event sink. (`model` and
-`reasoning_effort` are first-class fields; the legacy `metadata["model"]` /
-`metadata["reasoning_effort"]` aliases still work.) Where a runtime cannot honor
-a field (for example only Claude maps `budget_usd`; Codex and Antigravity reject
-it with a typed `UnsupportedTaskInputError`) the adapter raises rather than
-silently dropping it.
+```bash
+python -m examples.provider_task claude
+```
 
-Model selection follows one explicit precedence chain: `AgentTask.model`, then
-legacy `metadata["model"]`, then an adapter's `default_model=` constructor
-override, then the provider's native configuration/default. Adapters omit the
-vendor model option at the final step rather than pinning a library-owned model.
-Results record `metadata["model_source"]`; `metadata["model"]` appears only when
-the kit knows the selected value.
+Choose `codex` or `antigravity` instead to use that runtime. The example checks
+package availability, probes setup, requests read-only filesystem access, and
+checks `result.is_success`. Readiness only indicates whether a task is worth
+attempting; it cannot guarantee the provider will accept the request.
 
-Call `validate_task(runtime, task)` (or `kit.validate_task("codex", task)`) to
-inspect every statically detectable incompatibility before dispatch. The
-returned `TaskSupportReport` is side-effect-free and lists source fields such as
-`budget_usd` and `permissions.network`; `run()` still fails closed on the first
-issue. Third-party runtimes can opt into provider-specific checks with the
-`TaskSupportProvider` protocol, while older `AgentRuntime` implementations
-continue to work through capability-based fallback checks.
+The adapters share `AgentTask` and `AgentResult`, but inputs are not silently
+discarded. For example, Claude supports per-task MCP servers and a cost budget;
+Codex does not expose either per task; Antigravity supports MCP servers without
+per-server environment values. Unsupported inputs raise typed errors. The
+provider's native model selection is used unless you set a model explicitly.
 
-`availability()` is deliberately synchronous, side-effect-free, and package-only.
-Use `await check_readiness(runtime)` (or `kit.readiness_for(...)`) for an explicit,
-bounded credential/setup probe. `READY_TO_ATTEMPT` means setup was positively
-detected, not that a future provider call is guaranteed to succeed;
-`INDETERMINATE` lets callers decide whether to attempt provider-chain or local
-login authentication. Probe failures and timeouts never include credential values.
+## Guides
 
-`AgentResult` returns output, finish reason (see `FinishReason`), locally
-validated structured output, usage, cost, session id, tool-call audits, and
-provider metadata. `is_success` is true only for a natural, error-free
-completion. Unknown usage and cost fields are `None`; reported zero remains
-distinct. `parsed_output_available` distinguishes an absent payload from valid
-JSON `null` (both use `parsed_output=None`). `artifacts` is a reserved field: no
-built-in runtime populates it yet, so it is always an empty tuple today.
+- [Quickstart](docs/quickstart.md): install, offline result, and first provider run
+- [Examples](examples/README.md): runnable commands and expected results
+- [Recipes](docs/recipes.md): results, events, preflight, permissions, sessions, and MCP
+- [Provider diagnostics](docs/providers.md) and [capability matrix](docs/capability-matrix.md)
+- [Deadlines and cancellation](docs/task-control.md) and [API stability](docs/api-stability.md)
+- [Live smoke tests](docs/live-smoke.md) and [SDK evolution agent](docs/sdk-evolution-agent.md)
 
-## Docs
-
-- [Quickstart](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/quickstart.md)
-- [Provider diagnostics](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/providers.md)
-- [Capability matrix](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/capability-matrix.md)
-- [API stability](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/api-stability.md)
-- [Live smoke tests](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/live-smoke.md)
-- [Deadlines and cancellation](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/task-control.md)
-- [SDK evolution agent](https://github.com/ebarti/agent-runtime-kit/blob/main/docs/sdk-evolution-agent.md)
+The package is a runtime layer, not a router, queue, hosted service, or full
+agent framework. Applications choose when and where to run a task.
