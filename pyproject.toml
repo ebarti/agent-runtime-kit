@@ -46,14 +46,14 @@ dependencies = ["jsonschema>=4.18,<5", "tomli>=2,<3; python_version < '3.11'"]
 # already-installed users from a surprise vendor release. The sdk-evolution agent
 # raises these deliberately after verifying a new version.
 claude = ["claude-agent-sdk>=0.2.87,<0.3"]
-# 0.1.0b3 floor: earlier betas pin a codex binary with no manylinux wheels,
-# making the extra uninstallable on glibc Linux.
-codex = ["openai-codex>=0.1.0b3,<0.155"]
+# 0.157.1 is the tested SDK and CLI pair for native named profiles. Earlier
+# bundled CLIs do not enforce every profile rule needed by restricted runtimes.
+codex = ["openai-codex>=0.157.1,<0.158"]
 antigravity = ["google-antigravity>=0.1.2,<0.2"]
 all = [
     "claude-agent-sdk>=0.2.87,<0.3",
     "google-antigravity>=0.1.2,<0.2",
-    "openai-codex>=0.1.0b3,<0.155",
+    "openai-codex>=0.157.1,<0.158",
 ]
 
 [project.urls]
