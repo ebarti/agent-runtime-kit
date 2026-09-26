@@ -5,10 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+    import tomli as tomllib
 
 from agent_runtime_kit._control import RuntimeTaskController
 from agent_runtime_kit._errors import AgentRuntimeUnavailableError
@@ -194,7 +198,7 @@ class CodexAgentRuntime:
             selection=selection,
             supported_models=self._supported_models,
         )
-        profile_issue = self._native_profile_issue(task.permissions.native_profile)
+        profile_issue = self._native_profile_issue(task)
         return TaskSupportReport(
             kind=self.kind,
             issues=report.issues
@@ -202,40 +206,53 @@ class CodexAgentRuntime:
             + ((profile_issue,) if profile_issue is not None else ()),
         )
 
-    def _native_profile_issue(self, profile: str | None) -> TaskSupportIssue | None:
-        if profile is None:
+    def _native_profile_issue(self, task: AgentTask) -> TaskSupportIssue | None:
+        if task.permissions.native_profile is None:
             return None
-        if any(
-            override.split("=", 1)[0].strip()
-            in {"sandbox_mode", "sandbox_workspace_write", "default_permissions"}
-            or override.split("=", 1)[0].strip().startswith("sandbox_workspace_write.")
-            for override in self._config_overrides
-        ):
-            return TaskSupportIssue(
-                "permissions.native_profile",
-                "named profiles cannot be combined with legacy sandbox "
-                "or conflicting profile overrides",
-            )
+        for override in self._config_overrides:
+            try:
+                parsed = tomllib.loads(override)
+            except tomllib.TOMLDecodeError:
+                return TaskSupportIssue(
+                    "permissions.native_profile", "cannot inspect a Codex configuration override"
+                )
+            if _has_key(parsed, {"sandbox_mode", "sandbox_workspace_write", "default_permissions"}):
+                return TaskSupportIssue(
+                    "permissions.native_profile",
+                    "named profiles cannot be combined with legacy sandbox "
+                    "or conflicting profile overrides",
+                )
         codex_home = (self._env or {}).get("CODEX_HOME") or os.environ.get("CODEX_HOME")
-        config_path = (
+        config_paths = [
             Path(codex_home) / "config.toml"
             if codex_home
-            else Path.home() / ".codex" / "config.toml"
-        )
-        try:
-            config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-        except OSError:
-            return TaskSupportIssue(
-                "permissions.native_profile", "cannot inspect the Codex configuration"
-            )
-        if re.search(
-            r'(?m)^\s*(?:"?sandbox_mode"?\s*=|"?sandbox_workspace_write"?\s*=|\[sandbox_workspace_write(?:\.|\]))',
-            config_text,
-        ):
-            return TaskSupportIssue(
-                "permissions.native_profile",
-                "loaded Codex configuration contains legacy sandbox settings",
-            )
+            else Path.home() / ".codex" / "config.toml",
+            Path("/etc/codex/config.toml"),
+        ]
+        if task.working_directory is not None:
+            current = task.working_directory.resolve()
+            for root in (current, *current.parents):
+                config_paths.append(root / ".codex" / "config.toml")
+                if (root / ".git").exists():
+                    break
+        for config_path in config_paths:
+            if config_path.is_symlink():
+                return TaskSupportIssue(
+                    "permissions.native_profile", "Codex configuration is a symlink"
+                )
+            if not config_path.exists():
+                continue
+            try:
+                parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+            except (OSError, tomllib.TOMLDecodeError):
+                return TaskSupportIssue(
+                    "permissions.native_profile", "cannot inspect the Codex configuration"
+                )
+            if _has_key(parsed, {"sandbox_mode", "sandbox_workspace_write"}):
+                return TaskSupportIssue(
+                    "permissions.native_profile",
+                    "loaded Codex configuration contains legacy sandbox settings",
+                )
         return None
 
     async def run(self, task: AgentTask) -> AgentResult:
@@ -816,6 +833,12 @@ def _task_sandbox(permissions: Any, sandbox_cls: Any) -> Any:
     if permissions.native_profile is not None:
         return None
     return _sandbox_mode(permissions.filesystem, sandbox_cls)
+
+
+def _has_key(value: Any, names: set[str]) -> bool:
+    return isinstance(value, dict) and any(
+        key in names or _has_key(child, names) for key, child in value.items()
+    )
 
 
 def _codex_client_key(

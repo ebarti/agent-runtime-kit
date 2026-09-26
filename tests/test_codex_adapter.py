@@ -591,7 +591,9 @@ async def test_codex_named_profile_uses_config_without_legacy_sandbox_override(
     "legacy",
     [
         'sandbox_mode = "danger-full-access"',
+        "'sandbox_mode' = \"danger-full-access\"",
         "[sandbox_workspace_write]\nnetwork_access = true",
+        '[profiles.local]\nsandbox_mode = "danger-full-access"',
     ],
 )
 async def test_codex_named_profile_rejects_legacy_file_settings(
@@ -616,7 +618,7 @@ async def test_codex_named_profile_rejects_legacy_override(tmp_path, monkeypatch
         config_cls=FakeCodexConfig,
         sandbox_cls=FakeSandbox,
         approval_mode_cls=FakeApprovalMode,
-        config_overrides=('sandbox_mode="danger-full-access"',),
+        config_overrides=("'sandbox_mode'=\"danger-full-access\"",),
     )
 
     with pytest.raises(UnsupportedTaskInputError, match="legacy sandbox"):
@@ -624,6 +626,45 @@ async def test_codex_named_profile_rejects_legacy_override(tmp_path, monkeypatch
             AgentTask(goal="x", permissions=PermissionProfile(native_profile="bounded"))
         )
     assert not FakeCodex.instances
+
+
+@pytest.mark.asyncio
+async def test_codex_named_profile_rejects_project_legacy_config(tmp_path, monkeypatch) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    project_config = repo / ".codex" / "config.toml"
+    project_config.parent.mkdir()
+    project_config.write_text("'sandbox_mode' = 'danger-full-access'\n")
+    runtime = make_runtime()
+
+    with pytest.raises(UnsupportedTaskInputError, match="legacy sandbox"):
+        await runtime.run(
+            AgentTask(
+                goal="x",
+                working_directory=repo,
+                permissions=PermissionProfile(native_profile="bounded"),
+            )
+        )
+    assert not FakeCodex.instances
+
+
+@pytest.mark.asyncio
+async def test_codex_named_profile_parses_comments_without_false_conflict(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        '# sandbox_mode = "danger-full-access"\ninstructions = "sandbox_mode is a documented key"\n'
+    )
+    runtime = make_runtime()
+
+    await runtime.run(AgentTask(goal="x", permissions=PermissionProfile(native_profile="bounded")))
+    assert FakeThread.last_run_kwargs is not None
+    assert FakeThread.last_run_kwargs["sandbox"] is None
 
 
 @pytest.mark.asyncio
