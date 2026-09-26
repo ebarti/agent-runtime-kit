@@ -156,6 +156,17 @@ issue. Third-party runtimes can opt into provider-specific checks with the
 `TaskSupportProvider` protocol, while older `AgentRuntime` implementations
 continue to work through capability-based fallback checks.
 
+Codex tasks may set `PermissionProfile(native_profile="project-edit")` to use a
+named Codex permission profile defined in the active Codex configuration. The
+adapter selects it with `default_permissions` and omits both legacy SDK sandbox
+overrides, including on resumed turns. It rejects legacy sandbox settings in
+its explicit overrides or the active `CODEX_HOME/config.toml`; other adapters
+report this field as unsupported. The requested profile name is recorded in
+result metadata, not reported as provider-observed enforcement. Define and
+test the profile's filesystem and network rules with Codex before relying on
+it as a security boundary; the kit does not verify those rules or expose
+per-task network control through this option.
+
 `availability()` is deliberately synchronous, side-effect-free, and package-only.
 Use `await check_readiness(runtime)` (or `kit.readiness_for(...)`) for an explicit,
 bounded credential/setup probe. `READY_TO_ATTEMPT` means setup was positively

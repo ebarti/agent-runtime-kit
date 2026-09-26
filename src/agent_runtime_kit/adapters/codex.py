@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from agent_runtime_kit._control import RuntimeTaskController
@@ -22,6 +24,7 @@ from agent_runtime_kit._types import (
     ReadinessStatus,
     RuntimeAvailability,
     RuntimeReadiness,
+    TaskSupportIssue,
     TaskSupportReport,
     ToolCallAudit,
     Usage,
@@ -80,6 +83,7 @@ class CodexAgentRuntime:
         tool_audit=True,
         cancellation=True,
         reasoning_effort=True,
+        named_permission_profiles=True,
     )
 
     def __init__(
@@ -96,9 +100,7 @@ class CodexAgentRuntime:
         reuse_process: bool = False,
     ) -> None:
         self._default_model = default_model
-        self._supported_models = validate_model_configuration(
-            default_model, supported_models
-        )
+        self._supported_models = validate_model_configuration(default_model, supported_models)
         # Plugins are disabled by default so headless runs are deterministic and do
         # not pick up host-local Codex plugin configuration. Override to opt in.
         self._config_overrides = config_overrides
@@ -192,10 +194,49 @@ class CodexAgentRuntime:
             selection=selection,
             supported_models=self._supported_models,
         )
+        profile_issue = self._native_profile_issue(task.permissions.native_profile)
         return TaskSupportReport(
             kind=self.kind,
-            issues=report.issues + ((issue,) if issue is not None else ()),
+            issues=report.issues
+            + ((issue,) if issue is not None else ())
+            + ((profile_issue,) if profile_issue is not None else ()),
         )
+
+    def _native_profile_issue(self, profile: str | None) -> TaskSupportIssue | None:
+        if profile is None:
+            return None
+        if any(
+            override.split("=", 1)[0].strip()
+            in {"sandbox_mode", "sandbox_workspace_write", "default_permissions"}
+            or override.split("=", 1)[0].strip().startswith("sandbox_workspace_write.")
+            for override in self._config_overrides
+        ):
+            return TaskSupportIssue(
+                "permissions.native_profile",
+                "named profiles cannot be combined with legacy sandbox "
+                "or conflicting profile overrides",
+            )
+        codex_home = (self._env or {}).get("CODEX_HOME") or os.environ.get("CODEX_HOME")
+        config_path = (
+            Path(codex_home) / "config.toml"
+            if codex_home
+            else Path.home() / ".codex" / "config.toml"
+        )
+        try:
+            config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        except OSError:
+            return TaskSupportIssue(
+                "permissions.native_profile", "cannot inspect the Codex configuration"
+            )
+        if re.search(
+            r'(?m)^\s*(?:"?sandbox_mode"?\s*=|"?sandbox_workspace_write"?\s*=|\[sandbox_workspace_write(?:\.|\]))',
+            config_text,
+        ):
+            return TaskSupportIssue(
+                "permissions.native_profile",
+                "loaded Codex configuration contains legacy sandbox settings",
+            )
+        return None
 
     async def run(self, task: AgentTask) -> AgentResult:
         """Execute one deadline- and cancellation-controlled Codex task."""
@@ -331,16 +372,25 @@ class CodexAgentRuntime:
         approval_mode_cls: Any,
     ) -> AgentResult:
         cwd = str(task.working_directory) if task.working_directory else None
+        native_profile = task.permissions.native_profile
+        overrides = self._config_overrides
+        if native_profile is not None:
+            overrides = (*overrides, f'default_permissions="{native_profile}"')
         config_kwargs: dict[str, Any] = {
             "cwd": cwd,
-            "config_overrides": self._config_overrides,
+            "config_overrides": overrides,
         }
         if self._env is not None:
             config_kwargs["env"] = dict(self._env)
         # Tolerate vendor option drift like the Claude adapter: drop kwargs the
         # installed SDK no longer accepts (instead of crashing with TypeError) and
         # record them so the omission stays visible in AgentResult.metadata.
-        config_supported, dropped = filter_supported_kwargs(config_cls, config_kwargs)
+        config_supported, dropped = filter_supported_kwargs(
+            config_cls,
+            config_kwargs,
+            required=("config_overrides",) if native_profile is not None else (),
+            kind=self.kind,
+        )
         process_reused = False
         if self._reuse_process:
             async with self._codex_run_lock:
@@ -426,7 +476,7 @@ class CodexAgentRuntime:
         run_kwargs: dict[str, Any] = {
             "cwd": cwd,
             "approval_mode": _approval_mode(task.permissions.mode, approval_mode_cls),
-            "sandbox": _sandbox_mode(task.permissions.filesystem, sandbox_cls),
+            "sandbox": _task_sandbox(task.permissions, sandbox_cls),
         }
         if model is not None:
             run_kwargs["model"] = model
@@ -503,7 +553,7 @@ class CodexAgentRuntime:
             "cwd": cwd,
             "developer_instructions": task.system,
             "approval_mode": _approval_mode(task.permissions.mode, approval_mode_cls),
-            "sandbox": _sandbox_mode(task.permissions.filesystem, sandbox_cls),
+            "sandbox": _task_sandbox(task.permissions, sandbox_cls),
         }
         if model is not None:
             kwargs["model"] = model
@@ -517,6 +567,7 @@ class CodexAgentRuntime:
             codex.thread_start, kwargs, required=_SECURITY_KWARGS, kind=self.kind
         )
         return await codex.thread_start(**supported), dropped
+
 
 def _translate_run_result(
     task: AgentTask,
@@ -538,6 +589,8 @@ def _translate_run_result(
     }
     if model is not None:
         metadata["model"] = model
+    if task.permissions.native_profile is not None:
+        metadata["requested_native_permission_profile"] = task.permissions.native_profile
     if dropped_options:
         metadata["dropped_options"] = list(dropped_options)
     status = _status_value(field_value(raw_result, "status"))
@@ -757,6 +810,14 @@ def _sandbox_mode(filesystem: FilesystemAccess, sandbox_cls: Any) -> Any:
     return getattr(sandbox_cls, name, name.replace("_", "-"))
 
 
+def _task_sandbox(permissions: Any, sandbox_cls: Any) -> Any:
+    # A None SDK sandbox argument leaves the named profile selected by
+    # default_permissions in force. Any legacy override takes precedence.
+    if permissions.native_profile is not None:
+        return None
+    return _sandbox_mode(permissions.filesystem, sandbox_cls)
+
+
 def _codex_client_key(
     config_kwargs: Mapping[str, Any],
     *,
@@ -787,8 +848,9 @@ def _codex_client_key(
         model,
         str(permissions.mode),
         str(permissions.filesystem),
+        str(permissions.native_profile),
         str(_approval_mode(permissions.mode, approval_mode_cls)),
-        str(_sandbox_mode(permissions.filesystem, sandbox_cls)),
+        str(_task_sandbox(permissions, sandbox_cls)),
     )
 
 

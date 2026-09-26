@@ -556,6 +556,77 @@ async def test_codex_sandbox_mapping(filesystem: FilesystemAccess, expected: str
 
 
 @pytest.mark.asyncio
+async def test_codex_named_profile_uses_config_without_legacy_sandbox_override(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        'default_permissions = "bounded"\n[permissions.bounded.network]\nenabled = false\n'
+    )
+    runtime = make_runtime()
+
+    result = await runtime.run(
+        AgentTask(
+            goal="x",
+            permissions=PermissionProfile(
+                mode=PermissionMode.STRICT,
+                filesystem=FilesystemAccess.WORKSPACE_WRITE,
+                native_profile="bounded",
+            ),
+        )
+    )
+
+    assert runtime.capabilities.named_permission_profiles
+    assert FakeCodex.instances[0].config.config_overrides[-1] == ('default_permissions="bounded"')
+    assert FakeCodex.last_started_kwargs is not None
+    assert FakeCodex.last_started_kwargs["sandbox"] is None
+    assert FakeThread.last_run_kwargs is not None
+    assert FakeThread.last_run_kwargs["sandbox"] is None
+    assert FakeThread.last_run_kwargs["approval_mode"] == "deny_all"
+    assert result.metadata["requested_native_permission_profile"] == "bounded"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "legacy",
+    [
+        'sandbox_mode = "danger-full-access"',
+        "[sandbox_workspace_write]\nnetwork_access = true",
+    ],
+)
+async def test_codex_named_profile_rejects_legacy_file_settings(
+    tmp_path, monkeypatch, legacy: str
+) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(legacy + "\n")
+    runtime = make_runtime()
+
+    with pytest.raises(UnsupportedTaskInputError, match="legacy sandbox"):
+        await runtime.run(
+            AgentTask(goal="x", permissions=PermissionProfile(native_profile="bounded"))
+        )
+    assert not FakeCodex.instances
+
+
+@pytest.mark.asyncio
+async def test_codex_named_profile_rejects_legacy_override(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    runtime = CodexAgentRuntime(
+        codex_cls=FakeCodex,
+        config_cls=FakeCodexConfig,
+        sandbox_cls=FakeSandbox,
+        approval_mode_cls=FakeApprovalMode,
+        config_overrides=('sandbox_mode="danger-full-access"',),
+    )
+
+    with pytest.raises(UnsupportedTaskInputError, match="legacy sandbox"):
+        await runtime.run(
+            AgentTask(goal="x", permissions=PermissionProfile(native_profile="bounded"))
+        )
+    assert not FakeCodex.instances
+
+
+@pytest.mark.asyncio
 async def test_codex_prefers_typed_model_and_effort_fields() -> None:
     runtime = make_runtime()
 

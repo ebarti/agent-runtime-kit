@@ -284,6 +284,7 @@ class AgentCapabilities:
     network_control: bool = False
     tool_filters: bool = False
     mcp_server_env: bool = False
+    named_permission_profiles: bool = False
 
 
 @dataclass(frozen=True)
@@ -308,9 +309,7 @@ class TaskSupportReport:
     def __post_init__(self) -> None:
         issues = _tuple_value(self.issues, "TaskSupportReport.issues")
         if not all(isinstance(issue, TaskSupportIssue) for issue in issues):
-            raise ValueError(
-                "TaskSupportReport.issues must contain only TaskSupportIssue values"
-            )
+            raise ValueError("TaskSupportReport.issues must contain only TaskSupportIssue values")
         object.__setattr__(self, "kind", AgentRuntimeKind.coerce(self.kind))
         object.__setattr__(self, "issues", issues)
 
@@ -524,13 +523,8 @@ class RuntimeReadiness:
             ReadinessStatus.NOT_READY: "not ready",
             ReadinessStatus.INDETERMINATE: "readiness could not be determined",
         }
-        normalized_status = _coerce_enum(
-            ReadinessStatus, status, "RuntimeReadiness.status"
-        )
-        if (
-            normalized_status is ReadinessStatus.READY_TO_ATTEMPT
-            and not availability.available
-        ):
+        normalized_status = _coerce_enum(ReadinessStatus, status, "RuntimeReadiness.status")
+        if normalized_status is ReadinessStatus.READY_TO_ATTEMPT and not availability.available:
             raise ValueError("an unavailable package cannot be ready to attempt")
         return cls(
             kind=availability.kind,
@@ -583,6 +577,10 @@ class PermissionProfile:
     "read-only", ...) and are coerced to enum members at construction, so a
     literal that slips past type checking can never silently bypass the
     adapters' identity comparisons. Unknown values raise ``ValueError``.
+
+    ``native_profile`` requests a provider-defined named profile where supported.
+    In that case, the provider profile replaces this portable filesystem preset;
+    callers must define and verify the provider profile separately.
     """
 
     mode: PermissionMode = PermissionMode.DEFAULT
@@ -590,6 +588,7 @@ class PermissionProfile:
     allowed_tools: tuple[str, ...] = ()
     disallowed_tools: tuple[str, ...] = ()
     network: bool | None = None
+    native_profile: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, PermissionMode):
@@ -619,6 +618,17 @@ class PermissionProfile:
             )
         if self.network is not None and not isinstance(self.network, bool):
             raise ValueError("PermissionProfile.network must be bool or None")
+        if self.native_profile is not None:
+            if (
+                not isinstance(self.native_profile, str)
+                or not self.native_profile
+                or not self.native_profile.isascii()
+                or not self.native_profile[0].isalnum()
+                or not all(
+                    character.isalnum() or character in "_-" for character in self.native_profile
+                )
+            ):
+                raise ValueError("PermissionProfile.native_profile must be a named profile ID")
 
 
 @dataclass(frozen=True)
