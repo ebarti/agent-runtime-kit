@@ -590,26 +590,41 @@ async def test_codex_named_profile_uses_config_without_legacy_sandbox_override(
 async def test_codex_reused_process_rejects_changed_named_profile(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     config = tmp_path / "config.toml"
-    config.write_text(
-        f'[permissions.bounded.filesystem]\n":root" = "deny"\n"{tmp_path}" = "write"\n'
-    )
+    original = f'[permissions.bounded.filesystem]\n":root" = "deny"\n"{tmp_path}" = "write"\n'
+    config.write_text(original)
     runtime = make_runtime(reuse_process=True)
-    task = AgentTask(goal="x", permissions=PermissionProfile(native_profile="bounded"))
+    task = AgentTask(
+        goal="x",
+        working_directory=tmp_path,
+        permissions=PermissionProfile(native_profile="bounded"),
+    )
 
     first = await runtime.run(task)
+    # A real Codex first turn appends this exact trust record. It does not
+    # change effective permission layers when no project config exists.
+    config.write_text(original + f'\n[projects."{tmp_path}"]\ntrust_level = "trusted"\n')
     same_policy = await runtime.run(
-        AgentTask(goal="again", session_id=first.session_id, permissions=task.permissions)
+        AgentTask(
+            goal="again",
+            session_id=first.session_id,
+            working_directory=tmp_path,
+            permissions=task.permissions,
+        )
     )
     assert same_policy.metadata["sdk_process_reused"] is True
     assert len(FakeCodex.instances) == 1
 
     config.write_text(
         f'[permissions.bounded.filesystem]\n":root" = "deny"\n"{tmp_path}" = "read"\n'
+        f'\n[projects."{tmp_path}"]\ntrust_level = "trusted"\n'
     )
     with pytest.raises(UnsupportedTaskInputError, match="profile changed"):
         await runtime.run(
             AgentTask(
-                goal="after narrowing", session_id=first.session_id, permissions=task.permissions
+                goal="after narrowing",
+                session_id=first.session_id,
+                working_directory=tmp_path,
+                permissions=task.permissions,
             )
         )
     assert len(FakeCodex.instances) == 1
@@ -623,12 +638,52 @@ async def test_codex_reused_process_rejects_changed_named_profile(tmp_path, monk
         AgentTask(
             goal="authorized under read-only",
             session_id=first.session_id,
+            working_directory=tmp_path,
             permissions=task.permissions,
         )
     )
     assert new_result.metadata["sdk_process_reused"] is False
     assert len(FakeCodex.instances) == 2
     await new_runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_codex_reused_process_rejects_trust_activation_of_project_config(
+    tmp_path, monkeypatch
+) -> None:
+    codex_home = tmp_path / "home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".git").mkdir()
+    project = workspace / ".codex" / "config.toml"
+    project.parent.mkdir()
+    project.write_text("[features]\nnetwork_proxy = true\n")
+    config = codex_home / "config.toml"
+    config.write_text("[permissions.bounded.network]\nenabled = false\n")
+    runtime = make_runtime(reuse_process=True)
+    task = AgentTask(
+        goal="x",
+        working_directory=workspace,
+        permissions=PermissionProfile(native_profile="bounded"),
+    )
+    first = await runtime.run(task)
+    config.write_text(
+        "[permissions.bounded.network]\nenabled = false\n"
+        f'\n[projects."{workspace}"]\ntrust_level = "trusted"\n'
+    )
+    with pytest.raises(UnsupportedTaskInputError, match="profile changed"):
+        await runtime.run(
+            AgentTask(
+                goal="resume",
+                working_directory=workspace,
+                session_id=first.session_id,
+                permissions=task.permissions,
+            )
+        )
+    assert FakeCodex.instances[0].closed is True
+    assert len(FakeCodex.instances) == 1
 
 
 @pytest.mark.asyncio

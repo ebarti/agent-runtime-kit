@@ -272,7 +272,14 @@ class CodexAgentRuntime:
             raise AssertionError("native profile fingerprint requires a named profile")
         paths = self._native_config_paths(task)
         digest = hashlib.sha256()
-        for path in paths:
+        cwd = str(
+            task.working_directory.resolve() if task.working_directory else Path.cwd().resolve()
+        )
+        # Codex appends a trust record for the current workspace on the first
+        # turn. It is harmless to the selected permissions only when no project
+        # config exists to become active as a consequence of that transition.
+        project_config_present = any(path.exists() or path.is_symlink() for path in paths[2:])
+        for index, path in enumerate(paths):
             digest.update(os.fsencode(path.absolute()))
             digest.update(b"\0")
             if path.is_symlink():
@@ -288,12 +295,27 @@ class CodexAgentRuntime:
                     self.kind, "permissions.native_profile", "cannot read Codex configuration"
                 ) from exc
             else:
+                if index == 0:
+                    try:
+                        parsed = tomllib.loads(content.decode("utf-8"))
+                    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+                        raise UnsupportedTaskInputError(
+                            self.kind,
+                            "permissions.native_profile",
+                            "cannot inspect the Codex configuration",
+                        ) from exc
+                    if not project_config_present:
+                        projects = parsed.get("projects")
+                        if isinstance(projects, dict) and projects.get(cwd) == {
+                            "trust_level": "trusted"
+                        }:
+                            del projects[cwd]
+                            if not projects:
+                                del parsed["projects"]
+                    content = repr(_stable_toml(parsed)).encode("utf-8")
                 digest.update(len(content).to_bytes(8, "big"))
                 digest.update(content)
         codex_home = (self._env or {}).get("CODEX_HOME") or os.environ.get("CODEX_HOME") or ""
-        cwd = str(
-            task.working_directory.resolve() if task.working_directory else Path.cwd().resolve()
-        )
         return (profile, cwd, codex_home), digest.hexdigest()
 
     async def run(self, task: AgentTask) -> AgentResult:
@@ -896,6 +918,16 @@ def _has_key(value: Any, names: set[str]) -> bool:
     return isinstance(value, dict) and any(
         key in names or _has_key(child, names) for key, child in value.items()
     )
+
+
+def _stable_toml(value: Any) -> Any:
+    """Keep TOML value types distinct while hashing its parsed structure."""
+
+    if isinstance(value, dict):
+        return ("table", tuple((key, _stable_toml(child)) for key, child in sorted(value.items())))
+    if isinstance(value, list):
+        return ("array", tuple(_stable_toml(child) for child in value))
+    return (type(value).__name__, repr(value))
 
 
 def _codex_client_key(

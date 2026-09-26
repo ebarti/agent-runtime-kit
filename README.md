@@ -164,6 +164,8 @@ its explicit overrides or loaded user, system, and project configuration; other
 adapters report this field as unsupported. With `reuse_process=True`, the adapter
 fingerprints those configuration files before each turn and rejects changes to a
 profile already used by that runtime instance, closing the old SDK process.
+It tolerates Codex's automatic workspace trust entry only when no project
+configuration exists that the new trust level could activate.
 Construct a new runtime only after separately authorizing a changed profile.
 The requested profile name is recorded in
 result metadata, not reported as provider-observed enforcement. Define and
