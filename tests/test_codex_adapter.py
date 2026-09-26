@@ -587,6 +587,51 @@ async def test_codex_named_profile_uses_config_without_legacy_sandbox_override(
 
 
 @pytest.mark.asyncio
+async def test_codex_reused_process_rejects_changed_named_profile(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[permissions.bounded.filesystem]\n":root" = "deny"\n"{tmp_path}" = "write"\n'
+    )
+    runtime = make_runtime(reuse_process=True)
+    task = AgentTask(goal="x", permissions=PermissionProfile(native_profile="bounded"))
+
+    first = await runtime.run(task)
+    same_policy = await runtime.run(
+        AgentTask(goal="again", session_id=first.session_id, permissions=task.permissions)
+    )
+    assert same_policy.metadata["sdk_process_reused"] is True
+    assert len(FakeCodex.instances) == 1
+
+    config.write_text(
+        f'[permissions.bounded.filesystem]\n":root" = "deny"\n"{tmp_path}" = "read"\n'
+    )
+    with pytest.raises(UnsupportedTaskInputError, match="profile changed"):
+        await runtime.run(
+            AgentTask(
+                goal="after narrowing", session_id=first.session_id, permissions=task.permissions
+            )
+        )
+    assert len(FakeCodex.instances) == 1
+    assert FakeCodex.instances[0].closed is True
+
+    # A new instance explicitly constructed under the changed profile starts a
+    # fresh app-server. The real SDK control probe confirms that even resuming
+    # the old conversation in a fresh process honors the narrower rule.
+    new_runtime = make_runtime(reuse_process=True)
+    new_result = await new_runtime.run(
+        AgentTask(
+            goal="authorized under read-only",
+            session_id=first.session_id,
+            permissions=task.permissions,
+        )
+    )
+    assert new_result.metadata["sdk_process_reused"] is False
+    assert len(FakeCodex.instances) == 2
+    await new_runtime.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "legacy",
     [

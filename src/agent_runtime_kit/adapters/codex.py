@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 from collections.abc import Mapping
@@ -15,7 +16,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10
     import tomli as tomllib
 
 from agent_runtime_kit._control import RuntimeTaskController
-from agent_runtime_kit._errors import AgentRuntimeUnavailableError
+from agent_runtime_kit._errors import AgentRuntimeUnavailableError, UnsupportedTaskInputError
 from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentResult,
@@ -121,6 +122,10 @@ class CodexAgentRuntime:
         self._sdk_process_reuse_count = 0
         self._codex_client_lock = asyncio.Lock()
         self._codex_run_lock = asyncio.Lock()
+        # A live app-server does not reload a changed named permission profile.
+        # Freeze each requested profile's loaded configuration for this runtime
+        # instance; a caller must create a new instance to authorize a new policy.
+        self._native_policy_fingerprints: dict[tuple[str, str, str], str] = {}
         self._task_controller = RuntimeTaskController(self.kind)
         self._cleanup_quarantine = VendorCleanupQuarantine()
 
@@ -222,23 +227,7 @@ class CodexAgentRuntime:
                     "named profiles cannot be combined with legacy sandbox "
                     "or conflicting profile overrides",
                 )
-        codex_home = (self._env or {}).get("CODEX_HOME") or os.environ.get("CODEX_HOME")
-        config_paths = [
-            Path(codex_home) / "config.toml"
-            if codex_home
-            else Path.home() / ".codex" / "config.toml",
-            Path("/etc/codex/config.toml"),
-        ]
-        current = (
-            task.working_directory.resolve()
-            if task.working_directory is not None
-            else Path.cwd().resolve()
-        )
-        for root in (current, *current.parents):
-            config_paths.append(root / ".codex" / "config.toml")
-            if (root / ".git").exists():
-                break
-        for config_path in config_paths:
+        for config_path in self._native_config_paths(task):
             if config_path.is_symlink():
                 return TaskSupportIssue(
                     "permissions.native_profile", "Codex configuration is a symlink"
@@ -257,6 +246,55 @@ class CodexAgentRuntime:
                     "loaded Codex configuration contains legacy sandbox settings",
                 )
         return None
+
+    def _native_config_paths(self, task: AgentTask) -> tuple[Path, ...]:
+        codex_home = (self._env or {}).get("CODEX_HOME") or os.environ.get("CODEX_HOME")
+        paths = [
+            Path(codex_home) / "config.toml"
+            if codex_home
+            else Path.home() / ".codex" / "config.toml",
+            Path("/etc/codex/config.toml"),
+        ]
+        current = (
+            task.working_directory.resolve()
+            if task.working_directory is not None
+            else Path.cwd().resolve()
+        )
+        for root in (current, *current.parents):
+            paths.append(root / ".codex" / "config.toml")
+            if (root / ".git").exists():
+                break
+        return tuple(paths)
+
+    def _native_policy_fingerprint(self, task: AgentTask) -> tuple[tuple[str, str, str], str]:
+        profile = task.permissions.native_profile
+        if profile is None:
+            raise AssertionError("native profile fingerprint requires a named profile")
+        paths = self._native_config_paths(task)
+        digest = hashlib.sha256()
+        for path in paths:
+            digest.update(os.fsencode(path.absolute()))
+            digest.update(b"\0")
+            if path.is_symlink():
+                raise UnsupportedTaskInputError(
+                    self.kind, "permissions.native_profile", "Codex configuration is a symlink"
+                )
+            try:
+                content = path.read_bytes()
+            except FileNotFoundError:
+                digest.update(b"missing\0")
+            except OSError as exc:
+                raise UnsupportedTaskInputError(
+                    self.kind, "permissions.native_profile", "cannot read Codex configuration"
+                ) from exc
+            else:
+                digest.update(len(content).to_bytes(8, "big"))
+                digest.update(content)
+        codex_home = (self._env or {}).get("CODEX_HOME") or os.environ.get("CODEX_HOME") or ""
+        cwd = str(
+            task.working_directory.resolve() if task.working_directory else Path.cwd().resolve()
+        )
+        return (profile, cwd, codex_home), digest.hexdigest()
 
     async def run(self, task: AgentTask) -> AgentResult:
         """Execute one deadline- and cancellation-controlled Codex task."""
@@ -415,12 +453,28 @@ class CodexAgentRuntime:
         if self._reuse_process:
             async with self._codex_run_lock:
                 try:
+                    policy_fingerprint = None
+                    if native_profile is not None:
+                        scope, policy_fingerprint = self._native_policy_fingerprint(task)
+                        previous = self._native_policy_fingerprints.get(scope)
+                        if previous is not None and previous != policy_fingerprint:
+                            # An already running app-server can retain the old
+                            # profile even after its config file narrows. Evict
+                            # it and require explicit construction of a new
+                            # runtime under the new policy.
+                            raise UnsupportedTaskInputError(
+                                self.kind,
+                                "permissions.native_profile",
+                                "loaded named profile changed during process reuse",
+                            )
+                        self._native_policy_fingerprints[scope] = policy_fingerprint
                     key = _codex_client_key(
                         config_kwargs,
                         model=model,
                         permissions=task.permissions,
                         sandbox_cls=sandbox_cls,
                         approval_mode_cls=approval_mode_cls,
+                        policy_fingerprint=policy_fingerprint,
                     )
                     codex, process_reused = await self._persistent_codex_client(
                         codex_cls,
@@ -851,6 +905,7 @@ def _codex_client_key(
     permissions: Any,
     sandbox_cls: Any,
     approval_mode_cls: Any,
+    policy_fingerprint: str | None = None,
 ) -> tuple[Any, ...]:
     env = config_kwargs.get("env")
     env_items = (
@@ -875,6 +930,7 @@ def _codex_client_key(
         str(permissions.mode),
         str(permissions.filesystem),
         str(permissions.native_profile),
+        policy_fingerprint,
         str(_approval_mode(permissions.mode, approval_mode_cls)),
         str(_task_sandbox(permissions, sandbox_cls)),
     )

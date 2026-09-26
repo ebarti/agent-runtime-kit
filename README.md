@@ -160,8 +160,12 @@ Codex tasks may set `PermissionProfile(native_profile="project-edit")` to use a
 named Codex permission profile defined in the active Codex configuration. The
 adapter selects it with `default_permissions` and omits both legacy SDK sandbox
 overrides, including on resumed turns. It rejects legacy sandbox settings in
-its explicit overrides or the active `CODEX_HOME/config.toml`; other adapters
-report this field as unsupported. The requested profile name is recorded in
+its explicit overrides or loaded user, system, and project configuration; other
+adapters report this field as unsupported. With `reuse_process=True`, the adapter
+fingerprints those configuration files before each turn and rejects changes to a
+profile already used by that runtime instance, closing the old SDK process.
+Construct a new runtime only after separately authorizing a changed profile.
+The requested profile name is recorded in
 result metadata, not reported as provider-observed enforcement. Define and
 test the profile's filesystem and network rules with Codex before relying on
 it as a security boundary; the kit does not verify those rules or expose
