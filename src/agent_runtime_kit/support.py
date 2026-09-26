@@ -46,13 +46,9 @@ def _validate_declared_task_support(
             )
         )
     if task.session_id is not None and not capabilities.session_resume:
-        issues.append(
-            TaskSupportIssue("session_id", "runtime does not support session resume")
-        )
+        issues.append(TaskSupportIssue("session_id", "runtime does not support session resume"))
     if task.resume_from is not None and not capabilities.session_resume:
-        issues.append(
-            TaskSupportIssue("resume_from", "runtime does not support session resume")
-        )
+        issues.append(TaskSupportIssue("resume_from", "runtime does not support session resume"))
     if task.output_schema is not None and not capabilities.structured_output:
         issues.append(
             TaskSupportIssue("output_schema", "runtime does not support structured output")
@@ -68,9 +64,7 @@ def _validate_declared_task_support(
                 )
                 break
     if task.budget_usd is not None and not capabilities.budget:
-        issues.append(
-            TaskSupportIssue("budget_usd", "runtime does not expose a cost budget")
-        )
+        issues.append(TaskSupportIssue("budget_usd", "runtime does not expose a cost budget"))
     if task.reasoning_effort is not None and not capabilities.reasoning_effort:
         issues.append(
             TaskSupportIssue(
@@ -92,6 +86,13 @@ def _validate_declared_task_support(
             TaskSupportIssue(
                 "permissions.network",
                 "runtime does not expose network access control",
+            )
+        )
+    if task.permissions.native_profile is not None and not capabilities.named_permission_profiles:
+        issues.append(
+            TaskSupportIssue(
+                "permissions.native_profile",
+                "runtime does not support named permission profiles",
             )
         )
     if not capabilities.tool_filters:

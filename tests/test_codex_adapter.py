@@ -556,6 +556,241 @@ async def test_codex_sandbox_mapping(filesystem: FilesystemAccess, expected: str
 
 
 @pytest.mark.asyncio
+async def test_codex_named_profile_uses_config_without_legacy_sandbox_override(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        'default_permissions = "bounded"\n[permissions.bounded.network]\nenabled = false\n'
+    )
+    runtime = make_runtime()
+
+    result = await runtime.run(
+        AgentTask(
+            goal="x",
+            permissions=PermissionProfile(
+                mode=PermissionMode.STRICT,
+                filesystem=FilesystemAccess.WORKSPACE_WRITE,
+                native_profile="bounded",
+            ),
+        )
+    )
+
+    assert runtime.capabilities.named_permission_profiles
+    assert FakeCodex.instances[0].config.config_overrides[-1] == ('default_permissions="bounded"')
+    assert FakeCodex.last_started_kwargs is not None
+    assert FakeCodex.last_started_kwargs["sandbox"] is None
+    assert FakeThread.last_run_kwargs is not None
+    assert FakeThread.last_run_kwargs["sandbox"] is None
+    assert FakeThread.last_run_kwargs["approval_mode"] == "deny_all"
+    assert result.metadata["requested_native_permission_profile"] == "bounded"
+
+
+@pytest.mark.asyncio
+async def test_codex_reused_process_rejects_changed_named_profile(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    config = tmp_path / "config.toml"
+    original = f'[permissions.bounded.filesystem]\n":root" = "deny"\n"{tmp_path}" = "write"\n'
+    config.write_text(original)
+    runtime = make_runtime(reuse_process=True)
+    task = AgentTask(
+        goal="x",
+        working_directory=tmp_path,
+        permissions=PermissionProfile(native_profile="bounded"),
+    )
+
+    first = await runtime.run(task)
+    # A real Codex first turn appends this exact trust record. It does not
+    # change effective permission layers when no project config exists.
+    config.write_text(original + f'\n[projects."{tmp_path}"]\ntrust_level = "trusted"\n')
+    same_policy = await runtime.run(
+        AgentTask(
+            goal="again",
+            session_id=first.session_id,
+            working_directory=tmp_path,
+            permissions=task.permissions,
+        )
+    )
+    assert same_policy.metadata["sdk_process_reused"] is True
+    assert len(FakeCodex.instances) == 1
+
+    config.write_text(
+        f'[permissions.bounded.filesystem]\n":root" = "deny"\n"{tmp_path}" = "read"\n'
+        f'\n[projects."{tmp_path}"]\ntrust_level = "trusted"\n'
+    )
+    with pytest.raises(UnsupportedTaskInputError, match="profile changed"):
+        await runtime.run(
+            AgentTask(
+                goal="after narrowing",
+                session_id=first.session_id,
+                working_directory=tmp_path,
+                permissions=task.permissions,
+            )
+        )
+    assert len(FakeCodex.instances) == 1
+    assert FakeCodex.instances[0].closed is True
+
+    # A new instance explicitly constructed under the changed profile starts a
+    # fresh app-server. The real SDK control probe confirms that even resuming
+    # the old conversation in a fresh process honors the narrower rule.
+    new_runtime = make_runtime(reuse_process=True)
+    new_result = await new_runtime.run(
+        AgentTask(
+            goal="authorized under read-only",
+            session_id=first.session_id,
+            working_directory=tmp_path,
+            permissions=task.permissions,
+        )
+    )
+    assert new_result.metadata["sdk_process_reused"] is False
+    assert len(FakeCodex.instances) == 2
+    await new_runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_codex_reused_process_rejects_trust_activation_of_project_config(
+    tmp_path, monkeypatch
+) -> None:
+    codex_home = tmp_path / "home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".git").mkdir()
+    project = workspace / ".codex" / "config.toml"
+    project.parent.mkdir()
+    project.write_text("[features]\nnetwork_proxy = true\n")
+    config = codex_home / "config.toml"
+    config.write_text("[permissions.bounded.network]\nenabled = false\n")
+    runtime = make_runtime(reuse_process=True)
+    task = AgentTask(
+        goal="x",
+        working_directory=workspace,
+        permissions=PermissionProfile(native_profile="bounded"),
+    )
+    first = await runtime.run(task)
+    config.write_text(
+        "[permissions.bounded.network]\nenabled = false\n"
+        f'\n[projects."{workspace}"]\ntrust_level = "trusted"\n'
+    )
+    with pytest.raises(UnsupportedTaskInputError, match="profile changed"):
+        await runtime.run(
+            AgentTask(
+                goal="resume",
+                working_directory=workspace,
+                session_id=first.session_id,
+                permissions=task.permissions,
+            )
+        )
+    assert FakeCodex.instances[0].closed is True
+    assert len(FakeCodex.instances) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "legacy",
+    [
+        'sandbox_mode = "danger-full-access"',
+        "'sandbox_mode' = \"danger-full-access\"",
+        "[sandbox_workspace_write]\nnetwork_access = true",
+        '[profiles.local]\nsandbox_mode = "danger-full-access"',
+    ],
+)
+async def test_codex_named_profile_rejects_legacy_file_settings(
+    tmp_path, monkeypatch, legacy: str
+) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(legacy + "\n")
+    runtime = make_runtime()
+
+    with pytest.raises(UnsupportedTaskInputError, match="legacy sandbox"):
+        await runtime.run(
+            AgentTask(goal="x", permissions=PermissionProfile(native_profile="bounded"))
+        )
+    assert not FakeCodex.instances
+
+
+@pytest.mark.asyncio
+async def test_codex_named_profile_rejects_legacy_override(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    runtime = CodexAgentRuntime(
+        codex_cls=FakeCodex,
+        config_cls=FakeCodexConfig,
+        sandbox_cls=FakeSandbox,
+        approval_mode_cls=FakeApprovalMode,
+        config_overrides=("'sandbox_mode'=\"danger-full-access\"",),
+    )
+
+    with pytest.raises(UnsupportedTaskInputError, match="legacy sandbox"):
+        await runtime.run(
+            AgentTask(goal="x", permissions=PermissionProfile(native_profile="bounded"))
+        )
+    assert not FakeCodex.instances
+
+
+@pytest.mark.asyncio
+async def test_codex_named_profile_rejects_project_legacy_config(tmp_path, monkeypatch) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    project_config = repo / ".codex" / "config.toml"
+    project_config.parent.mkdir()
+    project_config.write_text("'sandbox_mode' = 'danger-full-access'\n")
+    runtime = make_runtime()
+
+    with pytest.raises(UnsupportedTaskInputError, match="legacy sandbox"):
+        await runtime.run(
+            AgentTask(
+                goal="x",
+                working_directory=repo,
+                permissions=PermissionProfile(native_profile="bounded"),
+            )
+        )
+    assert not FakeCodex.instances
+
+
+@pytest.mark.asyncio
+async def test_codex_named_profile_rejects_inherited_cwd_legacy_config(
+    tmp_path, monkeypatch
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    project_config = repo / ".codex" / "config.toml"
+    project_config.parent.mkdir()
+    project_config.write_text("'sandbox_mode' = 'danger-full-access'\n")
+    monkeypatch.chdir(repo)
+    runtime = make_runtime()
+
+    with pytest.raises(UnsupportedTaskInputError, match="legacy sandbox"):
+        await runtime.run(
+            AgentTask(goal="x", permissions=PermissionProfile(native_profile="bounded"))
+        )
+    assert not FakeCodex.instances
+
+
+@pytest.mark.asyncio
+async def test_codex_named_profile_parses_comments_without_false_conflict(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        '# sandbox_mode = "danger-full-access"\ninstructions = "sandbox_mode is a documented key"\n'
+    )
+    runtime = make_runtime()
+
+    await runtime.run(AgentTask(goal="x", permissions=PermissionProfile(native_profile="bounded")))
+    assert FakeThread.last_run_kwargs is not None
+    assert FakeThread.last_run_kwargs["sandbox"] is None
+
+
+@pytest.mark.asyncio
 async def test_codex_prefers_typed_model_and_effort_fields() -> None:
     runtime = make_runtime()
 
