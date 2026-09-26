@@ -653,6 +653,29 @@ async def test_codex_named_profile_rejects_project_legacy_config(tmp_path, monke
 
 
 @pytest.mark.asyncio
+async def test_codex_named_profile_rejects_inherited_cwd_legacy_config(
+    tmp_path, monkeypatch
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    project_config = repo / ".codex" / "config.toml"
+    project_config.parent.mkdir()
+    project_config.write_text("'sandbox_mode' = 'danger-full-access'\n")
+    monkeypatch.chdir(repo)
+    runtime = make_runtime()
+
+    with pytest.raises(UnsupportedTaskInputError, match="legacy sandbox"):
+        await runtime.run(
+            AgentTask(goal="x", permissions=PermissionProfile(native_profile="bounded"))
+        )
+    assert not FakeCodex.instances
+
+
+@pytest.mark.asyncio
 async def test_codex_named_profile_parses_comments_without_false_conflict(
     tmp_path, monkeypatch
 ) -> None:

@@ -229,12 +229,15 @@ class CodexAgentRuntime:
             else Path.home() / ".codex" / "config.toml",
             Path("/etc/codex/config.toml"),
         ]
-        if task.working_directory is not None:
-            current = task.working_directory.resolve()
-            for root in (current, *current.parents):
-                config_paths.append(root / ".codex" / "config.toml")
-                if (root / ".git").exists():
-                    break
+        current = (
+            task.working_directory.resolve()
+            if task.working_directory is not None
+            else Path.cwd().resolve()
+        )
+        for root in (current, *current.parents):
+            config_paths.append(root / ".codex" / "config.toml")
+            if (root / ".git").exists():
+                break
         for config_path in config_paths:
             if config_path.is_symlink():
                 return TaskSupportIssue(
