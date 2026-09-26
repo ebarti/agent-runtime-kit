@@ -6,13 +6,14 @@ import asyncio
 import hashlib
 import logging
 import os
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-try:
+if sys.version_info >= (3, 11):
     import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+else:  # pragma: no cover - Python 3.10
     import tomli as tomllib
 
 from agent_runtime_kit._control import RuntimeTaskController

@@ -11,9 +11,6 @@ required-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
 
-[options]
-exclude-newer = "2026-09-26T12:00:00Z"
-
 [manifest]
 constraints = [{ name = "openai-codex-cli-bin", specifier = ">=0.134.0a1" }]
 
