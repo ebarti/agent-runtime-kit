@@ -1,31 +1,29 @@
-"""Run the same task through every configured runtime."""
+"""Run one task through explicitly selected providers (may incur charges)."""
 
-from __future__ import annotations
-
+import argparse
 import asyncio
 
-from agent_runtime_kit import AgentTask, create_default_registry, runtime_kind_value
-from agent_runtime_kit.adapters import register_adapters
+from agent_runtime_kit import AgentKit
+from examples.provider_task import PROVIDERS, run_provider
 
 
-async def main() -> None:
-    registry = create_default_registry()
-    register_adapters(registry)
-
-    task = AgentTask(goal="Summarize this repository in one paragraph.")
-    for kind in registry.kinds():
-        # runtime_kind_value: kinds may be enum members or namespaced strings.
-        label = runtime_kind_value(kind)
-        if label == "fake":
-            continue
-        runtime = registry.resolve(kind)
-        diagnostic = runtime.availability()
-        if not diagnostic.available:
-            print(f"{label}: unavailable - {diagnostic.message}")
-            continue
-        result = await runtime.run(task)
-        print(f"{label}: {result.output}")
+async def main(providers: list[str], attempt_indeterminate: bool) -> int:
+    async with AgentKit() as kit:
+        outcomes = []
+        for provider in providers:
+            outcomes.append(
+                await run_provider(kit, provider, attempt_indeterminate=attempt_indeterminate)
+            )
+    return 0 if all(outcomes) else 1
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("providers", nargs="+", choices=PROVIDERS)
+    parser.add_argument(
+        "--attempt-indeterminate",
+        action="store_true",
+        help="run even when setup readiness could not be determined",
+    )
+    arguments = parser.parse_args()
+    raise SystemExit(asyncio.run(main(arguments.providers, arguments.attempt_indeterminate)))
