@@ -92,6 +92,9 @@ def test_permission_profile_rejects_unknown_literals() -> None:
     # The error teaches the valid vocabulary.
     assert "strict" in message and "permissive" in message
 
+    with pytest.raises(ValueError, match="native_profile"):
+        PermissionProfile(native_profile='bad"profile')
+
     with pytest.raises(ValueError):
         PermissionProfile(filesystem="ro")  # type: ignore[arg-type]
 
@@ -279,9 +282,7 @@ def test_finish_reason_enum_compares_as_string() -> None:
 def test_agent_result_success_is_explicit_and_rounds_are_non_negative() -> None:
     assert AgentResult(output="ok").is_success is True
     assert AgentResult(output="", finish_reason="failed").is_success is False
-    assert (
-        AgentResult(output="", finish_reason="failed", error="vendor failed").is_success is False
-    )
+    assert AgentResult(output="", finish_reason="failed", error="vendor failed").is_success is False
 
     with pytest.raises(ValueError, match="rounds"):
         AgentResult(output="", rounds=-1)

@@ -73,10 +73,10 @@ COMPATIBILITY_MANIFEST: tuple[RuntimeCompatibility, ...] = (
         extra="codex",
         package="openai-codex",
         module="openai_codex",
-        version_specifier=">=0.1.0b3,<0.155",
-        tested_version="0.154.0",
+        version_specifier=">=0.157.1,<0.158",
+        tested_version="0.157.1",
         tested_runtime_dependencies=(
-            PackageVersion(package="openai-codex-cli-bin", version="0.154.0"),
+            PackageVersion(package="openai-codex-cli-bin", version="0.157.1"),
         ),
     ),
     RuntimeCompatibility(
