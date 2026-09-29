@@ -103,6 +103,7 @@ include = [
     "docs/live-smoke.md",
     "docs/providers.md",
     "docs/quickstart.md",
+    "docs/recipes.md",
     "docs/sdk-evolution-agent-design.md",
     "docs/sdk-evolution-agent.md",
     "docs/task-control.md",
