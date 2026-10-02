@@ -38,6 +38,7 @@ class FakeClaudeOptions:
     setting_sources: list[str] | None = None
     env: dict[str, str] | None = None
     max_turns: int | None = None
+    verbatim_prompts: bool = False
 
 
 # Records the options object passed to query so tests can assert request shape.
@@ -129,6 +130,57 @@ def result_message(**extra: Any) -> dict:
     base = {"type": "ResultMessage", "num_turns": 1, "session_id": "claude-session"}
     base.update(extra)
     return base
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reuse_process", [False, True])
+async def test_claude_verbatim_prompts_reaches_both_sdk_paths(reuse_process: bool) -> None:
+    messages = [assistant("ok"), result_message()]
+    FakeClaudeClient.messages = messages
+    runtime = ClaudeAgentRuntime(
+        verbatim_prompts=True,
+        reuse_process=reuse_process,
+        query_func=make_query(messages),
+        options_cls=FakeClaudeOptions,
+        client_cls=FakeClaudeClient,
+    )
+    goal = "/review @/private/example.txt"
+    async with runtime:
+        await runtime.run(AgentTask(goal=goal))
+
+    if reuse_process:
+        client = FakeClaudeClient.instances[0]
+        assert client.options.verbatim_prompts is True
+        assert client.queries[0][0] == goal
+    else:
+        assert RECORDED["options"].verbatim_prompts is True
+        assert RECORDED["prompt"] == goal
+
+
+@pytest.mark.asyncio
+async def test_claude_verbatim_prompts_fails_closed_on_older_sdk() -> None:
+    @dataclass
+    class OlderOptions:
+        allowed_tools: list[str] = field(default_factory=list)
+        disallowed_tools: list[str] = field(default_factory=list)
+        permission_mode: str | None = None
+
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([assistant("ok"), result_message()]), options_cls=OlderOptions
+    )
+    result = await runtime.run(AgentTask(goal="x"))
+    assert "verbatim_prompts" not in result.metadata.get("dropped_options", [])
+    RECORDED.clear()
+
+    protected = ClaudeAgentRuntime(
+        verbatim_prompts=True,
+        query_func=make_query([assistant("ok"), result_message()]),
+        options_cls=OlderOptions,
+    )
+    with pytest.raises(UnsupportedTaskInputError) as exc_info:
+        await protected.run(AgentTask(goal="/review @/private/example.txt"))
+    assert exc_info.value.field == "verbatim_prompts"
+    assert not RECORDED
 
 
 @pytest.mark.asyncio

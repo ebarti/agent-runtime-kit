@@ -86,6 +86,7 @@ class ClaudeAgentRuntime:
         default_model: str | None = None,
         supported_models: tuple[str, ...] | None = None,
         env: Mapping[str, str] | None = None,
+        verbatim_prompts: bool = False,
         query_func: Any | None = None,
         options_cls: Any | None = None,
         client_cls: Any | None = None,
@@ -96,6 +97,7 @@ class ClaudeAgentRuntime:
             default_model, supported_models
         )
         self._env = dict(env) if env is not None else None
+        self._verbatim_prompts = verbatim_prompts
         self._query_func = query_func
         self._options_cls = options_cls
         self._client_cls = client_cls
@@ -413,6 +415,8 @@ class ClaudeAgentRuntime:
         setting_sources = metadata.get("setting_sources")
         if isinstance(setting_sources, list):
             kwargs["setting_sources"] = [str(item) for item in setting_sources]
+        if self._verbatim_prompts:
+            kwargs["verbatim_prompts"] = True
         # Security posture must fail closed under vendor drift: the permission
         # mode always, and the tool filters whenever the task requested any.
         required = {"permission_mode": "permissions"}
@@ -422,6 +426,10 @@ class ClaudeAgentRuntime:
             required["disallowed_tools"] = "permissions"
         if task.budget_usd is not None:
             required["max_budget_usd"] = "budget_usd"
+        if self._verbatim_prompts:
+            # An explicit request to disable prompt expansion must never be
+            # silently dropped by an older or drifted SDK.
+            required["verbatim_prompts"] = "verbatim_prompts"
         supported, dropped = filter_supported_kwargs(
             options_cls, kwargs, required=required, kind=self.kind
         )
