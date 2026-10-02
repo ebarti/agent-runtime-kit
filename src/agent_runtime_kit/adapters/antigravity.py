@@ -988,6 +988,18 @@ def _reject_non_read_only_tools(kind: AgentRuntimeKind, tools: list[Any], builti
         getattr(tool, "value", tool)
         for tool in _read_only_tools(kind, "permissions.allowed_tools", builtin)
     }
+    # 0.1.20 removes legacy directory/search tools from default collections,
+    # while Agent still classifies them as read-only when explicitly enabled.
+    # Keep defaults unchanged and admit only the known read-only legacy values;
+    # a future deprecated write tool must not widen this permission guard.
+    deprecated = getattr(builtin, "deprecated", None)
+    if callable(deprecated):
+        allowed.update(
+            getattr(tool, "value", tool)
+            for tool in deprecated()
+            if getattr(tool, "value", tool)
+            in {"list_directory", "search_directory", "find_file"}
+        )
     for tool in tools:
         value = getattr(tool, "value", tool)
         if value not in allowed:

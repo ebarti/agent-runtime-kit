@@ -1181,6 +1181,66 @@ async def test_antigravity_strict_honors_read_only_allow_list(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["list_directory", "search_directory", "find_file"])
+@pytest.mark.parametrize("mode", [PermissionMode.STRICT, PermissionMode.DEFAULT])
+async def test_antigravity_explicit_legacy_read_only_tools_survive_default_removal(
+    tmp_path: Path, tool: str, mode: PermissionMode
+) -> None:
+    class NewBuiltinTools(str, enum.Enum):
+        LIST_DIR = "list_directory"
+        SEARCH_DIR = "search_directory"
+        FIND_FILE = "find_file"
+        VIEW_FILE = "view_file"
+        EDIT_FILE = "edit_file"
+        FINISH = "finish"
+
+        @classmethod
+        def read_only(cls):
+            return [cls.VIEW_FILE, cls.FINISH]
+
+        @classmethod
+        def deprecated(cls):
+            # Include a hypothetical deprecated write tool to prove that only
+            # known read-only legacy tools are admitted by the adapter.
+            return [cls.LIST_DIR, cls.SEARCH_DIR, cls.FIND_FILE, cls.EDIT_FILE]
+
+    class NewTypes(FakeTypes):
+        BuiltinTools = NewBuiltinTools
+
+    runtime = AntigravityAgentRuntime(
+        api_key="key",
+        data_dir=tmp_path,
+        agent_cls=FakeAgent,
+        config_cls=FakeConfig,
+        types_module=NewTypes,
+        policy_module=FakePolicy,
+    )
+    permissions = PermissionProfile(mode=mode, filesystem=FilesystemAccess.READ_ONLY)
+    await runtime.run(AgentTask(goal="defaults", permissions=permissions))
+    assert FakeAgent.last_config.kwargs["capabilities"].enabled_tools == NewBuiltinTools.read_only()
+
+    await runtime.run(
+        AgentTask(
+            goal="explicit legacy tool",
+            permissions=PermissionProfile(
+                mode=mode, filesystem=FilesystemAccess.READ_ONLY, allowed_tools=(tool,)
+            ),
+        )
+    )
+    assert FakeAgent.last_config.kwargs["capabilities"].enabled_tools == [NewBuiltinTools(tool)]
+
+    with pytest.raises(UnsupportedTaskInputError):
+        await runtime.run(
+            AgentTask(
+                goal="write tool",
+                permissions=PermissionProfile(
+                    mode=mode, filesystem=FilesystemAccess.READ_ONLY, allowed_tools=("edit_file",)
+                ),
+            )
+        )
+
+
+@pytest.mark.asyncio
 async def test_antigravity_read_only_allowlist_fails_closed_without_readonly_toolset(
     tmp_path: Path,
 ) -> None:

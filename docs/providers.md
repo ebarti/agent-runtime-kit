@@ -153,6 +153,17 @@ per-query session id. `AgentResult.metadata["sdk_process_reuse_scope"]` reports
 `"conversation"` or `"shared"` accordingly. The runtime restarts the SDK process
 when the option fingerprint changes and evicts it after SDK exceptions.
 
+With Claude Agent SDK 0.2.158 or newer, pass
+`ClaudeAgentRuntime(verbatim_prompts=True)` when goals contain composed or
+third-party text. This opts into the SDK's literal prompt delivery: `@path`
+mentions and slash commands are not expanded or dispatched. The default stays
+`False`. An older SDK that cannot accept the requested option raises
+`UnsupportedTaskInputError` before dispatch. The bundled Claude CLI must be
+2.1.248 or newer; older custom CLIs may ignore the option. Verbatim delivery also
+skips the CLI's initial attachment pass, including MCP mentions, nested
+`CLAUDE.md`/rules, and skill/tool listings; some context arrives after the first
+tool call instead. It applies to both one-shot and reused-process execution.
+
 Codex uses the `openai-codex` package and maps working directory, session
 resume, approval mode, sandbox, structured output, model, and reasoning effort.
 Approval mode follows `PermissionMode`: `STRICT`/`CAUTIOUS` → `deny_all` (never
@@ -232,6 +243,13 @@ A `READ_ONLY` filesystem forces the read-only toolset; the `allow_all` policy is
 dropped only for `STRICT`. When an explicit `allowed_tools` list is combined with
 a `READ_ONLY` filesystem, any non-read-only tool in it is rejected rather than
 silently granted.
+
+Antigravity 0.1.20 removes `list_directory`, `search_directory`, and `find_file`
+from its default read-only and nondestructive collections. Request them
+explicitly through `allowed_tools` when needed; they remain valid under
+`READ_ONLY` or `STRICT`. Default and deny-list baselines continue to follow the
+SDK's collections. The SDK also adds `schedule` to those collections; callers
+that need a narrower toolset should provide an explicit allow-list.
 
 A deny-list under a `READ_ONLY` filesystem (or `STRICT`) subtracts from the
 read-only toolset, and under `DEFAULT`/`CAUTIOUS` from the nondestructive

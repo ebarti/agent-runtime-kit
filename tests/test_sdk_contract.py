@@ -89,6 +89,22 @@ def test_claude_message_and_block_types_exist() -> None:
     assert {"tool_use_id", "is_error"} <= _fields(claude.ToolResultBlock)
 
 
+def test_claude_verbatim_prompts_constructs_or_refuses_unsupported_sdk() -> None:
+    claude = pytest.importorskip("claude_agent_sdk")
+    from agent_runtime_kit import AgentTask, UnsupportedTaskInputError
+    from agent_runtime_kit.adapters import ClaudeAgentRuntime
+
+    runtime = ClaudeAgentRuntime(verbatim_prompts=True)
+    task = AgentTask(goal="/review @/private/example.txt")
+    if Version(importlib.metadata.version("claude-agent-sdk")) < Version("0.2.158"):
+        with pytest.raises(UnsupportedTaskInputError):
+            runtime._build_options(task, None, claude.ClaudeAgentOptions)
+    else:
+        options, dropped = runtime._build_options(task, None, claude.ClaudeAgentOptions)
+        assert options.verbatim_prompts is True
+        assert not dropped
+
+
 def test_codex_exposes_expected_surface() -> None:
     codex = pytest.importorskip("openai_codex")
 
@@ -162,6 +178,44 @@ def test_antigravity_types_surface() -> None:
     assert types.BuiltinTools.read_only()
     assert types.BuiltinTools.nondestructive()
     assert types.BuiltinTools.all_tools()
+
+
+@pytest.mark.parametrize("tool", ["list_directory", "search_directory", "find_file"])
+@pytest.mark.parametrize("strict", [False, True])
+def test_antigravity_explicit_legacy_read_only_tools_with_real_sdk(tool: str, strict: bool) -> None:
+    pytest.importorskip("google.antigravity")
+    from google.antigravity import types
+
+    from agent_runtime_kit import (
+        AgentTask,
+        FilesystemAccess,
+        PermissionMode,
+        PermissionProfile,
+        UnsupportedTaskInputError,
+    )
+    from agent_runtime_kit.adapters.antigravity import AntigravityAgentRuntime, _capability_policy
+
+    runtime = AntigravityAgentRuntime(api_key="test-no-network")
+    mode = PermissionMode.STRICT if strict else PermissionMode.DEFAULT
+    task = AgentTask(
+        goal="Inspect permissions only",
+        permissions=PermissionProfile(
+            mode=mode, filesystem=FilesystemAccess.READ_ONLY, allowed_tools=(tool,)
+        ),
+    )
+    capabilities, _ = _capability_policy(runtime.kind, task, runtime._load_sdk())
+    assert capabilities.enabled_tools == [types.BuiltinTools(tool)]
+    with pytest.raises(UnsupportedTaskInputError):
+        _capability_policy(
+            runtime.kind,
+            AgentTask(
+                goal="Inspect permissions only",
+                permissions=PermissionProfile(
+                    mode=mode, filesystem=FilesystemAccess.READ_ONLY, allowed_tools=("edit_file",)
+                ),
+            ),
+            runtime._load_sdk(),
+        )
 
 
 def test_antigravity_mcp_stdio_server_requires_name() -> None:
