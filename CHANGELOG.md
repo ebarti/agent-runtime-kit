@@ -5,10 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.5.3 - 2026-10-02
 
 ### Added
 
+- Codex tasks can request provider-native named permission profiles through
+  `PermissionProfile(native_profile="...")`, with conflicting settings rejected
+  and the effective policy preserved across reused sessions.
 - Claude runtime exposes opt-in `verbatim_prompts=True` for literal composed
   goals, with a typed refusal if the installed SDK cannot honor the option.
 
@@ -16,9 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Updated tested Claude Agent SDK to `0.2.163`, Google Antigravity SDK to
   `0.1.20`, and the exactly coupled Codex SDK and CLI to `0.160.0`.
+- Raised the Codex SDK minimum to `0.157.1` for native named-profile support.
+- Quickstart and examples now provide runnable offline, structured-output,
+  event-streaming, diagnostics, and provider-task flows.
 
 ### Fixed
 
+- Codex named permission profiles no longer receive a legacy sandbox override
+  that could bypass the requested profile.
 - Antigravity explicit read-only allowlists retain directory/search tools after
   the SDK removes them from default tool collections, without re-enabling them
   by default or admitting deprecated write tools.
