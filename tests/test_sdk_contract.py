@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import importlib.metadata
 import inspect
+import warnings
 from pathlib import Path
 
 import pytest
@@ -258,6 +259,51 @@ def test_antigravity_permissive_deny_list_preserves_other_tools() -> None:
     else:
         actual = set(types.BuiltinTools.all_tools()) - set(capabilities.disabled_tools or [])
     assert actual == expected
+
+
+@pytest.mark.parametrize("tool", ["start_subagent", "invoke_subagent", "run_workflow"])
+@pytest.mark.parametrize("field", ["allowed_tools", "disallowed_tools"])
+def test_antigravity_delegation_permissions_with_real_sdk(tool: str, field: str) -> None:
+    pytest.importorskip("google.antigravity")
+    from google.antigravity import types
+
+    from agent_runtime_kit import (
+        AgentTask,
+        PermissionMode,
+        PermissionProfile,
+        UnsupportedTaskInputError,
+    )
+    from agent_runtime_kit.adapters.antigravity import AntigravityAgentRuntime, _capability_policy
+
+    runtime = AntigravityAgentRuntime(api_key="test-no-network")
+    task = AgentTask(
+        goal="Inspect delegation permissions only",
+        permissions=PermissionProfile(mode=PermissionMode.PERMISSIVE, **{field: (tool,)}),
+    )
+    sdk = runtime._load_sdk()
+    # The declared floor predates canonical invocation and workflows. New names
+    # must still receive a typed refusal there, while legacy names keep working.
+    if tool != "start_subagent" and not hasattr(types.BuiltinTools, tool.upper()):
+        with pytest.raises(UnsupportedTaskInputError):
+            _capability_policy(runtime.kind, task, sdk)
+        return
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DeprecationWarning)
+        capabilities, _ = _capability_policy(runtime.kind, task, sdk)
+        selected = types.BuiltinTools(tool)
+    if tool != "start_subagent":
+        assert not caught
+    if field == "allowed_tools":
+        assert capabilities.enabled_tools == [selected]
+        assert capabilities.enable_subagents is True
+    else:
+        expected = set(types.BuiltinTools.all_tools()) - {selected}
+        assert set(capabilities.enabled_tools) == expected
+        delegation_names = {"start_subagent", "invoke_subagent", "run_workflow"}
+        assert capabilities.enable_subagents is bool(
+            delegation_names.intersection(item.value for item in expected)
+        )
 
 
 def test_antigravity_policy_and_config() -> None:

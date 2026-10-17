@@ -171,7 +171,13 @@ escalate beyond the sandbox), `DEFAULT`/`PERMISSIVE` → `auto_review`
 (escalations auto-adjudicated). Tool audits are parsed from `TurnResult.items`
 (command executions, MCP tool calls, dynamic tool calls, web searches), and a
 `TurnResult.status` of `failed`/`interrupted` maps to the matching
-`finish_reason`. `budget_usd`, `permissions.network`, `allowed_tools`,
+`finish_reason`. Audits are best effort: live checks with SDK/CLI `0.160.0`
+and `0.163.0` observed a nested Code Mode `exec` call in the session log that
+was absent from both `TurnResult.items` and the supported thread-read response, while a direct
+shell call produced normal command items. An empty `tool_calls` tuple therefore
+does not establish that no tools ran. The adapter uses the SDK item surface
+and does not reconstruct execution history from local transcript files.
+`budget_usd`, `permissions.network`, `allowed_tools`,
 `disallowed_tools`, and `mcp_servers` have no per-task SDK surface and are
 rejected with typed errors. The constructor defaults to
 `config_overrides=("features.plugins=false",)` so headless runs are
@@ -256,8 +262,19 @@ read-only toolset, and under `DEFAULT`/`CAUTIOUS` from the nondestructive
 toolset — `disabled_tools` alone would re-enable every unnamed write or
 destructive tool. An explicit `allowed_tools` list is rejected if it names a
 non-read-only tool under a `READ_ONLY` filesystem or `STRICT` mode. An
-`allowed_tools` list containing `start_subagent` enables subagents in any mode;
-the approval policy still follows the mode (only `STRICT` omits `allow_all`).
+`allowed_tools` list containing a delegation tool enables the SDK's subagent
+gate when the filesystem and mode permit that tool; the approval policy still
+follows the mode.
+
+Antigravity 0.1.22 names the invocation tool `invoke_subagent` and retains
+`start_subagent` as a deprecated input alias. The adapter uses the installed
+SDK's enum coercion for allow/deny entries, preserving that alias while still
+rejecting unknown names. Both `invoke_subagent` and `run_workflow` require the
+SDK's subagent gate. Selecting either enables it; denying one keeps the other
+usable. To disable both forms of delegation on 0.1.22, deny both names or use an
+explicit allow-list containing neither. `READ_ONLY` and `STRICT` reject either
+tool, including the legacy alias. Older SDKs retain `start_subagent` support
+and reject names they do not provide.
 
 Session and app-data directories are written under
 `$XDG_CACHE_HOME/agent-runtime-kit` (default `~/.cache/agent-runtime-kit`,

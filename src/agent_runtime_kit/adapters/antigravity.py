@@ -778,7 +778,6 @@ def _capability_policy(
     kind: AgentRuntimeKind, task: AgentTask, sdk: _AntigravitySDK
 ) -> tuple[Any, list[Any]]:
     builtin = sdk.types.BuiltinTools
-    subagent = getattr(builtin, "START_SUBAGENT", None)
     is_permissive = task.permissions.mode is PermissionMode.PERMISSIVE
     if task.permissions.disallowed_tools:
         # The real CapabilitiesConfig requires enabled_tools and disabled_tools to be
@@ -813,7 +812,7 @@ def _capability_policy(
             ]
             capabilities = sdk.types.CapabilitiesConfig(
                 enabled_tools=tools,
-                enable_subagents=_contains_tool(tools, subagent),
+                enable_subagents=_enables_subagents(tools, builtin),
             )
         elif is_permissive:
             # Since 0.1.17 disabled_tools subtracts from default(), which excludes
@@ -830,7 +829,7 @@ def _capability_policy(
             tools = [tool for tool in all_tools() if getattr(tool, "value", tool) not in denied]
             capabilities = sdk.types.CapabilitiesConfig(
                 enabled_tools=tools,
-                enable_subagents=_contains_tool(tools, subagent),
+                enable_subagents=_enables_subagents(tools, builtin),
             )
         else:
             # DEFAULT/CAUTIOUS: "enable everything else" would widen access past the
@@ -845,7 +844,7 @@ def _capability_policy(
             ]
             capabilities = sdk.types.CapabilitiesConfig(
                 enabled_tools=tools,
-                enable_subagents=_contains_tool(tools, subagent),
+                enable_subagents=_enables_subagents(tools, builtin),
             )
     else:
         if task.permissions.allowed_tools == ():
@@ -862,9 +861,9 @@ def _capability_policy(
                 # (previously STRICT honored any named write tool). Reject rather
                 # than silently widen access.
                 _reject_non_read_only_tools(kind, tools, builtin)
-        # Honor an explicitly allow-listed subagent tool regardless of mode; gating
-        # this on PERMISSIVE left an explicit start_subagent request silently inert.
-        enable_subagents = _contains_tool(tools, subagent)
+        # Both invocation and workflow tools use the SDK's delegation gate.
+        # Derive it from the selected tools rather than the permission mode.
+        enable_subagents = _enables_subagents(tools, builtin)
         capabilities = sdk.types.CapabilitiesConfig(
             enabled_tools=tools,
             enable_subagents=enable_subagents,
@@ -873,11 +872,19 @@ def _capability_policy(
     return capabilities, policies
 
 
-def _contains_tool(tools: list[Any], subagent: Any) -> bool:
+def _enables_subagents(tools: list[Any], builtin: Any) -> bool:
+    # Prefer the canonical name without touching the deprecated 0.1.22 alias.
+    # Older SDKs expose only START_SUBAGENT and have no workflow tool.
+    subagent = getattr(builtin, "INVOKE_SUBAGENT", None)
     if subagent is None:
-        return False
-    target = getattr(subagent, "value", subagent)
-    return any(getattr(tool, "value", tool) == target for tool in tools)
+        subagent = getattr(builtin, "START_SUBAGENT", None)
+    workflow = getattr(builtin, "RUN_WORKFLOW", None)
+    selected = {getattr(tool, "value", tool) for tool in tools}
+    return any(
+        getattr(target, "value", target) in selected
+        for target in (subagent, workflow)
+        if target is not None
+    )
 
 
 def _env_first(*names: str) -> str | None:
@@ -932,16 +939,17 @@ def _validate_tools(
     resolved: list[Any] = []
     for tool in tools:
         value = getattr(tool, "value", tool)
-        if value not in valid:
+        try:
+            # The SDK owns accepted aliases: 0.1.22 still coerces start_subagent
+            # to INVOKE_SUBAGENT even though enum iteration omits the old value.
+            resolved.append(builtin(value))
+        except (TypeError, ValueError):
             ordered = ", ".join(sorted(valid))
             raise UnsupportedTaskInputError(
                 kind,
                 f"permissions.{field}",
                 f"{value!r} is not an Antigravity built-in tool; valid values: {ordered}",
-            )
-        # Return real enum members so validated allow/deny lists match the type the
-        # default-tool paths hand CapabilitiesConfig (previously plain strings).
-        resolved.append(builtin(value))
+            ) from None
     return resolved
 
 
