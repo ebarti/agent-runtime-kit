@@ -3230,7 +3230,7 @@ async def test_stage_execution_uses_agent_task_runtime_primitives(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_codex_stage_execution_uses_gpt_55_xhigh_thinking(tmp_path: Path) -> None:
+async def test_codex_stage_execution_uses_gpt_61_sol_max_thinking(tmp_path: Path) -> None:
     runtime = RecordingRuntime(kind=AgentRuntimeKind.CODEX_AGENT_SDK)
     context = RunContext(
         run_id="run-1",
@@ -3251,8 +3251,10 @@ async def test_codex_stage_execution_uses_gpt_55_xhigh_thinking(tmp_path: Path) 
     )
 
     assert runtime.task is not None
-    assert runtime.task.metadata["model"] == SDK_EVOLUTION_CODEX_MODEL
-    assert runtime.task.metadata["reasoning_effort"] == SDK_EVOLUTION_CODEX_REASONING_EFFORT
+    assert runtime.task.metadata["model"] == SDK_EVOLUTION_CODEX_MODEL == "gpt-6.1-sol"
+    assert (
+        runtime.task.metadata["reasoning_effort"] == SDK_EVOLUTION_CODEX_REASONING_EFFORT == "max"
+    )
 
 
 @pytest.mark.asyncio
@@ -4090,16 +4092,16 @@ def test_parse_args_explicit_analysis_driver() -> None:
             "--runtime",
             "codex-agent-sdk",
             "--model",
-            "gpt-6-astra",
+            "gpt-6.1-sol",
             "--reasoning-effort",
-            "xhigh",
+            "max",
             "--codex-bin",
             "/installed/codex",
         ]
     )
     assert (options.model, options.reasoning_effort, options.codex_bin) == (
-        "gpt-6-astra",
-        "xhigh",
+        "gpt-6.1-sol",
+        "max",
         "/installed/codex",
     )
     with pytest.raises(SystemExit):

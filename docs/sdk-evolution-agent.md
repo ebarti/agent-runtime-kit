@@ -66,15 +66,15 @@ env -u UV_EXCLUDE_NEWER \
   uv run --locked --extra codex python -m examples.sdk_evolution_agent.auth ensure-codex
 ```
 
-Codex-backed SDK evolution runs default to `gpt-5.5` with
-`reasoning_effort=xhigh` for the AI stages that analyze direction, decide the
+Codex-backed SDK evolution runs default to `gpt-6.1-sol` with
+`reasoning_effort=max` for the AI stages that analyze direction, decide the
 update plan, and review the result. Dependency application and verification are
 deterministic. This model policy
 is applied only to `codex-agent-sdk`; Claude and Antigravity runs keep their
-provider-native model selection because `gpt-5.5` is not a valid model override
+provider-native model selection because `gpt-6.1-sol` is not a valid model override
 for those adapters.
 Use `--model` and `--reasoning-effort` to select the requested model explicitly
-for every AI stage. For example, use `--model gpt-6-astra --reasoning-effort xhigh`.
+for every AI stage. For example, use `--model gpt-6.1-sol --reasoning-effort max`.
 These options populate the first-class `AgentTask` fields and are recorded in
 `config.json`; unsupported provider values remain provider errors.
 
