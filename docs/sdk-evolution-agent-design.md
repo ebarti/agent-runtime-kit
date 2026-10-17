@@ -194,9 +194,9 @@ that exact home, and mirrors the supported normal Codex login cache from
 ask for access tokens, or inspect unsupported credential stores.
 
 When `codex-agent-sdk` is selected for SDK update work, every AI-backed stage
-should run on `gpt-5.5` with `reasoning_effort=xhigh`. This is a Codex runtime
+should run on `gpt-6.1-sol` with `reasoning_effort=max`. This is a Codex runtime
 policy, not a portable metadata field: Claude and Antigravity runs should not
-receive a `gpt-5.5` model override.
+receive a `gpt-6.1-sol` model override.
 
 Package filters narrow evidence collection for debugging, but normal evolution
 runs should inspect all tracked packages:

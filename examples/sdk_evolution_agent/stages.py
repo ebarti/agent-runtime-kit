@@ -57,8 +57,8 @@ class StageExecutionError(RuntimeError):
 
 
 SDK_EVOLUTION_CODEX_HOME = Path("~/.codex_agent_runtime_sdk").expanduser()
-SDK_EVOLUTION_CODEX_MODEL = "gpt-5.5"
-SDK_EVOLUTION_CODEX_REASONING_EFFORT = "xhigh"
+SDK_EVOLUTION_CODEX_MODEL = "gpt-6.1-sol"
+SDK_EVOLUTION_CODEX_REASONING_EFFORT = "max"
 
 
 class FixtureEvolutionRuntime:

@@ -39,7 +39,8 @@ Announce the selected checkout and base. If repository instructions mention a
 GSD command that is not installed, record the plan with an available planning
 mechanism and continue the authorized work; do not wait for a missing wrapper.
 
-Use `codex-agent-sdk` unless the user selected another runtime. Match the extra:
+Use `codex-agent-sdk` unless the user selected another runtime. Its AI stages
+default to `gpt-6.1-sol` with `reasoning_effort=max`. Match the extra:
 
 - `claude-agent-sdk` -> `--extra claude`
 - `codex-agent-sdk` -> `--extra codex`
@@ -55,7 +56,7 @@ env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
 If authentication fails, report the concrete blocker. Do not scrape or
 reconstruct credentials. Honor an explicitly requested model and reasoning
 effort rather than silently using the runner's defaults. Pass explicit runner
-options such as `--model gpt-6-astra --reasoning-effort xhigh`; `config.json`
+options such as `--model gpt-6.1-sol --reasoning-effort max`; `config.json`
 records them, and each AI stage uses the corresponding first-class task fields.
 Verify that selection with a small structured runtime call before expensive
 collection. The installed
@@ -74,6 +75,8 @@ Run all four monitored packages unless the user narrowed scope:
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
   uv run --locked --extra codex python -m examples.sdk_evolution_agent \
     --runtime codex-agent-sdk \
+    --model gpt-6.1-sol \
+    --reasoning-effort max \
     --refresh-preview \
     --inspect-candidates \
     --package claude-agent-sdk \
@@ -157,6 +160,8 @@ Once the adaptation and evidence support promotion, run the implementation pass:
 env -u UV_EXCLUDE_NEWER -u UV_EXCLUDE_NEWER_PACKAGE \
   uv run --locked --extra codex python -m examples.sdk_evolution_agent \
     --runtime codex-agent-sdk \
+    --model gpt-6.1-sol \
+    --reasoning-effort max \
     --refresh-preview \
     --inspect-candidates \
     --implementation-enabled \
