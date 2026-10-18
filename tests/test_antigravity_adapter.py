@@ -91,6 +91,34 @@ class FakeTypes:
         args: list[str] = field(default_factory=list)
 
 
+class ModernBuiltinTools(str, enum.Enum):
+    """Canonical delegation names, including the SDK's legacy value coercion."""
+
+    VIEW_FILE = "view_file"
+    EDIT_FILE = "edit_file"
+    INVOKE_SUBAGENT = "invoke_subagent"
+    RUN_WORKFLOW = "run_workflow"
+    FINISH = "finish"
+
+    @classmethod
+    def _missing_(cls, value: object) -> ModernBuiltinTools | None:
+        if value == "start_subagent":
+            return cls.INVOKE_SUBAGENT
+        return None
+
+    @classmethod
+    def read_only(cls) -> list[ModernBuiltinTools]:
+        return [cls.VIEW_FILE, cls.FINISH]
+
+    @classmethod
+    def nondestructive(cls) -> list[ModernBuiltinTools]:
+        return list(cls)
+
+    @classmethod
+    def all_tools(cls) -> list[ModernBuiltinTools]:
+        return list(cls)
+
+
 class FakePolicy:
     @staticmethod
     def allow_all() -> str:
@@ -1121,6 +1149,81 @@ async def test_antigravity_allowed_subagent_enables_subagents_outside_permissive
     assert config is not None
     # An explicitly allow-listed start_subagent is honored even outside PERMISSIVE.
     assert config.kwargs["capabilities"].enable_subagents is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["start_subagent", "invoke_subagent", "run_workflow"])
+async def test_antigravity_modern_delegation_allowlist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    monkeypatch.setattr(FakeTypes, "BuiltinTools", ModernBuiltinTools)
+    runtime = make_runtime(data_dir=tmp_path)
+    await runtime.run(
+        AgentTask(goal="task", permissions=PermissionProfile(allowed_tools=(tool,)))
+    )
+    capabilities = FakeAgent.last_config.kwargs["capabilities"]
+    assert capabilities.enabled_tools == [ModernBuiltinTools(tool)]
+    assert capabilities.enable_subagents is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [PermissionMode.DEFAULT, PermissionMode.PERMISSIVE])
+@pytest.mark.parametrize(
+    "denied,delegation_enabled",
+    [
+        (("start_subagent",), True),
+        (("invoke_subagent",), True),
+        (("run_workflow",), True),
+        (("start_subagent", "run_workflow"), False),
+    ],
+)
+async def test_antigravity_modern_delegation_denylist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: PermissionMode,
+    denied: tuple[str, ...],
+    delegation_enabled: bool,
+) -> None:
+    monkeypatch.setattr(FakeTypes, "BuiltinTools", ModernBuiltinTools)
+    runtime = make_runtime(data_dir=tmp_path)
+    await runtime.run(
+        AgentTask(goal="task", permissions=PermissionProfile(mode=mode, disallowed_tools=denied))
+    )
+    capabilities = FakeAgent.last_config.kwargs["capabilities"]
+    normalized = {ModernBuiltinTools(tool) for tool in denied}
+    assert capabilities.enabled_tools == [
+        tool for tool in ModernBuiltinTools if tool not in normalized
+    ]
+    assert capabilities.enable_subagents is delegation_enabled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["start_subagent", "invoke_subagent", "run_workflow"])
+@pytest.mark.parametrize(
+    "mode,filesystem",
+    [
+        (PermissionMode.STRICT, FilesystemAccess.WORKSPACE_WRITE),
+        (PermissionMode.DEFAULT, FilesystemAccess.READ_ONLY),
+    ],
+)
+async def test_antigravity_modern_delegation_refuses_restricted_allowlist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tool: str,
+    mode: PermissionMode,
+    filesystem: FilesystemAccess,
+) -> None:
+    monkeypatch.setattr(FakeTypes, "BuiltinTools", ModernBuiltinTools)
+    runtime = make_runtime(data_dir=tmp_path)
+    with pytest.raises(UnsupportedTaskInputError, match="read-only posture"):
+        await runtime.run(
+            AgentTask(
+                goal="task",
+                permissions=PermissionProfile(
+                    mode=mode, filesystem=filesystem, allowed_tools=(tool,)
+                ),
+            )
+        )
 
 
 @pytest.mark.asyncio

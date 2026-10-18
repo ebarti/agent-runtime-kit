@@ -66,17 +66,17 @@ COMPATIBILITY_MANIFEST: tuple[RuntimeCompatibility, ...] = (
         package="claude-agent-sdk",
         module="claude_agent_sdk",
         version_specifier=">=0.2.87,<0.3",
-        tested_version="0.2.163",
+        tested_version="0.2.168",
     ),
     RuntimeCompatibility(
         kind=AgentRuntimeKind.CODEX_AGENT_SDK,
         extra="codex",
         package="openai-codex",
         module="openai_codex",
-        version_specifier=">=0.157.1,<0.161",
-        tested_version="0.160.0",
+        version_specifier=">=0.157.1,<0.164",
+        tested_version="0.163.0",
         tested_runtime_dependencies=(
-            PackageVersion(package="openai-codex-cli-bin", version="0.160.0"),
+            PackageVersion(package="openai-codex-cli-bin", version="0.163.0"),
         ),
     ),
     RuntimeCompatibility(
@@ -85,7 +85,7 @@ COMPATIBILITY_MANIFEST: tuple[RuntimeCompatibility, ...] = (
         package="google-antigravity",
         module="google.antigravity",
         version_specifier=">=0.1.2,<0.2",
-        tested_version="0.1.20",
+        tested_version="0.1.22",
     ),
 )
 

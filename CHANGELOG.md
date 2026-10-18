@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- Updated tested Claude Agent SDK to `0.2.168`, Google Antigravity SDK to
+  `0.1.22`, and the exactly coupled Codex SDK and CLI to `0.163.0`.
+- Raised the Codex SDK upper bound to `<0.164` after exact candidate inspection.
+
+### Fixed
+
+- Antigravity permission lists preserve the deprecated `start_subagent` alias
+  after its rename to `invoke_subagent`.
+- Explicit Antigravity workflow tools enable the SDK's delegation gate,
+  including when an independent invocation tool is denied. Strict and read-only
+  tasks continue to refuse delegation tools.
+
 ## 0.5.3 - 2026-10-02
 
 ### Added
