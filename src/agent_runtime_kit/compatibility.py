@@ -66,7 +66,7 @@ COMPATIBILITY_MANIFEST: tuple[RuntimeCompatibility, ...] = (
         package="claude-agent-sdk",
         module="claude_agent_sdk",
         version_specifier=">=0.2.87,<0.3",
-        tested_version="0.2.168",
+        tested_version="0.2.172",
     ),
     RuntimeCompatibility(
         kind=AgentRuntimeKind.CODEX_AGENT_SDK,
