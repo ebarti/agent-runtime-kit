@@ -3745,7 +3745,8 @@ async def test_run_agent_does_not_install_candidates_by_default(
         "examples.sdk_evolution_agent.cli.snapshot_candidate_in_venv", forbidden_candidate
     )
     monkeypatch.setattr(
-        "examples.sdk_evolution_agent.cli.collect_release_notes", lambda packages, updates: []
+        "examples.sdk_evolution_agent.cli.collect_release_notes",
+        lambda packages, updates, *, snapshots=None: [],
     )
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.cli.collect_behavior_evidence",
@@ -3889,7 +3890,7 @@ version = "0.2.1"
     )
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.cli.collect_release_notes",
-        lambda packages, updates: [],
+        lambda packages, updates, *, snapshots=None: [],
     )
     monkeypatch.setattr(
         "examples.sdk_evolution_agent.cli.collect_behavior_evidence",

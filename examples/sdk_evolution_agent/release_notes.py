@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -11,7 +13,15 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 
-from examples.sdk_evolution_agent.models import ReleaseNoteEvidence, SourceRef
+from packaging.version import Version
+
+from examples.sdk_evolution_agent.models import (
+    ApiSnapshot,
+    BundledRuntimeEvidence,
+    BundledRuntimeRelease,
+    ReleaseNoteEvidence,
+    SourceRef,
+)
 
 ReleaseNoteFetcher = Callable[[str], str]
 
@@ -88,6 +98,7 @@ def collect_release_notes(
     update_versions: Mapping[str, str],
     *,
     fetcher: ReleaseNoteFetcher | None = None,
+    snapshots: Sequence[ApiSnapshot] | None = None,
 ) -> tuple[ReleaseNoteEvidence, ...]:
     """Collect primary-source release-note evidence for update candidates."""
 
@@ -219,6 +230,11 @@ def collect_release_notes(
             status = "unavailable"
             unavailable_reason = "no release-note source configured"
 
+        bundled_runtime = None
+        if name == "claude-agent-sdk" and snapshots is not None:
+            bundled_runtime = _collect_claude_bundled_runtime(
+                from_version, to_version, snapshots=snapshots, fetcher=fetcher
+            )
         evidence.append(
             ReleaseNoteEvidence(
                 package=name,
@@ -229,9 +245,186 @@ def collect_release_notes(
                 summaries=tuple(_dedupe(summaries)[:8]),
                 checked_urls=tuple(checked_urls),
                 unavailable_reason=unavailable_reason,
+                bundled_runtime=bundled_runtime,
             )
         )
     return tuple(evidence)
+
+
+def _collect_claude_bundled_runtime(
+    from_version: str | None,
+    to_version: str,
+    *,
+    snapshots: Sequence[ApiSnapshot],
+    fetcher: ReleaseNoteFetcher,
+) -> BundledRuntimeEvidence:
+    """Resolve CLI versions from exact SDK snapshots, then collect their releases.
+
+    The upstream SDK tag is only accepted when its version file has
+    the same fingerprint as the inspected distribution. A release index or tag
+    that cannot be reconciled is evidence of a gap, not an empty changelog.
+    """
+
+    sources: list[SourceRef] = []
+    versions: list[str] = []
+    try:
+        for sdk_version in (from_version, to_version):
+            if not sdk_version or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]*", sdk_version):
+                raise ValueError(f"invalid or missing Claude SDK version: {sdk_version!r}")
+            snapshot = next(
+                (
+                    item
+                    for item in snapshots
+                    if item.package == "claude-agent-sdk"
+                    and item.version == sdk_version
+                    and not item.import_error
+                ),
+                None,
+            )
+            if snapshot is None:
+                raise ValueError(f"missing exact SDK snapshot for {sdk_version}")
+            version_file = next(
+                (
+                    item
+                    for item in snapshot.implementation_files
+                    if item.path == "claude_agent_sdk/_cli_version.py"
+                ),
+                None,
+            )
+            if version_file is None:
+                raise ValueError(f"missing bundled CLI version fingerprint for SDK {sdk_version}")
+            url = (
+                "https://raw.githubusercontent.com/anthropics/claude-agent-sdk-python/"
+                f"v{urllib.parse.quote(sdk_version, safe='')}/src/claude_agent_sdk/_cli_version.py"
+            )
+            _progress(f"checking bundled Claude CLI version from SDK {sdk_version}")
+            try:
+                content = fetcher(url)
+                digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                if digest != version_file.sha256:
+                    raise ValueError(
+                        f"bundled CLI version fingerprint mismatch for SDK {sdk_version}"
+                    )
+                cli_version = _claude_cli_version(content)
+            except Exception as exc:
+                sources.append(
+                    SourceRef(
+                        kind="sdk-runtime-version",
+                        label="Claude SDK bundled CLI version",
+                        url=url,
+                        version=sdk_version,
+                        available=False,
+                        note=str(exc),
+                    )
+                )
+                raise
+            sources.append(
+                SourceRef(
+                    kind="sdk-runtime-version",
+                    label="Claude SDK bundled CLI version",
+                    url=url,
+                    version=sdk_version,
+                    note="Source fingerprint matches the inspected SDK distribution.",
+                )
+            )
+            versions.append(cli_version)
+
+        baseline, candidate = (Version(value) for value in versions)
+        if candidate < baseline:
+            raise ValueError("candidate bundled CLI version is older than the baseline")
+        if candidate == baseline:
+            return BundledRuntimeEvidence(
+                "claude-code", versions[0], versions[1], "not-needed", tuple(sources)
+            )
+
+        releases: dict[Version, BundledRuntimeRelease] = {}
+        covered_baseline = False
+        for page in range(1, 6):
+            url = (
+                "https://api.github.com/repos/anthropics/claude-code/releases"
+                f"?per_page=100&page={page}"
+            )
+            _progress(f"checking bundled Claude CLI release notes, page {page}")
+            try:
+                rows = json.loads(fetcher(url))
+                if not isinstance(rows, list):
+                    raise ValueError("release index is not a list")
+            except Exception as exc:
+                sources.append(
+                    SourceRef(
+                        kind="release-index",
+                        label="Claude Code releases",
+                        url=url,
+                        available=False,
+                        note=str(exc),
+                    )
+                )
+                raise
+            sources.append(SourceRef(kind="release-index", label="Claude Code releases", url=url))
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    raise ValueError("release index contains a malformed entry")
+                if row.get("draft") or row.get("prerelease"):
+                    continue
+                tag = str(row.get("tag_name") or "")
+                if not re.fullmatch(r"v?\d+\.\d+\.\d+", tag):
+                    continue
+                release_version = Version(tag.lstrip("v"))
+                if release_version <= baseline:
+                    covered_baseline = True
+                if baseline < release_version <= candidate:
+                    release_url = f"https://github.com/anthropics/claude-code/releases/tag/{tag}"
+                    release = BundledRuntimeRelease(
+                        version=str(release_version),
+                        url=release_url,
+                        notes=str(row.get("body") or "").strip(),
+                    )
+                    if release_version in releases and releases[release_version] != release:
+                        raise ValueError(f"contradictory CLI releases for {release_version}")
+                    releases[release_version] = release
+            if covered_baseline or len(rows) < 100:
+                covered_baseline = True
+                break
+
+        missing = [str(version) for version, release in releases.items() if not release.notes]
+        problems = []
+        if not covered_baseline:
+            problems.append("release-index pagination did not reach the baseline")
+        if candidate not in releases:
+            problems.append(f"candidate CLI release {candidate} not found")
+        if missing:
+            problems.append("release notes missing for " + ", ".join(sorted(missing)))
+        return BundledRuntimeEvidence(
+            name="claude-code",
+            from_version=versions[0],
+            to_version=versions[1],
+            status="incomplete" if problems else "found",
+            sources=tuple(sources),
+            releases=tuple(releases[key] for key in sorted(releases)),
+            unavailable_reason="; ".join(problems),
+        )
+    except Exception as exc:
+        return BundledRuntimeEvidence(
+            name="claude-code",
+            from_version=versions[0] if versions else None,
+            to_version=versions[1] if len(versions) > 1 else None,
+            status="unavailable",
+            sources=tuple(sources),
+            unavailable_reason=str(exc),
+        )
+
+
+def _claude_cli_version(content: str) -> str:
+    tree = ast.parse(content)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__cli_version__"
+            for target in node.targets
+        ):
+            value = ast.literal_eval(node.value)
+            if isinstance(value, str) and re.fullmatch(r"\d+\.\d+\.\d+", value):
+                return value
+    raise ValueError("SDK bundled CLI version is missing or unsupported")
 
 
 def fetch_url_text(url: str) -> str:

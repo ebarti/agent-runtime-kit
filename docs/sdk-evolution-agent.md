@@ -173,17 +173,30 @@ files and Python AST definitions, compares adjacent releases, and writes the
 result to `implementation_diffs.json`. History also includes the exact locked
 baseline and candidate when they fall outside the latest three releases, so
 the changes between the installed baseline and the recent releases remain
-visible. Claude probes construct permission, budget, session, MCP and schema
-options; Codex probes construct configuration and validated thread/turn wire
+visible. Module-level capitalized alias assignments are fingerprinted alongside
+class and function definitions, so replacing a class with an alias is
+distinguished from deleting the name. These are static source observations,
+not proof that a conditional assignment is present at runtime. Claude probes
+construct permission, budget, session, MCP and schema options; Codex probes
+construct configuration and validated thread/turn wire
 parameters, including permissions, reasoning effort and structured output.
 These checks complement real-adapter regression tests and live runtime checks;
 they do not establish behavior inside opaque executables.
-Source is never copied into the report;
+Implementation source is never copied into the report;
 only paths, counts, sizes, and hashes are retained. Candidate inspection is
 opt-in because it executes freshly downloaded upstream code; historical
 inspection uses the same explicit consent. Without the flag, missing trend
 evidence is reported as `no-transition` rather than being replaced with
 dependency advice.
+
+For a Claude SDK update, release evidence also covers its bundled Claude Code
+CLI. The runner matches each SDK tag's CLI-version file against the fingerprint
+of the exact inspected distribution, then records official CLI release notes
+between the baseline and candidate. The SDK's own note status remains separate:
+CLI notes do not turn an absent SDK changelog entry into a match. Missing or
+contradictory version mappings, an incomplete release index, and missing CLI
+release text block promotion. The CLI remains opaque even when its release
+notes are available.
 
 ## Upstream Implementation Trends
 

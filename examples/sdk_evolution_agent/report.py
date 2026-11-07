@@ -154,6 +154,19 @@ def render_markdown_report(
         for item in release_notes
         if isinstance(item, dict) and item.get("to_version")
     ]
+    for item in release_notes:
+        if not isinstance(item, dict):
+            continue
+        bundled = item.get("bundled_runtime")
+        if isinstance(bundled, dict):
+            release_lines.append(
+                "- {name} (bundled): {status} ({from_version} -> {to_version})".format(
+                    name=bundled.get("name"),
+                    status=bundled.get("status"),
+                    from_version=bundled.get("from_version"),
+                    to_version=bundled.get("to_version"),
+                )
+            )
     behavior_summary = assess_behavior_payload(
         behavior,
         expectations=behavior_expectations_from_evidence(evidence),
