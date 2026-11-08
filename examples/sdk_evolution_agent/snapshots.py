@@ -584,6 +584,25 @@ def _definition_fingerprints(
                     )
                 )
                 visit(child, (*parents, child.name))
+            elif (
+                not parents
+                and isinstance(child, (ast.Assign, ast.AnnAssign))
+                and isinstance(child.value, (ast.Name, ast.Attribute))
+            ):
+                targets = child.targets if isinstance(child, ast.Assign) else [child.target]
+                fingerprint = hashlib.sha256(
+                    ast.dump(child, include_attributes=False).encode("utf-8")
+                ).hexdigest()
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id[:1].isupper():
+                        definitions.append(
+                            ImplementationDefinition(
+                                name=f"{path}:{target.id}",
+                                kind="alias",
+                                path=path,
+                                sha256=fingerprint,
+                            )
+                        )
             else:
                 visit(child, parents)
 
@@ -657,6 +676,23 @@ _SNAPSHOT_SCRIPT = textwrap.dedent(
                         "sha256": fingerprint,
                     })
                     visit(child, (*parents, child.name))
+                elif (
+                    not parents
+                    and isinstance(child, (ast.Assign, ast.AnnAssign))
+                    and isinstance(child.value, (ast.Name, ast.Attribute))
+                ):
+                    targets = child.targets if isinstance(child, ast.Assign) else [child.target]
+                    fingerprint = hashlib.sha256(
+                        ast.dump(child, include_attributes=False).encode("utf-8")
+                    ).hexdigest()
+                    for target in targets:
+                        if isinstance(target, ast.Name) and target.id[:1].isupper():
+                            definitions.append({
+                                "name": f"{path}:{target.id}",
+                                "kind": "alias",
+                                "path": path,
+                                "sha256": fingerprint,
+                            })
                 else:
                     visit(child, parents)
 

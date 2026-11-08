@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- Updated the tested Claude Agent SDK to `0.2.179`, Antigravity to `0.1.23`,
+  and the exactly coupled Codex SDK and CLI to `0.167.0`. Raised the Codex
+  upper bound to `<0.168` after inspecting the exact candidate versions.
+
+### Fixed
+
+- SDK evolution now collects official release notes for Claude's bundled CLI,
+  verifies its version against the inspected SDK distribution, and blocks on
+  incomplete or contradictory runtime evidence.
+- Implementation snapshots distinguish a public class replaced by an alias
+  from a removed name, including in isolated candidate environments.
+
 ## 0.5.5 - 2026-10-22
 
 ### Changed

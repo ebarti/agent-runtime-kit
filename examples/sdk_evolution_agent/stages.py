@@ -567,6 +567,35 @@ def with_release_note_guard(
         for item in release_notes
         if item.get("to_version") and item.get("status") == "unavailable"
     ]
+    for item in release_notes:
+        runtime = item.get("bundled_runtime")
+        if item.get("package") != "claude-agent-sdk" or not item.get("to_version"):
+            continue
+        if not isinstance(runtime, Mapping) or runtime.get("status") not in {
+            "found",
+            "not-needed",
+        }:
+            failed.append("claude-agent-sdk bundled claude-code")
+        elif runtime.get("status") == "not-needed" and (
+            not runtime.get("from_version")
+            or runtime.get("from_version") != runtime.get("to_version")
+        ):
+            failed.append("claude-agent-sdk bundled claude-code")
+        elif runtime.get("status") == "found":
+            releases = runtime.get("releases")
+            if (
+                not runtime.get("from_version")
+                or not runtime.get("to_version")
+                or not isinstance(releases, list)
+                or not any(
+                    isinstance(release, Mapping)
+                    and release.get("version") == runtime.get("to_version")
+                    and isinstance(release.get("notes"), str)
+                    and bool(release["notes"].strip())
+                    for release in releases
+                )
+            ):
+                failed.append("claude-agent-sdk bundled claude-code")
     if not failed:
         return dict(architecture)
     result = dict(architecture)
@@ -970,6 +999,8 @@ def _stage_system_prompt(stage: str, schema: JsonSchema) -> str:
             "evidence, remains a hard blocker. Release-note status found "
             "is direct release-note evidence. Status no-matching-version is source "
             "coverage with explicit uncertainty, not unavailable evidence."
+            " Bundled runtime release notes are separate from SDK release notes; "
+            "unavailable or incomplete bundled-runtime evidence is a hard blocker."
         )
     if stage == "review":
         prompt += " The review status must be exactly pass or reject."

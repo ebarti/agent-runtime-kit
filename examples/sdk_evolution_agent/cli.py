@@ -237,7 +237,9 @@ async def run_agent(
             _progress("collecting release notes and executable behavior probes")
             release_notes = [
                 to_jsonable(item)
-                for item in collect_release_notes(evidence.get("packages", []), update_versions)
+                for item in collect_release_notes(
+                    evidence.get("packages", []), update_versions, snapshots=snapshots
+                )
             ]
             behavior = to_jsonable(
                 collect_behavior_evidence(

@@ -153,6 +153,28 @@ class ImplementationDiff:
 
 
 @dataclass(frozen=True)
+class BundledRuntimeRelease:
+    """An official release note for a runtime bundled inside an SDK."""
+
+    version: str
+    url: str
+    notes: str
+
+
+@dataclass(frozen=True)
+class BundledRuntimeEvidence:
+    """Provenance and release notes for an SDK's exact bundled runtime."""
+
+    name: str
+    from_version: str | None
+    to_version: str | None
+    status: str
+    sources: tuple[SourceRef, ...] = ()
+    releases: tuple[BundledRuntimeRelease, ...] = ()
+    unavailable_reason: str = ""
+
+
+@dataclass(frozen=True)
 class ReleaseNoteEvidence:
     """Release-note evidence collected for one package interval."""
 
@@ -164,6 +186,7 @@ class ReleaseNoteEvidence:
     summaries: tuple[str, ...] = ()
     checked_urls: tuple[str, ...] = ()
     unavailable_reason: str = ""
+    bundled_runtime: BundledRuntimeEvidence | None = None
 
 
 @dataclass(frozen=True)
