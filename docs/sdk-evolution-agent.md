@@ -76,7 +76,9 @@ for those adapters.
 Use `--model` and `--reasoning-effort` to select the requested model explicitly
 for every AI stage. For example, use `--model gpt-6.1-sol --reasoning-effort max`.
 These options populate the first-class `AgentTask` fields and are recorded in
-`config.json`; unsupported provider values remain provider errors.
+`config.json`. For Antigravity, `--reasoning-effort xhigh` selects the native
+extra-high Gemini thinking level. Every stage requires a successful runtime
+result before it accepts a structured decision.
 
 If the locked Codex CLI cannot run the requested analysis model, the optional
 `--codex-bin /absolute/path/to/codex` selects an installed executable through

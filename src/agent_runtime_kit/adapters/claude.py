@@ -9,9 +9,10 @@ import os
 from collections.abc import AsyncIterator, Iterable, Mapping
 from math import isfinite
 from typing import Any
+from uuid import uuid4
 
 from agent_runtime_kit._control import RuntimeTaskController
-from agent_runtime_kit._errors import AgentRuntimeUnavailableError
+from agent_runtime_kit._errors import AgentRuntimeError, AgentRuntimeUnavailableError
 from agent_runtime_kit._types import (
     AgentCapabilities,
     AgentResult,
@@ -294,11 +295,7 @@ class ClaudeAgentRuntime:
                     options,
                     key=key,
                 )
-                await client.query(task.goal, session_id=_client_session_id(task))
-                receiver = getattr(client, "receive_response", None)
-                if not callable(receiver):
-                    receiver = client.receive_messages
-                async for message in receiver():
+                async for message in _client_response(client, task):
                     await stream.consume(message)
             except BaseException:
                 # Evict the client on any non-normal exit — including
@@ -567,7 +564,10 @@ def _translate_messages(
             usage = _usage_from(field_value(message, "usage"), current=usage)
             rounds = int(field_value(message, "num_turns", rounds) or rounds)
             session_id = optional_str(field_value(message, "session_id")) or session_id
-            if field_value(message, "is_error", False):
+            terminal = field_value(message, "terminal_reason")
+            if terminal in {"aborted_streaming", "aborted_tools"}:
+                finish_reason, error = "interrupted", "Claude turn interrupted"
+            elif field_value(message, "is_error", False) or terminal == "max_turns":
                 finish_reason, error = _result_failure(message, result_text)
 
     output = "\n".join(part for part in content_parts if part).strip()
@@ -625,7 +625,10 @@ def _translate_messages(
 
 def _result_failure(message: Any, result_text: Any) -> tuple[str, str]:
     subtype = str(field_value(message, "subtype", "") or "")
-    finish_reason = "max_turns" if subtype == "error_max_turns" else "failed"
+    max_turns = (
+        subtype == "error_max_turns" or field_value(message, "terminal_reason") == "max_turns"
+    )
+    finish_reason = "max_turns" if max_turns else "failed"
     errors = field_value(message, "errors", ()) or ()
     joined = "; ".join(str(item) for item in errors)
     if joined:
@@ -690,6 +693,61 @@ def _effective_permission_mode(permissions: PermissionProfile) -> str:
     if permissions.filesystem is FilesystemAccess.READ_ONLY:
         return "plan"
     return _permission_mode(permissions.mode)
+
+
+async def _client_response(client: Any, task: AgentTask) -> AsyncIterator[Any]:
+    session_id = _client_session_id(task)
+    if not _supports_prompt_attribution(client):
+        await client.query(task.goal, session_id=session_id)
+        receiver = getattr(client, "receive_response", None)
+        if not callable(receiver):
+            receiver = client.receive_messages
+        async for message in receiver():
+            yield message
+        return
+
+    # The CLI deduplicates prompt UUIDs, including retries of the same AgentTask.
+    prompt_id = str(uuid4())
+
+    async def prompt() -> AsyncIterator[dict[str, Any]]:
+        yield {
+            "type": "user",
+            "uuid": prompt_id,
+            "message": {"role": "user", "content": task.goal},
+            "parent_tool_use_id": None,
+        }
+
+    await client.query(prompt(), session_id=session_id)
+    matched = False
+    async for message in client.receive_messages():
+        # Only the first assistant message or stream event after an attribution
+        # change has IDs. The terminal result may be the first matching message.
+        primary = field_value(message, "user_message_uuid")
+        ids = field_value(message, "user_message_uuids") or ()
+        matched = matched or primary == prompt_id or prompt_id in ids
+        if matched:
+            yield message
+        if _message_type(message) not in {"ResultMessage", "result"}:
+            continue
+        if matched:
+            return
+        origin = field_value(message, "origin")
+        if len(ids) >= 64 or (
+            not primary and not ids and field_value(origin, "kind") in (None, "human")
+        ):
+            raise AgentRuntimeError("Claude returned a result with ambiguous prompt attribution")
+        # A background turn completed before ours. Its output belongs to that turn.
+    raise AgentRuntimeError("Claude closed the message stream before answering the prompt")
+
+
+def _supports_prompt_attribution(client: Any) -> bool:
+    if not callable(getattr(client, "receive_messages", None)):
+        return False
+    try:
+        from claude_agent_sdk import ClaudeSDKClient, ResultMessage
+    except ImportError:
+        return False
+    return isinstance(client, ClaudeSDKClient) and hasattr(ResultMessage, "user_message_uuid")
 
 
 def _client_session_id(task: AgentTask) -> str:

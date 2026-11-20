@@ -88,7 +88,7 @@ is still validated at dispatch, after the installed SDK supplies its enum.
 | Field | Claude | Codex | Antigravity |
 |-------|--------|-------|-------------|
 | `budget_usd` | Mapped (`max_budget_usd`, fails closed under SDK drift) | Rejected | Rejected |
-| `reasoning_effort` | Mapped (`effort`) | Mapped (`effort`) | Rejected (no SDK surface) |
+| `reasoning_effort` | Mapped (`effort`) | Mapped (`effort`) | Gemini and Vertex text-model `thinking_level`, when supported by the installed SDK |
 | `permissions.network` | Rejected | Rejected | Rejected |
 | `allowed_tools` / `disallowed_tools` | Mapped | Rejected | Mapped; deny-lists subtract from the mode's baseline (only `PERMISSIVE` uses `disabled_tools`), and allow-list plus deny-list together is rejected |
 | `mcp_servers` | Mapped | Rejected (no per-task MCP) | Mapped, without per-server `env` |

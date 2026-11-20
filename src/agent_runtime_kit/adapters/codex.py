@@ -678,7 +678,8 @@ def _translate_run_result(
 ) -> AgentResult:
     output = str(field_value(raw_result, "final_response", "") or "")
     usage = _codex_usage(field_value(raw_result, "usage"))
-    tool_calls = tuple(_tool_audits(field_value(raw_result, "items", ()) or ()))
+    items = field_value(raw_result, "items", ()) or ()
+    tool_calls = tuple(_tool_audits(items))
     metadata: dict[str, Any] = {
         "model_source": model_source,
         "sdk": "openai_codex",
@@ -691,6 +692,30 @@ def _translate_run_result(
     if dropped_options:
         metadata["dropped_options"] = list(dropped_options)
     status = _status_value(field_value(raw_result, "status"))
+
+    moderation = _final_answer_moderation(items)
+    if moderation is not None:
+        metadata["codex_moderation"] = moderation
+        display = moderation.get("display")
+        if display is None:
+            withhold = moderation.get("moderated") is not False
+        else:
+            withhold = (
+                not isinstance(display, Mapping)
+                or display.get("version") != 1
+                or display.get("mode") != "show"
+            )
+        if withhold:
+            return AgentResult(
+                output="",
+                finish_reason="interrupted" if status == "interrupted" else "failed",
+                error="Codex withheld the final answer",
+                usage=usage,
+                tool_calls=tool_calls,
+                session_id=session_id,
+                rounds=1,
+                metadata=metadata,
+            )
 
     if status == "failed":
         return AgentResult(
@@ -779,6 +804,28 @@ def _status_value(status: Any) -> str | None:
     if status is None:
         return None
     return str(getattr(status, "value", status) or "")
+
+
+def _final_answer_moderation(items: Any) -> Mapping[str, Any] | None:
+    # Match the SDK's final_response selection: the last final_answer takes
+    # precedence over the last unphased message, regardless of commentary.
+    if not isinstance(items, (list, tuple)):
+        return None
+    selected = None
+    for wrapper in reversed(items):
+        item = field_value(wrapper, "root", wrapper)
+        if field_value(item, "type") != "agentMessage":
+            continue
+        phase = _status_value(field_value(item, "phase"))
+        if phase == "final_answer":
+            selected = item
+            break
+        if phase is None and selected is None:
+            selected = item
+    moderation = field_value(selected, "moderation")
+    if moderation is None or isinstance(moderation, Mapping):
+        return moderation
+    return dict(moderation.model_dump(mode="json", by_alias=True))
 
 
 def _turn_error(raw_result: Any) -> str | None:
