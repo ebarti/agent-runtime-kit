@@ -133,6 +133,102 @@ def result_message(**extra: Any) -> dict:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("marker_on_assistant", [True, False])
+async def test_reused_claude_client_returns_only_the_submitted_prompt(
+    marker_on_assistant: bool,
+) -> None:
+    sdk = pytest.importorskip("claude_agent_sdk")
+    if not hasattr(sdk.ResultMessage, "user_message_uuids"):
+        pytest.skip("installed Claude SDK predates prompt attribution")
+    sent_ids = []
+
+    def sdk_result(text, **fields):
+        return sdk.ResultMessage(
+            subtype="success",
+            duration_ms=0,
+            duration_api_ms=0,
+            is_error=False,
+            num_turns=1,
+            session_id="session-1",
+            result=text,
+            **fields,
+        )
+
+    class InterleavedClient(sdk.ClaudeSDKClient):
+        async def connect(self):
+            pass
+
+        async def disconnect(self):
+            pass
+
+        async def query(self, prompt, *, session_id):
+            if isinstance(prompt, str):
+                self.prompt_id = None
+            else:
+                (message,) = [item async for item in prompt]
+                assert message["message"] == {"role": "user", "content": "my question"}
+                assert session_id == "session-1"
+                self.prompt_id = message["uuid"]
+                sent_ids.append(self.prompt_id)
+
+        async def receive_messages(self):
+            yield sdk.AssistantMessage(
+                content=[sdk.TextBlock("background")], model="model", user_message_uuid="unrelated"
+            )
+            yield sdk_result("background", origin={"kind": "task-notification"})
+            if marker_on_assistant:
+                yield sdk.AssistantMessage(
+                    content=[sdk.TextBlock("answer")],
+                    model="model",
+                    user_message_uuids=["another", self.prompt_id],
+                )
+            yield sdk_result(
+                "answer",
+                user_message_uuid="another",
+                user_message_uuids=["another", self.prompt_id],
+                origin={"kind": "task-notification"},
+            )
+            pytest.fail("read past the matching result")
+
+    sink = RecordingEventSink()
+    async with ClaudeAgentRuntime(
+        query_func=make_query([]),
+        options_cls=sdk.ClaudeAgentOptions,
+        client_cls=InterleavedClient,
+        reuse_process=True,
+    ) as runtime:
+        for _ in range(2):
+            result = await runtime.run(
+                AgentTask(goal="my question", session_id="session-1", event_sink=sink)
+            )
+            assert result.output == "answer"
+    assert len(set(sent_ids)) == 2
+    deltas = [
+        e["attributes"]["text_delta"] for e in sink.events if e["name"] == "agent.output.delta"
+    ]
+    assert deltas == ["answer", "answer"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal, expected",
+    [
+        ("aborted_streaming", "interrupted"),
+        ("aborted_tools", "interrupted"),
+        ("max_turns", "max_turns"),
+    ],
+)
+async def test_claude_terminal_reason_marks_partial_results(terminal, expected):
+    runtime = ClaudeAgentRuntime(
+        query_func=make_query([result_message(result="partial", terminal_reason=terminal)]),
+        options_cls=FakeClaudeOptions,
+    )
+    result = await runtime.run(AgentTask(goal="g"))
+    assert result.finish_reason == expected
+    assert not result.is_success
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("reuse_process", [False, True])
 async def test_claude_verbatim_prompts_reaches_both_sdk_paths(reuse_process: bool) -> None:
     messages = [assistant("ok"), result_message()]

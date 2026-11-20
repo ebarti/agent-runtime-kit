@@ -84,6 +84,7 @@ from examples.sdk_evolution_agent.release_notes import (
 from examples.sdk_evolution_agent.report import render_markdown_report, write_run_report
 from examples.sdk_evolution_agent.schemas import (
     DIRECTION_ANALYSIS_SCHEMA,
+    REVIEWER_OUTPUT_SCHEMA,
     SchemaValidationError,
     validate_mapping,
 )
@@ -3195,6 +3196,35 @@ def test_direction_guard_replaces_upgrade_advice_with_implementation_evidence() 
 
 
 @pytest.mark.asyncio
+async def test_failed_stage_rejects_an_otherwise_valid_review(tmp_path: Path) -> None:
+    class FailedRuntime(RecordingRuntime):
+        async def run(self, task: AgentTask) -> AgentResult:
+            return AgentResult(
+                output='{"status":"pass","reasons":[],"required_changes":[]}',
+                finish_reason="failed",
+                error="Codex withheld the final answer",
+            )
+
+    context = RunContext(
+        run_id="failed",
+        workspace=tmp_path,
+        report_root=tmp_path,
+        runtime="codex-agent-sdk",
+        event_log_path=tmp_path / "events.jsonl",
+        implementation_enabled=False,
+        draft_pr=False,
+    )
+    with pytest.raises(StageExecutionError, match="Codex withheld the final answer"):
+        await run_stage(
+            FailedRuntime(),
+            stage="review",
+            payload={},
+            schema=REVIEWER_OUTPUT_SCHEMA,
+            context=context,
+        )
+
+
+@pytest.mark.asyncio
 async def test_stage_execution_uses_agent_task_runtime_primitives(tmp_path: Path) -> None:
     runtime = RecordingRuntime()
     context = RunContext(
@@ -3259,7 +3289,12 @@ async def test_codex_stage_execution_uses_gpt_61_sol_max_thinking(tmp_path: Path
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "kind", [AgentRuntimeKind.CODEX_AGENT_SDK, AgentRuntimeKind.CLAUDE_AGENT_SDK]
+    "kind",
+    [
+        AgentRuntimeKind.CODEX_AGENT_SDK,
+        AgentRuntimeKind.CLAUDE_AGENT_SDK,
+        AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK,
+    ],
 )
 async def test_stage_execution_honors_explicit_model_and_effort(
     tmp_path: Path, kind: AgentRuntimeKind

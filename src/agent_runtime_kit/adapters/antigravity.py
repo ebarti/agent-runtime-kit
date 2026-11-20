@@ -40,6 +40,7 @@ from agent_runtime_kit.adapters._common import (
     filter_supported_kwargs,
     fingerprint_item,
     finish_vendor_cleanup,
+    metadata_str,
     model_support_issue,
     optional_int,
     optional_str,
@@ -65,6 +66,14 @@ from agent_runtime_kit.support import _validate_declared_task_support, require_t
 logger = logging.getLogger(__name__)
 
 _MCP_SERVER_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+_THINKING_LEVELS = {
+    "minimal": "MINIMAL",
+    "low": "LOW",
+    "medium": "MEDIUM",
+    "high": "HIGH",
+    "xhigh": "EXTRA_HIGH",
+    "extra_high": "EXTRA_HIGH",
+}
 _ANTIGRAVITY_CONVERSATION_NAMESPACE = uuid.UUID("7e47bc2d-a8c4-4d2b-9c27-3aeef32142ba")
 
 
@@ -73,6 +82,7 @@ class AntigravityAgentRuntime:
 
     kind = AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK
     capabilities = AgentCapabilities(
+        reasoning_effort=True,
         mcp_support=True,
         working_directory=True,
         session_resume=True,
@@ -214,6 +224,14 @@ class AntigravityAgentRuntime:
         )
         if model_issue is not None:
             issues.append(model_issue)
+        effort = task.reasoning_effort or metadata_str(task.metadata, "reasoning_effort")
+        if effort is not None and effort not in _THINKING_LEVELS:
+            issues.append(
+                TaskSupportIssue(
+                    "reasoning_effort" if task.reasoning_effort else "metadata.reasoning_effort",
+                    f"Antigravity thinking level must be one of {', '.join(_THINKING_LEVELS)}",
+                )
+            )
         if task.permissions.allowed_tools and task.permissions.disallowed_tools:
             issues.append(
                 TaskSupportIssue(
@@ -391,7 +409,12 @@ class AntigravityAgentRuntime:
         supported, dropped = filter_supported_kwargs(
             sdk.config_cls, config_kwargs, required=required, kind=self.kind
         )
-        return sdk.config_cls(**supported), dropped
+        config = sdk.config_cls(**supported)
+        effort = task.reasoning_effort or metadata_str(task.metadata, "reasoning_effort")
+        if effort is not None:
+            field = "reasoning_effort" if task.reasoning_effort else "metadata.reasoning_effort"
+            _set_thinking_level(config, sdk.types, effort, field)
+        return config, dropped
 
     async def _invoke(
         self,
@@ -774,6 +797,35 @@ class _GoogleADCProbe:
     project: str | None
 
 
+def _set_thinking_level(config: Any, types: Any, effort: str, field: str) -> None:
+    # Use the SDK's resolved models so its default model, authentication route
+    # and image endpoint survive an effort-only request.
+    level = getattr(getattr(types, "ThinkingLevel", None), _THINKING_LEVELS[effort], None)
+    options_cls = getattr(types, "GeminiModelOptions", None)
+    targets = [
+        target
+        for target in getattr(config, "models", None) or ()
+        if "text" in getattr(target, "types", ())
+    ]
+    if (
+        level is None
+        or options_cls is None
+        or "thinking_level" not in getattr(options_cls, "model_fields", {})
+        or not targets
+        or any(not hasattr(target.endpoint, "options") for target in targets)
+    ):
+        raise UnsupportedTaskInputError(
+            AgentRuntimeKind.ANTIGRAVITY_AGENT_SDK,
+            field,
+            "installed Antigravity SDK lacks configurable Gemini text-model thinking levels",
+        )
+    for target in targets:
+        endpoint = target.endpoint
+        # Text and image models can share the same endpoint object.
+        options = (endpoint.options or options_cls()).model_copy(update={"thinking_level": level})
+        target.endpoint = endpoint.model_copy(update={"options": options})
+
+
 def _capability_policy(
     kind: AgentRuntimeKind, task: AgentTask, sdk: _AntigravitySDK
 ) -> tuple[Any, list[Any]]:
@@ -1143,19 +1195,12 @@ async def _maybe_await(value: Any) -> Any:
 
 # Stop/finish reasons the SDK may report that still mean "completed normally".
 _ANTIGRAVITY_SUCCESS_STOPS = frozenset(
-    {"", "STOP", "FINISH_REASON_UNSPECIFIED", "END_TURN", "MODEL_FINISH"}
+    {"", "STOP", "UNSPECIFIED", "FINISH_REASON_UNSPECIFIED", "END_TURN", "MODEL_FINISH"}
 )
 
 
 def _response_stop_reason(response: Any) -> str | None:
-    """Best-effort read of a Gemini-style finish reason from the response.
-
-    ASSUMES VENDOR BEHAVIOR: the exact attribute name is not verifiable without
-    the installed SDK, so this probes the common shapes (``finish_reason`` /
-    ``stop_reason`` on the response, then on the first candidate) and normalizes
-    enums (which expose ``.name``) to an upper-case string. Returns ``None`` when
-    no reason is exposed, which is treated as a normal completion.
-    """
+    """Normalize the SDK's per-turn stop reason and legacy Gemini finish reasons."""
 
     raw = getattr(response, "finish_reason", None) or getattr(response, "stop_reason", None)
     if raw is None:
@@ -1180,6 +1225,11 @@ def _map_stop_reason(stop_reason: str | None) -> tuple[str | None, str | None]:
 
     if not stop_reason or stop_reason in _ANTIGRAVITY_SUCCESS_STOPS:
         return None, None
-    if stop_reason == "MAX_TOKENS":
-        return "max_tokens", "Antigravity response truncated at the output token limit"
+    if stop_reason in {
+        "MAX_TOKENS",
+        "MAX_INPUT_TOKENS_EXCEEDED",
+        "MAX_OUTPUT_TOKENS_EXCEEDED",
+        "MAX_TOTAL_TOKENS_EXCEEDED",
+    }:
+        return "max_tokens", f"Antigravity reached its token limit ({stop_reason})"
     return "failed", f"Antigravity stopped early: {stop_reason}"

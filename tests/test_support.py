@@ -163,7 +163,7 @@ def test_builtin_runtime_reports_are_pure_and_provider_specific(tmp_path: Path) 
                 reasoning_effort="high",
             )
         ).issues
-    ] == ["mcp_servers.env", "reasoning_effort"]
+    ] == ["mcp_servers.env"]
 
 
 def test_adapter_reports_configured_model_allowlist_at_source_field() -> None:
@@ -217,7 +217,7 @@ def test_antigravity_reports_static_provider_constraints() -> None:
             allowed_tools=("view_file",),
             disallowed_tools=("run_command",),
         ),
-        metadata={"reasoning_effort": "high"},
+        metadata={"reasoning_effort": "unsupported-level"},
     )
 
     report = runtime.validate_task(task)

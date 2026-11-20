@@ -95,14 +95,13 @@ library-owned model that can go stale. Results always include
 `provider-native`) and include `metadata["model"]` only when the selected value
 is known. When `supported_models=` is configured, provider-native selection is
 rejected as unverifiable until the caller chooses an explicit model.
-`reasoning_effort` maps to the Claude and Codex `effort` options; Antigravity
-has no reasoning-effort control and rejects the first-class field with a typed
-error. Its legacy `metadata["reasoning_effort"]` alias is rejected too, rather
-than being silently ignored. Effort values are passed through to the vendor SDK rather
-than validated by this library — each vendor defines its own accepted
-vocabulary (for example `claude-agent-sdk` 0.2.x accepts
-`low`/`medium`/`high`/`xhigh`/`max`), and an SDK too old to accept `effort` at
-all records the drop in `AgentResult.metadata["dropped_options"]`.
+`AgentTask.reasoning_effort` takes precedence over `metadata["reasoning_effort"]`.
+Claude and Codex pass it to the SDK's `effort` option. Antigravity applies it to
+the Gemini or Vertex text model chosen by the SDK. It accepts `minimal`, `low`,
+`medium`, `high`, and `xhigh`. The legacy spelling `extra_high` also selects the
+installed SDK's `ThinkingLevel.EXTRA_HIGH`. An unsupported Antigravity value or
+SDK raises `UnsupportedTaskInputError`. Older Claude and Codex SDKs report a
+dropped `effort` option in `AgentResult.metadata["dropped_options"]`.
 
 Usage fields are `None` when a provider omits its usage breakdown or cost.
 Provider-reported zeros remain numeric zero, so callers can distinguish a free
@@ -153,6 +152,12 @@ per-query session id. `AgentResult.metadata["sdk_process_reuse_scope"]` reports
 `"conversation"` or `"shared"` accordingly. The runtime restarts the SDK process
 when the option fingerprint changes and evicts it after SDK exceptions.
 
+On SDKs that report prompt UUIDs, a reused Claude client tags each submission.
+It streams messages attributed to the submitted prompt and waits for its
+result, including when a background turn takes in that prompt. An ambiguous
+terminal result raises `AgentRuntimeError`. Older SDKs use their single-response
+iterator.
+
 With Claude Agent SDK 0.2.158 or newer, pass
 `ClaudeAgentRuntime(verbatim_prompts=True)` when goals contain composed or
 third-party text. This opts into the SDK's literal prompt delivery: `@path`
@@ -166,6 +171,11 @@ tool call instead. It applies to both one-shot and reused-process execution.
 
 Codex uses the `openai-codex` package and maps working directory, session
 resume, approval mode, sandbox, structured output, model, and reasoning effort.
+When the selected answer carries moderation metadata, callers can inspect its
+wire representation in `AgentResult.metadata["codex_moderation"]`. A hidden or
+blocked answer, or a moderated answer without a recognized display instruction,
+returns empty output with a failed or interrupted status. A `show` instruction preserves the
+answer and any presentation annotations.
 Approval mode follows `PermissionMode`: `STRICT`/`CAUTIOUS` → `deny_all` (never
 escalate beyond the sandbox), `DEFAULT`/`PERMISSIVE` → `auto_review`
 (escalations auto-adjudicated). Tool audits are parsed from `TurnResult.items`
@@ -200,7 +210,9 @@ they should be scoped to the SDK subprocess.
 Antigravity uses the `google-antigravity` package and maps API-key or Google
 Application Default Credentials auth, workspace, permission-derived
 capabilities/policies, MCP stdio servers, conversation id, structured output,
-session directories, model, and tool events. API-key auth comes from the
+session directories, model, and tool events. The SDK's per-turn `UNSPECIFIED`
+stop reason permits normal completion. Input, output, and total token limits
+produce `finish_reason="max_tokens"`. API-key auth comes from the
 constructor, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`. Without an API key, the
 adapter uses Vertex AI config with Google ADC when a project can be discovered
 from ADC, `GOOGLE_CLOUD_PROJECT`, or `GCLOUD_PROJECT`; location defaults to

@@ -177,6 +177,70 @@ async def test_codex_runtime_runs_with_injected_sdk() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "display",
+    [
+        {"version": 1, "mode": "hide", "replacement": {"kind": "wellbeingPromptHelpline"}},
+        {
+            "version": 1,
+            "mode": "block",
+            "reason": {"kind": "protection", "protectionType": "example"},
+        },
+        {"version": 25, "mode": "future-mode"},
+        None,
+    ],
+)
+async def test_codex_withholds_moderated_final_answer_before_parsing_or_emitting(display):
+    wire = pytest.importorskip("openai_codex.generated.v2_all")
+    if not hasattr(wire, "AgentMessageModeration"):
+        pytest.skip("installed Codex SDK predates answer display instructions")
+    content = '{"marker":"test-answer"}'
+    item = wire.ThreadItem.model_validate(
+        {
+            "type": "agentMessage",
+            "id": "final",
+            "phase": "final_answer",
+            "text": content,
+            "moderation": {"moderated": True, "display": display},
+        }
+    )
+    runtime = make_runtime({"final_response": content, "items": [item], "status": "completed"})
+    sink = RecordingEventSink()
+    task = AgentTask(goal="g", event_sink=sink, output_schema={"type": "object"})
+    result = await runtime.run(task)
+    assert result.finish_reason == "failed"
+    assert result.output == ""
+    assert not result.parsed_output_available
+    assert "test-answer" not in repr(result)
+    assert result.metadata["codex_moderation"] == item.root.moderation.model_dump(
+        mode="json", by_alias=True
+    )
+    assert [e["name"] for e in sink.events] == ["agent.task.started", "agent.task.failed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["final_answer", None])
+async def test_codex_honors_display_of_the_selected_answer(phase: str | None) -> None:
+    hidden = {"moderated": True, "display": None}
+    show = {
+        "moderated": False,
+        "display": {"version": 1, "mode": "show", "trustedContacts": "skip"},
+    }
+    items = [
+        {"type": "agentMessage", "phase": phase, "text": "old", "moderation": hidden},
+        {"type": "agentMessage", "phase": phase, "text": "answer", "moderation": show},
+        {"type": "agentMessage", "phase": "commentary", "text": "later", "moderation": hidden},
+    ]
+    if phase == "final_answer":
+        items.append({"type": "agentMessage", "phase": None, "text": "later", "moderation": hidden})
+    result = await make_runtime({"final_response": "answer", "items": items}).run(
+        AgentTask(goal="g")
+    )
+    assert result.output == "answer"
+    assert result.metadata["codex_moderation"] == show
+
+
+@pytest.mark.asyncio
 async def test_codex_rejects_structured_output_that_misses_schema() -> None:
     runtime = make_runtime(
         {

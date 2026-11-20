@@ -208,6 +208,10 @@ async def run_stage(
         result = await runtime.run(task)
     except Exception as exc:
         raise StageExecutionError(f"{stage} failed through {kind_label}: {exc}") from exc
+    if not result.is_success:
+        raise StageExecutionError(
+            f"{stage} failed through {kind_label}: {result.error or result.finish_reason}"
+        )
     data = result.parsed_output
     if data is None:
         try:

@@ -681,12 +681,21 @@ async def test_antigravity_maps_provider_id_but_preserves_public_session_id(
 
 
 @pytest.mark.asyncio
-async def test_antigravity_max_tokens_stop_reason_fails(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "MAX_TOKENS",
+        "MAX_INPUT_TOKENS_EXCEEDED",
+        "MAX_OUTPUT_TOKENS_EXCEEDED",
+        "MAX_TOTAL_TOKENS_EXCEEDED",
+    ],
+)
+async def test_antigravity_max_tokens_stop_reason_fails(tmp_path: Path, reason: str) -> None:
     class TruncatedResponse:
         def __init__(self, prompt: str) -> None:
             self.chunks = _chunks(prompt)
             self.usage_metadata = FakeUsage()
-            self.finish_reason = "MAX_TOKENS"
+            self.finish_reason = reason
 
         async def structured_output(self) -> None:
             return None
@@ -1520,15 +1529,67 @@ async def test_antigravity_express_endpoint_cannot_be_dropped_by_sdk_drift(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_antigravity_rejects_reasoning_effort(tmp_path: Path) -> None:
-    # No LocalAgentConfig field maps onto reasoning effort, so the first-class
-    # task field must raise instead of silently no-oping.
+async def test_antigravity_rejects_effort_when_sdk_lacks_model_options(tmp_path: Path) -> None:
     runtime = make_runtime(data_dir=tmp_path)
 
     with pytest.raises(UnsupportedTaskInputError) as exc_info:
         await runtime.run(AgentTask(goal="task", reasoning_effort="high"))
 
     assert exc_info.value.field == "reasoning_effort"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vertex", [False, True])
+async def test_antigravity_effort_reaches_only_the_text_model_wire_options(tmp_path, vertex):
+    sdk = pytest.importorskip("google.antigravity")
+    if not hasattr(sdk, "ThinkingLevel") or not hasattr(sdk.ThinkingLevel, "EXTRA_HIGH"):
+        pytest.skip("installed SDK predates configurable extra-high thinking")
+    from google.antigravity import types
+    from google.antigravity.connections.local.local_connection import build_models_proto
+    from google.antigravity.hooks import policy
+
+    async def chunks(prompt):
+        yield types.Text(text="done", step_index=0)
+
+    class LocalAgent(FakeAgent):
+        async def chat(self, prompt):
+            return types.ChatResponse(chunks(prompt), conversation=None)
+
+    async with AntigravityAgentRuntime(
+        api_key="test-key",
+        vertex=vertex,
+        data_dir=tmp_path,
+        reuse_process=True,
+        config_cls=sdk.LocalAgentConfig,
+        types_module=types,
+        policy_module=policy,
+        agent_cls=LocalAgent,
+    ) as runtime:
+        for task_fields, level, reused in [
+            (
+                {"reasoning_effort": "xhigh", "metadata": {"reasoning_effort": "invalid"}},
+                sdk.ThinkingLevel.EXTRA_HIGH.value,
+                False,
+            ),
+            (
+                {"metadata": {"reasoning_effort": "extra_high"}},
+                sdk.ThinkingLevel.EXTRA_HIGH.value,
+                True,
+            ),
+            ({"metadata": {"reasoning_effort": "low"}}, "low", False),
+        ]:
+            result = await runtime.run(AgentTask(goal="g", session_id="shared", **task_fields))
+            assert result.is_success, result.error
+            assert result.output == "done"
+            assert result.metadata["sdk_process_reused"] is reused
+            config = FakeAgent.last_config
+            default = sdk.LocalAgentConfig(api_key="test-key", vertex=vertex)
+            assert [m.name for m in config.models] == [m.name for m in default.models]
+            text_model, image_model = build_models_proto(config.models)
+            endpoint = "vertex_endpoint" if vertex else "gemini_api_endpoint"
+            assert getattr(text_model, endpoint).options.thinking_level == level
+            assert getattr(text_model, endpoint).api_key == "test-key"
+            assert not getattr(image_model, endpoint).HasField("options")
 
 
 @pytest.mark.asyncio

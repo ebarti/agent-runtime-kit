@@ -7,7 +7,9 @@ import inspect
 import os
 from collections.abc import Awaitable, Iterable, Mapping
 from dataclasses import dataclass
+from enum import Enum
 from importlib import metadata
+from io import IOBase
 from math import isfinite
 from typing import Any, Literal
 
@@ -362,6 +364,13 @@ def fingerprint_item(value: Any) -> Any:
 
     if value is None or isinstance(value, bool | int | float | str):
         return value
+    if isinstance(value, Enum):
+        # Some SDK policy enums point back to their class through __dict__.
+        return (type(value).__module__, type(value).__qualname__, value.name)
+    if isinstance(value, IOBase):
+        # ClaudeAgentOptions.debug_stderr is an output stream. Reuse depends on
+        # its identity, and iterating a stream would consume or reject input.
+        return ("stream", id(value))
     if isinstance(value, os.PathLike):
         return str(value)
     if isinstance(value, Mapping):
