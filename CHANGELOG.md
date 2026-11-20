@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.7 - 2026-11-20
+
+### Added
+
+- Antigravity accepts `AgentTask.reasoning_effort` on Gemini and Vertex text
+  models, including `xhigh`. An effort-only request preserves the SDK's model
+  selection, authentication settings, and image configuration.
+
+### Changed
+
+- Updated the tested Claude Agent SDK to `0.2.186` (bundled Claude Code
+  `2.1.329`), the Codex SDK and its bundled CLI to `0.171.0`, and Antigravity
+  to `0.1.24`. The supported Codex range is now `>=0.157.1,<0.172`.
+
+### Fixed
+
+- Reused Claude clients match results to the submitted prompt when a
+  background turn finishes first. Aborts and turn limits retain their finish
+  reasons, and debug streams work with process reuse.
+- Codex applies the provider's moderation decision before emitting final text
+  or parsing structured output. The result exposes the provider's moderation
+  metadata.
+- Antigravity recognizes successful turns with an unspecified stop reason and
+  reports token-limit truncation. Process reuse works with native policy enums.
+- The SDK evolution example checks that a turn succeeded before accepting its
+  structured decision.
+
+### Security
+
+- Updated the locked versions of AnyIO, certifi, cryptography, MCP, pyasn1,
+  PyJWT, and urllib3 to address advisories affecting optional-provider installs.
+
 ## 0.5.6 - 2026-11-08
 
 ### Changed
